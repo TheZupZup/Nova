@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nexus</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: monospace;
+            background: #0d0d0d;
+            color: #e0e0e0;
+            height: 100dvh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        #login-screen {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100dvh;
+            gap: 12px;
+        }
+
+        #login-screen h1 { color: #00bcd4; font-size: 2rem; }
+
+        #login-screen input {
+            padding: 10px 16px;
+            background: #1a1a1a;
+            border: 1px solid #333;
+            border-radius: 6px;
+            color: #e0e0e0;
+            font-size: 1rem;
+            width: 260px;
+        }
+
+        #login-screen button {
+            padding: 10px 24px;
+            background: #00bcd4;
+            border: none;
+            border-radius: 6px;
+            color: #000;
+            font-weight: bold;
+            cursor: pointer;
+            width: 260px;
+        }
+
+        #login-error { color: #f44336; font-size: 0.85rem; }
+
+        #chat-screen {
+            display: none;
+            flex-direction: column;
+            height: 100dvh;
+        }
+
+        #header {
+            padding: 12px 16px;
+            background: #111;
+            border-bottom: 1px solid #222;
+            color: #00bcd4;
+            font-size: 1.1rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        #model-badge {
+            font-size: 0.75rem;
+            color: #666;
+        }
+
+        #messages {
+            flex: 1;
+            overflow-y: auto;
+            padding: 16px;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .message {
+            max-width: 80%;
+            padding: 10px 14px;
+            border-radius: 8px;
+            line-height: 1.5;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+
+        .message.user {
+            background: #1a3a4a;
+            align-self: flex-end;
+            color: #80deea;
+        }
+
+        .message.nexus {
+            background: #1a1a1a;
+            align-self: flex-start;
+            border: 1px solid #222;
+        }
+
+        .message.thinking {
+            color: #555;
+            font-style: italic;
+            align-self: flex-start;
+        }
+
+        #input-area {
+            display: flex;
+            gap: 8px;
+            padding: 12px 16px;
+            background: #111;
+            border-top: 1px solid #222;
+        }
+
+        #user-input {
+            flex: 1;
+            padding: 10px 14px;
+            background: #1a1a1a;
+            border: 1px solid #333;
+            border-radius: 6px;
+            color: #e0e0e0;
+            font-family: monospace;
+            font-size: 1rem;
+            resize: none;
+            height: 44px;
+        }
+
+        #send-btn {
+            padding: 10px 20px;
+            background: #00bcd4;
+            border: none;
+            border-radius: 6px;
+            color: #000;
+            font-weight: bold;
+            cursor: pointer;
+        }
+
+        #send-btn:disabled { background: #333; color: #666; cursor: not-allowed; }
+    </style>
+</head>
+<body>
+
+<div id="login-screen">
+    <h1>⬡ Nexus</h1>
+    <input type="password" id="password-input" placeholder="Mot de passe" />
+    <button onclick="login()">Connexion</button>
+    <span id="login-error"></span>
+</div>
+
+<div id="chat-screen">
+    <div id="header">
+        <span>⬡ Nexus</span>
+        <span id="model-badge">—</span>
+    </div>
+    <div id="messages"></div>
+    <div id="input-area">
+        <textarea id="user-input" placeholder="Parle à Nexus..."></textarea>
+        <button id="send-btn" onclick="sendMessage()">Envoyer</button>
+    </div>
+</div>
+
+<script>
+    let token = localStorage.getItem("nexus_token");
+    if (token) showChat();
+
+    document.getElementById("password-input").addEventListener("keydown", e => {
+        if (e.key === "Enter") login();
+    });
+
+    document.getElementById("user-input").addEventListener("keydown", e => {
+        if (e.key === "Enter" && !e.shiftKey) {
+            e.preventDefault();
+            sendMessage();
+        }
+    });
+
+    async function login() {
+        const password = document.getElementById("password-input").value;
+        const res = await fetch("/login", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ password })
+        });
+
+        if (res.ok) {
+            const data = await res.json();
+            token = data.token;
+            localStorage.setItem("nexus_token", token);
+            showChat();
+        } else {
+            document.getElementById("login-error").textContent = "Mot de passe incorrect.";
+        }
+    }
+
+    function showChat() {
+        document.getElementById("login-screen").style.display = "none";
+        document.getElementById("chat-screen").style.display = "flex";
+    }
+
+    function addMessage(role, text, model) {
+        const messages = document.getElementById("messages");
+        const div = document.createElement("div");
+        div.className = `message ${role}`;
+        div.textContent = text;
+        messages.appendChild(div);
+
+        if (model) {
+            document.getElementById("model-badge").textContent = model;
+        }
+
+        messages.scrollTop = messages.scrollHeight;
+        return div;
+    }
+
+    async function sendMessage() {
+        const input = document.getElementById("user-input");
+        const btn = document.getElementById("send-btn");
+        const text = input.value.trim();
+        if (!text) return;
+
+        input.value = "";
+        btn.disabled = true;
+
+        addMessage("user", text);
+        const thinking = addMessage("thinking", "Nexus réfléchit...");
+
+        const res = await fetch("/chat", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${token}`
+            },
+            body: JSON.stringify({ message: text })
+        });
+
+        thinking.remove();
+
+        if (res.status === 401) {
+            localStorage.removeItem("nexus_token");
+            location.reload();
+            return;
+        }
+
+        const data = await res.json();
+        addMessage("nexus", data.response, data.model);
+        btn.disabled = false;
+        input.focus();
+    }
+</script>
+</body>
+</html>
