@@ -858,6 +858,18 @@
                 </div>
                 <div style="font-size:0.72rem;color:var(--text-dim);">Controls conversation history size and memory limits</div>
             </div>
+            <div id="settings-section-title" style="margin-top:12px;">Models</div>
+            <div class="memory-item" style="flex-direction:column;gap:10px;">
+                <div style="display:flex;align-items:center;justify-content:space-between;">
+                    <div style="display:flex;flex-direction:column;gap:3px;">
+                        <span style="font-size:0.85rem;">Auto-update models</span>
+                        <span id="last-update-text" style="font-size:0.72rem;color:var(--text-dim);">Last update: checking...</span>
+                    </div>
+                    <button onclick="triggerModelUpdate()" id="update-models-btn" class="memory-btn" style="white-space:nowrap;">
+                        Check now
+                    </button>
+                </div>
+            </div>
             <div id="settings-section-title" style="margin-top:12px;">Memories</div>
             <div id="memories-list"></div>
             <div id="add-memory-form">
@@ -874,6 +886,9 @@
 <script>
     const i18n = {
         fr: {
+            never_checked: "Jamais vérifié",
+            no_updates: "Vérifié le {date} — Aucune mise à jour disponible",
+            updated: "Mis à jour le {date} — {models}",
             title: "⬡ NOVA",
             username: "Utilisateur",
             password: "Mot de passe",
@@ -899,6 +914,9 @@
             mode_deep_desc: "Forces qwen2.5:32b",
         },
         en: {
+            never_checked: "Never checked",
+            no_updates: "Checked {date} — No updates available",
+            updated: "Updated {date} — {models}",
             title: "⬡ NOVA",
             username: "Username",
             password: "Password",
@@ -1293,6 +1311,12 @@
                 document.getElementById("custom-ram-input").value = data.ram_budget;
             }
         }
+        const lastUpdate = document.getElementById("last-update-text");
+        if (lastUpdate && data.last_model_update) {
+            const date = data.last_model_update === "Never" ? "Never" : 
+                new Date(data.last_model_update).toLocaleDateString();
+            lastUpdate.textContent = `Last update: ${date}`;
+        }
     }
 
     async function saveRamBudget() {
@@ -1311,6 +1335,21 @@
             },
             body: JSON.stringify({ ram_budget: value })
         });
+    }
+
+    async function triggerModelUpdate() {
+        const btn = document.getElementById("update-models-btn");
+        btn.textContent = "Updating...";
+        btn.disabled = true;
+        await fetch("/models/update", {
+            method: "POST",
+            headers: { "Authorization": `Bearer ${token}` }
+        });
+        btn.textContent = "Started!";
+        setTimeout(() => {
+            btn.textContent = "Check now";
+            btn.disabled = false;
+        }, 3000);
     }
 
     async function saveCustomRam() {

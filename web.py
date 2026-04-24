@@ -8,6 +8,7 @@ from pydantic import BaseModel
 from core.auth import verify_credentials, create_token, verify_token
 from apscheduler.schedulers.background import BackgroundScheduler
 from core.learner import learn_from_feeds
+from core.updater import check_and_update_models
 from core.chat import chat
 from core.memory import (
     initialize_db, load_memories, save_memory,
@@ -30,6 +31,7 @@ MODE_MAP = {
 
 scheduler = BackgroundScheduler()
 scheduler.add_job(learn_from_feeds, "interval", hours=6)
+scheduler.add_job(check_and_update_models, "interval", weeks=1)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -182,8 +184,20 @@ def add_memory(request: MemoryAddRequest, _: bool = Depends(get_current_user)):
 @app.get("/settings")
 def get_settings(_: bool = Depends(get_current_user)):
     return {
-        "ram_budget": get_setting("ram_budget", "2048")
+        "ram_budget": get_setting("ram_budget", "2048"),
+        "last_model_update": get_setting("last_model_update", "Never"),
+        "last_updated_models": get_setting("last_updated_models", "")
     }
+
+
+@app.post("/models/update")
+def trigger_model_update(_: bool = Depends(get_current_user)):
+    """Lance une vérification manuelle des mises à jour."""
+    import threading
+    thread = threading.Thread(target=check_and_update_models)
+    thread.daemon = True
+    thread.start()
+    return {"ok": True, "message": "Update started in background"}
 
 
 @app.post("/settings")
