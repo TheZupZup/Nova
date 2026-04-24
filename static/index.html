@@ -530,6 +530,188 @@
 
         .message.nova { position: relative; }
 
+        /* ── SETTINGS PANEL ── */
+        #settings-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.6);
+            z-index: 30;
+            align-items: center;
+            justify-content: center;
+        }
+
+        #settings-overlay.open { display: flex; }
+
+        #settings-panel {
+            background: var(--bg2);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            width: 90%;
+            max-width: 560px;
+            max-height: 80dvh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        #settings-header {
+            padding: 16px 20px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        #settings-header h2 {
+            color: var(--cyan);
+            font-size: 1rem;
+            letter-spacing: 2px;
+        }
+
+        #settings-close {
+            background: transparent;
+            border: none;
+            color: var(--text-dim);
+            font-size: 1.2rem;
+            cursor: pointer;
+            transition: color 0.2s;
+        }
+
+        #settings-close:hover { color: var(--danger); }
+
+        #settings-body {
+            flex: 1;
+            overflow-y: auto;
+            padding: 16px 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        #settings-section-title {
+            font-size: 0.75rem;
+            color: var(--text-dim);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 4px;
+        }
+
+        .memory-item {
+            background: var(--bg3);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 10px 14px;
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+        }
+
+        .memory-item-content {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .memory-category {
+            font-size: 0.72rem;
+            color: var(--cyan);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .memory-text {
+            font-size: 0.85rem;
+            color: var(--text);
+            line-height: 1.4;
+        }
+
+        .memory-actions {
+            display: flex;
+            gap: 6px;
+            flex-shrink: 0;
+        }
+
+        .memory-btn {
+            padding: 3px 8px;
+            border-radius: 4px;
+            border: 1px solid var(--border);
+            background: transparent;
+            font-family: monospace;
+            font-size: 0.75rem;
+            cursor: pointer;
+            transition: all 0.15s;
+            color: var(--text-dim);
+        }
+
+        .memory-btn:hover { border-color: var(--cyan); color: var(--cyan); }
+        .memory-btn.delete:hover { border-color: var(--danger); color: var(--danger); }
+
+        #add-memory-form {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            padding: 12px;
+            background: var(--bg3);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+        }
+
+        .add-memory-row {
+            display: flex;
+            gap: 8px;
+        }
+
+        .memory-input {
+            flex: 1;
+            padding: 7px 10px;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            color: var(--text);
+            font-family: monospace;
+            font-size: 0.85rem;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+
+        .memory-input:focus { border-color: var(--cyan); }
+
+        .memory-input.category { width: 120px; flex: none; }
+
+        #add-memory-btn {
+            padding: 7px 14px;
+            background: var(--cyan);
+            border: none;
+            border-radius: 6px;
+            color: #000;
+            font-family: monospace;
+            font-size: 0.85rem;
+            font-weight: bold;
+            cursor: pointer;
+            transition: background 0.2s;
+            white-space: nowrap;
+        }
+
+        #add-memory-btn:hover { background: var(--cyan-dim); }
+
+        #settings-btn {
+            width: 100%;
+            padding: 8px;
+            background: transparent;
+            border: 1px solid var(--border);
+            border-radius: 5px;
+            color: var(--text-dim);
+            font-family: monospace;
+            font-size: 0.8rem;
+            cursor: pointer;
+            transition: all 0.2s;
+            margin-top: 6px;
+        }
+
+        #settings-btn:hover { border-color: var(--cyan); color: var(--cyan); }
+
         /* ── SCROLLBAR ── */
         ::-webkit-scrollbar { width: 4px; }
         ::-webkit-scrollbar-track { background: transparent; }
@@ -569,6 +751,7 @@
             </div>
             <div id="conversations-list"></div>
             <div id="sidebar-footer">
+                <button id="settings-btn" onclick="openSettings()">⚙ Settings</button>
                 <button id="logout-btn" onclick="logout()">Déconnexion</button>
             </div>
         </div>
@@ -623,6 +806,27 @@
             </div>
         </div>
 
+    </div>
+</div>
+
+<!-- SETTINGS PANEL -->
+<div id="settings-overlay" onclick="handleSettingsOverlayClick(event)">
+    <div id="settings-panel">
+        <div id="settings-header">
+            <h2>⚙ SETTINGS</h2>
+            <button id="settings-close" onclick="closeSettings()">✕</button>
+        </div>
+        <div id="settings-body">
+            <div id="settings-section-title">Memories</div>
+            <div id="memories-list"></div>
+            <div id="add-memory-form">
+                <div class="add-memory-row">
+                    <input class="memory-input category" id="new-mem-category" placeholder="category" />
+                    <input class="memory-input" id="new-mem-content" placeholder="content..." />
+                </div>
+                <button id="add-memory-btn" onclick="addMemory()">+ Add memory</button>
+            </div>
+        </div>
     </div>
 </div>
 
@@ -1019,6 +1223,119 @@
 
         loadConversations();
     }
+
+    // ── SETTINGS ──
+    async function openSettings() {
+        document.getElementById("settings-overlay").classList.add("open");
+        closeSidebar();
+        await loadMemories();
+    }
+
+    function closeSettings() {
+        document.getElementById("settings-overlay").classList.remove("open");
+    }
+
+    function handleSettingsOverlayClick(e) {
+        if (e.target === document.getElementById("settings-overlay")) closeSettings();
+    }
+
+    async function loadMemories() {
+        const res = await fetch("/memories", {
+            headers: { "Authorization": `Bearer ${token}` }
+        });
+        const memories = await res.json();
+        renderMemories(memories);
+    }
+
+    function renderMemories(memories) {
+        const list = document.getElementById("memories-list");
+        list.innerHTML = "";
+
+        if (memories.length === 0) {
+            list.innerHTML = '<div style="color:var(--text-dim);font-size:0.85rem;padding:8px;">No memories saved yet.</div>';
+            return;
+        }
+
+        for (const mem of memories) {
+            const item = document.createElement("div");
+            item.className = "memory-item";
+            item.dataset.id = mem.id;
+            item.innerHTML = `
+                <div class="memory-item-content">
+                    <span class="memory-category">${escapeHtml(mem.category)}</span>
+                    <span class="memory-text" contenteditable="false">${escapeHtml(mem.content)}</span>
+                </div>
+                <div class="memory-actions">
+                    <button class="memory-btn edit" onclick="editMemory(${mem.id}, this)">edit</button>
+                    <button class="memory-btn delete" onclick="deleteMemory(${mem.id}, this)">✕</button>
+                </div>
+            `;
+            list.appendChild(item);
+        }
+    }
+
+    async function editMemory(id, btn) {
+        const item = btn.closest(".memory-item");
+        const textEl = item.querySelector(".memory-text");
+        const catEl = item.querySelector(".memory-category");
+
+        if (btn.textContent === "edit") {
+            textEl.contentEditable = "true";
+            textEl.style.borderBottom = "1px solid var(--cyan)";
+            textEl.focus();
+            btn.textContent = "save";
+        } else {
+            const newContent = textEl.textContent.trim();
+            const newCategory = catEl.textContent.trim();
+            textEl.contentEditable = "false";
+            textEl.style.borderBottom = "none";
+            btn.textContent = "edit";
+
+            await fetch(`/memories/${id}`, {
+                method: "PUT",
+                headers: {
+                    "Content-Type": "application/json",
+                    "Authorization": `Bearer ${token}`
+                },
+                body: JSON.stringify({ category: newCategory, content: newContent })
+            });
+        }
+    }
+
+    async function deleteMemory(id, btn) {
+        const item = btn.closest(".memory-item");
+        await fetch(`/memories/${id}`, {
+            method: "DELETE",
+            headers: { "Authorization": `Bearer ${token}` }
+        });
+        item.style.opacity = "0";
+        item.style.transition = "opacity 0.2s";
+        setTimeout(() => item.remove(), 200);
+    }
+
+    async function addMemory() {
+        const category = document.getElementById("new-mem-category").value.trim();
+        const content = document.getElementById("new-mem-content").value.trim();
+
+        if (!category || !content) return;
+
+        await fetch("/memories", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${token}`
+            },
+            body: JSON.stringify({ category, content })
+        });
+
+        document.getElementById("new-mem-category").value = "";
+        document.getElementById("new-mem-content").value = "";
+        await loadMemories();
+    }
+
+    document.getElementById("new-mem-content")?.addEventListener("keydown", e => {
+        if (e.key === "Enter") addMemory();
+    });
 
     // ── UTILS ──
     function escapeHtml(str) {

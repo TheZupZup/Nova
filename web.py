@@ -13,7 +13,9 @@ from core.memory import (
     load_conversation_messages, save_message,
     delete_conversation, update_conversation_title
 )
+import sqlite3
 
+DB_PATH = "nova.db"
 security = HTTPBearer()
 
 MODE_MAP = {
@@ -31,8 +33,6 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(docs_url=None, redoc_url=None, lifespan=lifespan)
 
-history = []
-
 
 class LoginRequest(BaseModel):
     username: str
@@ -47,6 +47,16 @@ class ChatRequest(BaseModel):
 
 class NewConversationRequest(BaseModel):
     title: str = "Nouvelle conversation"
+
+
+class MemoryUpdateRequest(BaseModel):
+    category: str
+    content: str
+
+
+class MemoryAddRequest(BaseModel):
+    category: str
+    content: str
 
 
 def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
@@ -103,7 +113,6 @@ def chat_endpoint(request: ChatRequest, _: bool = Depends(get_current_user)):
         for m in load_conversation_messages(conversation_id)
     ]
 
-    # Mode manuel override le router
     forced_model = MODE_MAP.get(request.mode)
     response, model_used = chat(history, request.message, memories, forced_model=forced_model)
 
@@ -118,6 +127,46 @@ def chat_endpoint(request: ChatRequest, _: bool = Depends(get_current_user)):
         "model": model_used,
         "conversation_id": conversation_id
     }
+
+
+# ── MEMORY ENDPOINTS ──
+
+@app.get("/memories")
+def get_memories(_: bool = Depends(get_current_user)):
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        "SELECT id, category, content, created FROM memories ORDER BY created DESC"
+    ).fetchall()
+    conn.close()
+    return [{"id": r["id"], "category": r["category"], "content": r["content"], "created": r["created"]} for r in rows]
+
+
+@app.put("/memories/{memory_id}")
+def update_memory(memory_id: int, request: MemoryUpdateRequest, _: bool = Depends(get_current_user)):
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute(
+        "UPDATE memories SET category = ?, content = ? WHERE id = ?",
+        (request.category, request.content, memory_id)
+    )
+    conn.commit()
+    conn.close()
+    return {"ok": True}
+
+
+@app.delete("/memories/{memory_id}")
+def delete_memory(memory_id: int, _: bool = Depends(get_current_user)):
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("DELETE FROM memories WHERE id = ?", (memory_id,))
+    conn.commit()
+    conn.close()
+    return {"ok": True}
+
+
+@app.post("/memories")
+def add_memory(request: MemoryAddRequest, _: bool = Depends(get_current_user)):
+    save_memory(request.category, request.content)
+    return {"ok": True}
 
 
 app.mount("/", StaticFiles(directory="static", html=True), name="static")
