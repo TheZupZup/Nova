@@ -39,6 +39,7 @@
             justify-content: center;
             height: 100dvh;
             gap: 14px;
+            padding: 20px;
         }
 
         #login-screen h1 {
@@ -52,7 +53,8 @@
             display: flex;
             flex-direction: column;
             gap: 4px;
-            width: 280px;
+            width: 100%;
+            max-width: 320px;
         }
 
         .login-field label {
@@ -72,12 +74,14 @@
             font-size: 1rem;
             outline: none;
             transition: border-color 0.2s;
+            width: 100%;
         }
 
         .login-field input:focus { border-color: var(--cyan); }
 
         #login-btn {
-            width: 280px;
+            width: 100%;
+            max-width: 320px;
             padding: 11px;
             background: var(--cyan);
             border: none;
@@ -101,7 +105,6 @@
             overflow: hidden;
         }
 
-        /* ── LAYOUT ── */
         .layout {
             display: flex;
             height: 100dvh;
@@ -145,6 +148,7 @@
             font-size: 0.8rem;
             cursor: pointer;
             transition: all 0.2s;
+            white-space: nowrap;
         }
 
         #new-conv-btn:hover {
@@ -171,11 +175,7 @@
         }
 
         .conv-item:hover { background: var(--bg3); }
-
-        .conv-item.active {
-            background: var(--bg3);
-            border-color: var(--border);
-        }
+        .conv-item.active { background: var(--bg3); border-color: var(--border); }
 
         .conv-title {
             flex: 1;
@@ -227,6 +227,8 @@
             display: flex;
             flex-direction: column;
             overflow: hidden;
+            min-width: 0;
+            width: 100%;
         }
 
         #chat-header {
@@ -237,6 +239,7 @@
             align-items: center;
             justify-content: space-between;
             gap: 12px;
+            flex-shrink: 0;
         }
 
         #menu-toggle {
@@ -246,6 +249,7 @@
             color: var(--cyan);
             font-size: 1.3rem;
             cursor: pointer;
+            flex-shrink: 0;
         }
 
         #chat-title {
@@ -264,6 +268,8 @@
             padding: 3px 8px;
             border-radius: 10px;
             border: 1px solid var(--border);
+            flex-shrink: 0;
+            white-space: nowrap;
         }
 
         #messages {
@@ -336,7 +342,94 @@
             gap: 8px;
         }
 
-        #empty-state h2 { color: var(--cyan); font-size: 1.5rem; letter-spacing: 3px; }
+        #empty-state h2 {
+            color: var(--cyan);
+            font-size: 1.5rem;
+            letter-spacing: 3px;
+        }
+
+        /* ── MODE SELECTOR ── */
+        #mode-bar, #input-area { width: 100%; }
+        #mode-bar {
+            padding: 8px 16px;
+            background: var(--bg2);
+            border-top: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-shrink: 0;
+        }
+
+        #mode-label-text {
+            font-size: 0.75rem;
+            color: var(--text-dim);
+            flex-shrink: 0;
+        }
+
+        #mode-wrapper {
+            position: relative;
+        }
+
+        #mode-toggle-btn {
+            padding: 5px 12px;
+            border-radius: 6px;
+            border: 1px solid var(--cyan);
+            background: transparent;
+            color: var(--cyan);
+            font-family: monospace;
+            font-size: 0.8rem;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            white-space: nowrap;
+        }
+
+        #mode-toggle-btn:hover {
+            background: var(--cyan);
+            color: #000;
+        }
+
+        #mode-dropdown {
+            display: none;
+            position: absolute;
+            bottom: calc(100% + 6px);
+            left: 0;
+            background: var(--bg2);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            overflow: hidden;
+            min-width: 200px;
+            z-index: 100;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+        }
+
+        #mode-dropdown.open { display: block; }
+
+        .mode-option {
+            padding: 10px 14px;
+            cursor: pointer;
+            font-family: monospace;
+            font-size: 0.85rem;
+            color: var(--text);
+            transition: background 0.15s;
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .mode-option:last-child { border-bottom: none; }
+        .mode-option:hover { background: var(--bg3); }
+        .mode-option.active { color: var(--cyan); }
+
+        .mode-option .mode-desc {
+            font-size: 0.72rem;
+            color: var(--text-dim);
+        }
+
+        .mode-option.active .mode-desc { color: var(--cyan-dim); }
 
         /* ── INPUT ── */
         #input-area {
@@ -346,6 +439,7 @@
             display: flex;
             gap: 8px;
             align-items: flex-end;
+            flex-shrink: 0;
         }
 
         #user-input {
@@ -357,12 +451,10 @@
             color: var(--text);
             font-family: monospace;
             font-size: 0.95rem;
-            resize: none;
-            min-height: 44px;
-            max-height: 160px;
+            height: 44px;
             outline: none;
             transition: border-color 0.2s;
-            line-height: 1.5;
+            min-width: 0;
         }
 
         #user-input:focus { border-color: var(--cyan); }
@@ -380,6 +472,7 @@
             height: 44px;
             transition: background 0.2s;
             white-space: nowrap;
+            flex-shrink: 0;
         }
 
         #send-btn:hover { background: var(--cyan-dim); }
@@ -401,11 +494,16 @@
                 z-index: 20;
                 transform: translateX(-100%);
             }
-
             #sidebar.open { transform: translateX(0); }
             #menu-toggle { display: block; }
             #sidebar-overlay.show { display: block; }
             .message { max-width: 90%; }
+            #mode-label-text { display: none; }
+        }
+
+        @media (min-width: 1200px) {
+            #sidebar { width: 300px; min-width: 300px; }
+            .message { max-width: 65%; }
         }
 
         /* ── SCROLLBAR ── */
@@ -421,7 +519,7 @@
     <h1>⬡ NOVA</h1>
     <div class="login-field">
         <label>Utilisateur</label>
-        <input type="text" id="username-input" placeholder="nova" autocomplete="username" />
+        <input type="text" id="username-input" placeholder="username" autocomplete="username" />
     </div>
     <div class="login-field">
         <label>Mot de passe</label>
@@ -455,12 +553,43 @@
                 <span id="chat-title">Sélectionne une conversation</span>
                 <span id="model-badge">—</span>
             </div>
+
             <div id="messages">
                 <div id="empty-state">
                     <h2>⬡ NOVA</h2>
                     <span>Commence une nouvelle conversation</span>
                 </div>
             </div>
+
+            <!-- MODE BAR -->
+            <div id="mode-bar">
+                <span id="mode-label-text">Mode :</span>
+                <div id="mode-wrapper">
+                    <button id="mode-toggle-btn" onclick="toggleModeDropdown()">
+                        <span id="mode-current">Auto</span> ▾
+                    </button>
+                    <div id="mode-dropdown">
+                        <div class="mode-option active" data-mode="auto" onclick="setMode('auto')">
+                            Auto
+                            <span class="mode-desc">Router decides automatically</span>
+                        </div>
+                        <div class="mode-option" data-mode="chat" onclick="setMode('chat')">
+                            Chat
+                            <span class="mode-desc">Forces gemma4</span>
+                        </div>
+                        <div class="mode-option" data-mode="code" onclick="setMode('code')">
+                            Code
+                            <span class="mode-desc">Forces deepseek-coder-v2</span>
+                        </div>
+                        <div class="mode-option" data-mode="deep" onclick="setMode('deep')">
+                            Deep
+                            <span class="mode-desc">Forces qwen2.5:32b</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- INPUT -->
             <div id="input-area">
                 <input type="text" id="user-input" placeholder="Parle à Nova..." inputmode="text" enterkeyhint="send" autocomplete="off" />
                 <button id="send-btn" onclick="sendMessage()">Envoyer</button>
@@ -474,12 +603,20 @@
     let token = localStorage.getItem("nova_token");
     let currentConvId = null;
     let isThinking = false;
+    let currentMode = localStorage.getItem("nova_mode") || "auto";
 
     if (token) initApp();
 
     // ── LOGIN ──
     document.getElementById("password-input").addEventListener("keydown", e => {
         if (e.key === "Enter") login();
+    });
+
+    document.getElementById("user-input").addEventListener("keydown", e => {
+        if (e.key === "Enter" && !e.shiftKey) {
+            e.preventDefault();
+            sendMessage();
+        }
     });
 
     async function login() {
@@ -518,10 +655,11 @@
     function initApp() {
         document.getElementById("login-screen").style.display = "none";
         document.getElementById("app").style.display = "flex";
+        setMode(currentMode);
         loadConversations();
     }
 
-    // ── SIDEBAR MOBILE ──
+    // ── SIDEBAR ──
     function toggleSidebar() {
         document.getElementById("sidebar").classList.toggle("open");
         document.getElementById("sidebar-overlay").classList.toggle("show");
@@ -530,6 +668,28 @@
     function closeSidebar() {
         document.getElementById("sidebar").classList.remove("open");
         document.getElementById("sidebar-overlay").classList.remove("show");
+    }
+
+    // ── MODE DROPDOWN ──
+    function toggleModeDropdown() {
+        document.getElementById("mode-dropdown").classList.toggle("open");
+    }
+
+    document.addEventListener("click", (e) => {
+        if (!e.target.closest("#mode-wrapper")) {
+            document.getElementById("mode-dropdown")?.classList.remove("open");
+        }
+    });
+
+    function setMode(mode) {
+        currentMode = mode;
+        localStorage.setItem("nova_mode", mode);
+        const labels = { auto: "Auto", chat: "Chat", code: "Code", deep: "Deep" };
+        document.getElementById("mode-current").textContent = labels[mode];
+        document.querySelectorAll(".mode-option").forEach(opt => {
+            opt.classList.toggle("active", opt.dataset.mode === mode);
+        });
+        document.getElementById("mode-dropdown").classList.remove("open");
     }
 
     // ── CONVERSATIONS ──
@@ -590,7 +750,6 @@
             headers: { "Authorization": `Bearer ${token}` }
         });
         const msgs = await res.json();
-
         const messagesEl = document.getElementById("messages");
         messagesEl.innerHTML = "";
 
@@ -637,23 +796,10 @@
         messagesEl.scrollTop = messagesEl.scrollHeight;
 
         if (model) document.getElementById("model-badge").textContent = model;
-
         return bubble;
     }
 
     // ── CHAT ──
-    document.getElementById("user-input").addEventListener("keydown", e => {
-        if (e.key === "Enter" && !e.shiftKey) {
-            e.preventDefault();
-            sendMessage();
-        }
-    });
-
-    document.getElementById("user-input").addEventListener("input", function() {
-        this.style.height = "44px";
-        this.style.height = Math.min(this.scrollHeight, 160) + "px";
-    });
-
     async function sendMessage() {
         if (isThinking) return;
         const input = document.getElementById("user-input");
@@ -662,13 +808,11 @@
         if (!text) return;
 
         input.value = "";
-        input.style.height = "44px";
         isThinking = true;
         btn.disabled = true;
 
         appendMessage("user", text);
 
-        // Thinking indicator
         const messagesEl = document.getElementById("messages");
         const thinkingRow = document.createElement("div");
         thinkingRow.className = "message-row nova";
@@ -685,7 +829,11 @@
                 "Content-Type": "application/json",
                 "Authorization": `Bearer ${token}`
             },
-            body: JSON.stringify({ message: text, conversation_id: currentConvId })
+            body: JSON.stringify({
+                message: text,
+                conversation_id: currentConvId,
+                mode: currentMode
+            })
         });
 
         thinkingRow.remove();

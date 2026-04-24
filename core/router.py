@@ -7,7 +7,7 @@ ROUTER_PROMPT = """Classify this request with ONE word only.
 Rules:
 - simple: greetings, compliments, small talk, short questions, yes/no
 - code: write code, fix bug, script, programming, debug, function, class, algorithm
-- normal: explain concept, summarize, translate, general question, advice
+- normal: explain concept, summarize, translate, general question, advice, search
 - advanced: complex analysis, architecture, deep reasoning, research
 
 Request: {query}
