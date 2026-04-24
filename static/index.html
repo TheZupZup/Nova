@@ -506,6 +506,30 @@
             .message { max-width: 65%; }
         }
 
+        /* ── COPY BUTTON ── */
+        .message-row.nova:hover .copy-btn { opacity: 1; }
+
+        .copy-btn {
+            opacity: 0;
+            position: absolute;
+            top: 6px;
+            right: 6px;
+            padding: 3px 8px;
+            background: var(--bg2);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            color: var(--text-dim);
+            font-family: monospace;
+            font-size: 0.7rem;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .copy-btn:hover { color: var(--cyan); border-color: var(--cyan); }
+        .copy-btn.copied { color: var(--cyan); border-color: var(--cyan); }
+
+        .message.nova { position: relative; }
+
         /* ── SCROLLBAR ── */
         ::-webkit-scrollbar { width: 4px; }
         ::-webkit-scrollbar-track { background: transparent; }
@@ -789,6 +813,31 @@
         const bubble = document.createElement("div");
         bubble.className = `message ${role}`;
         bubble.textContent = content;
+
+        if (role === "nova") {
+            const copyBtn = document.createElement("button");
+            copyBtn.className = "copy-btn";
+            copyBtn.textContent = "copier";
+            copyBtn.onclick = () => {
+                try {
+                    navigator.clipboard.writeText(content);
+                } catch {
+                    const ta = document.createElement("textarea");
+                    ta.value = content;
+                    document.body.appendChild(ta);
+                    ta.select();
+                    document.execCommand("copy");
+                    document.body.removeChild(ta);
+                }
+                copyBtn.textContent = "copié!";
+                copyBtn.classList.add("copied");
+                setTimeout(() => {
+                    copyBtn.textContent = "copier";
+                    copyBtn.classList.remove("copied");
+                }, 2000);
+            };
+            bubble.appendChild(copyBtn);
+        }
 
         row.appendChild(label);
         row.appendChild(bubble);
