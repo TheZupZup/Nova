@@ -7,12 +7,12 @@ import os
 
 load_dotenv()
 
-SECRET_KEY = os.getenv("NEXUS_SECRET_KEY", secrets.token_hex(32))
+SECRET_KEY = os.getenv("NOVA_SECRET_KEY", secrets.token_hex(32))
 TOKEN_EXPIRY_HOURS = 24
 
-VALID_USERNAME = os.getenv("NEXUS_USERNAME", "nexus")
+VALID_USERNAME = os.getenv("NOVA_USERNAME", "nova")
 HASHED_PASSWORD = bcrypt.hashpw(
-    os.getenv("NEXUS_PASSWORD", "nexus").encode(),
+    os.getenv("NOVA_PASSWORD", "nova").encode(),
     bcrypt.gensalt()
 )
 

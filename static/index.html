@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Nexus</title>
+    <title>Nova</title>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -282,7 +282,7 @@
         }
 
         .message-row.user { align-items: flex-end; }
-        .message-row.nexus { align-items: flex-start; }
+        .message-row.nova { align-items: flex-start; }
 
         .message-label {
             font-size: 0.7rem;
@@ -306,7 +306,7 @@
             border-bottom-right-radius: 3px;
         }
 
-        .message.nexus {
+        .message.nova {
             background: var(--bg3);
             border: 1px solid var(--border);
             border-bottom-left-radius: 3px;
@@ -418,10 +418,10 @@
 
 <!-- LOGIN -->
 <div id="login-screen">
-    <h1>⬡ NEXUS</h1>
+    <h1>⬡ NOVA</h1>
     <div class="login-field">
         <label>Utilisateur</label>
-        <input type="text" id="username-input" placeholder="nexus" autocomplete="username" />
+        <input type="text" id="username-input" placeholder="nova" autocomplete="username" />
     </div>
     <div class="login-field">
         <label>Mot de passe</label>
@@ -439,7 +439,7 @@
         <div id="sidebar-overlay" onclick="closeSidebar()"></div>
         <div id="sidebar">
             <div id="sidebar-header">
-                <span>⬡ NEXUS</span>
+                <span>⬡ NOVA</span>
                 <button id="new-conv-btn" onclick="newConversation()">+ Nouveau</button>
             </div>
             <div id="conversations-list"></div>
@@ -457,12 +457,12 @@
             </div>
             <div id="messages">
                 <div id="empty-state">
-                    <h2>⬡ NEXUS</h2>
+                    <h2>⬡ NOVA</h2>
                     <span>Commence une nouvelle conversation</span>
                 </div>
             </div>
             <div id="input-area">
-                <input type="text" id="user-input" placeholder="Parle à Nexus..." inputmode="text" enterkeyhint="send" autocomplete="off" />
+                <input type="text" id="user-input" placeholder="Parle à Nova..." inputmode="text" enterkeyhint="send" autocomplete="off" />
                 <button id="send-btn" onclick="sendMessage()">Envoyer</button>
             </div>
         </div>
@@ -471,7 +471,7 @@
 </div>
 
 <script>
-    let token = localStorage.getItem("nexus_token");
+    let token = localStorage.getItem("nova_token");
     let currentConvId = null;
     let isThinking = false;
 
@@ -502,7 +502,7 @@
         if (res.ok) {
             const data = await res.json();
             token = data.token;
-            localStorage.setItem("nexus_token", token);
+            localStorage.setItem("nova_token", token);
             initApp();
         } else {
             errorEl.textContent = "Identifiants incorrects.";
@@ -510,7 +510,7 @@
     }
 
     function logout() {
-        localStorage.removeItem("nexus_token");
+        localStorage.removeItem("nova_token");
         location.reload();
     }
 
@@ -568,7 +568,7 @@
         currentConvId = null;
         document.getElementById("messages").innerHTML = `
             <div id="empty-state">
-                <h2>⬡ NEXUS</h2>
+                <h2>⬡ NOVA</h2>
                 <span>Commence une nouvelle conversation</span>
             </div>
         `;
@@ -596,7 +596,7 @@
 
         for (const msg of msgs) {
             if (msg.role !== "system") {
-                appendMessage(msg.role === "user" ? "user" : "nexus", msg.content, msg.model);
+                appendMessage(msg.role === "user" ? "user" : "nova", msg.content, msg.model);
             }
         }
 
@@ -625,7 +625,7 @@
 
         const label = document.createElement("div");
         label.className = "message-label";
-        label.textContent = role === "user" ? "Toi" : `Nexus${model ? ` · ${model}` : ""}`;
+        label.textContent = role === "user" ? "Toi" : `Nova${model ? ` · ${model}` : ""}`;
 
         const bubble = document.createElement("div");
         bubble.className = `message ${role}`;
@@ -671,9 +671,9 @@
         // Thinking indicator
         const messagesEl = document.getElementById("messages");
         const thinkingRow = document.createElement("div");
-        thinkingRow.className = "message-row nexus";
+        thinkingRow.className = "message-row nova";
         thinkingRow.innerHTML = `
-            <div class="message-label">Nexus</div>
+            <div class="message-label">Nova</div>
             <div class="message thinking">réfléchit...</div>
         `;
         messagesEl.appendChild(thinkingRow);
@@ -694,7 +694,7 @@
 
         const data = await res.json();
         currentConvId = data.conversation_id;
-        appendMessage("nexus", data.response, data.model);
+        appendMessage("nova", data.response, data.model);
 
         isThinking = false;
         btn.disabled = false;

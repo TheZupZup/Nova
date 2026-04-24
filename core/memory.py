@@ -1,7 +1,7 @@
 import sqlite3
 from datetime import datetime
 
-DB_PATH = "nexus.db"
+DB_PATH = "nova.db"
 
 
 def _get_connection() -> sqlite3.Connection:

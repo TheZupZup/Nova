@@ -1,10 +1,10 @@
-# Nexus
+# Nova
 
 A self-hosted AI assistant with intelligent model routing, persistent memory, and a web interface accessible from any device.
 
 ## Overview
 
-Nexus runs entirely on your local machine. It automatically routes each request to the most appropriate model based on complexity, balancing speed and capability without any manual intervention.
+Nova runs entirely on your local machine. It automatically routes each request to the most appropriate model based on complexity, balancing speed and capability without any manual intervention.
 
 ## Model Stack
 
@@ -37,9 +37,9 @@ Nexus runs entirely on your local machine. It automatically routes each request 
 **1. Clone the repository**
 
 ```bash
-git clone https://github.com/TheZupZup/Nexus.git
-cd Nexus
-```
+git clone https://github.com/TheZupZup/Nova.git
+cd Nova
+```bash
 
 **2. Create a virtual environment and install dependencies**
 
@@ -47,7 +47,7 @@ cd Nexus
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-```
+```bash
 
 **3. Pull the required models**
 
@@ -56,59 +56,59 @@ ollama pull gemma3:1b
 ollama pull gemma4
 ollama pull deepseek-coder-v2
 ollama pull qwen2.5:32b
-```
+```bash
 
 **4. Configure your credentials**
 
 ```bash
 cp .env.example .env
 nano .env
-```
+```bash
 
 Edit `.env` with your chosen username, password, and a secure secret key.
 
-**5. Run Nexus**
+**5. Run Nova**
 
 ```bash
 python web.py
-```
+```bash
 
-Nexus will be available at `http://localhost:8080`.
+Nova will be available at `http://localhost:8080`.
 
 ## Running as a Service
 
-To run Nexus automatically on boot:
+To run Nova automatically on boot:
 
 ```bash
-sudo nano /etc/systemd/system/nexus.service
-```
+sudo nano /etc/systemd/system/nova.service
+```bash
 
 ```ini
 [Unit]
-Description=Nexus AI
+Description=Nova AI
 After=network.target ollama.service
 
 [Service]
 Type=simple
 User=yourusername
-WorkingDirectory=/path/to/nexus
-ExecStart=/path/to/nexus/.venv/bin/uvicorn web:app --host 0.0.0.0 --port 8080
+WorkingDirectory=/path/to/nova
+ExecStart=/path/to/nova/.venv/bin/uvicorn web:app --host 0.0.0.0 --port 8080
 Restart=always
 RestartSec=5
-Environment="PATH=/path/to/nexus/.venv/bin:/usr/bin:/usr/local/bin"
+Environment="PATH=/path/to/nova/.venv/bin:/usr/bin:/usr/local/bin"
 
 [Install]
 WantedBy=multi-user.target
-```
+```bash
 
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl enable nexus
-sudo systemctl start nexus
-```
+sudo systemctl enable nova
+sudo systemctl start nova
+```bash
 
 ## Project Structure
-nexus/
+nova/
 ├── core/
 │   ├── chat.py       # Conversation logic
 │   ├── memory.py     # SQLite persistent memory
