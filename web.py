@@ -13,7 +13,8 @@ from core.memory import (
     initialize_db, load_memories, save_memory,
     create_conversation, load_conversations,
     load_conversation_messages, save_message,
-    delete_conversation, update_conversation_title
+    delete_conversation, update_conversation_title,
+    get_setting, save_setting
 )
 import sqlite3
 
@@ -175,6 +176,20 @@ def delete_memory(memory_id: int, _: bool = Depends(get_current_user)):
 @app.post("/memories")
 def add_memory(request: MemoryAddRequest, _: bool = Depends(get_current_user)):
     save_memory(request.category, request.content)
+    return {"ok": True}
+
+
+@app.get("/settings")
+def get_settings(_: bool = Depends(get_current_user)):
+    return {
+        "ram_budget": get_setting("ram_budget", "2048")
+    }
+
+
+@app.post("/settings")
+def update_settings(data: dict, _: bool = Depends(get_current_user)):
+    for key, value in data.items():
+        save_setting(key, str(value))
     return {"ok": True}
 
 

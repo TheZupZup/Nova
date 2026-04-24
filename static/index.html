@@ -834,7 +834,31 @@
             <button id="settings-close" onclick="closeSettings()">✕</button>
         </div>
         <div id="settings-body">
-            <div id="settings-section-title">Memories</div>
+            <div id="settings-section-title">System</div>
+            <div class="memory-item" style="flex-direction:column;gap:10px;">
+                <div style="display:flex;align-items:center;justify-content:space-between;">
+                    <span style="font-size:0.85rem;">RAM Budget</span>
+                    <select id="ram-budget-select" onchange="saveRamBudget()" style="background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:monospace;font-size:0.8rem;padding:4px 8px;cursor:pointer;">
+                        <option value="512">512 MB — Minimal</option>
+                        <option value="1024">1 GB — Light</option>
+                        <option value="2048" selected>2 GB — Default</option>
+                        <option value="4096">4 GB — Comfortable</option>
+                        <option value="8192">8 GB — Heavy</option>
+                        <option value="16384">16 GB — Power user</option>
+                        <option value="32768">32 GB — Beast mode 🔥</option>
+                        <option value="custom">Custom...</option>
+                    </select>
+                <div id="custom-ram-div" style="display:none;margin-top:8px;">
+                    <input id="custom-ram-input" type="number" min="512" max="999999" 
+                        placeholder="MB (ex: 131072 = 128GB)"
+                        style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:monospace;font-size:0.8rem;padding:6px 10px;outline:none;"
+                        onchange="saveCustomRam()" />
+                    <div style="font-size:0.7rem;color:var(--text-dim);margin-top:4px;">Enter value in MB — 128GB = 131072 MB</div>
+                </div>
+                </div>
+                <div style="font-size:0.72rem;color:var(--text-dim);">Controls conversation history size and memory limits</div>
+            </div>
+            <div id="settings-section-title" style="margin-top:12px;">Memories</div>
             <div id="memories-list"></div>
             <div id="add-memory-form">
                 <div class="add-memory-row">
@@ -1253,9 +1277,59 @@
     }
 
     // ── SETTINGS ──
+    async function loadSystemSettings() {
+        const res = await fetch("/settings", {
+            headers: { "Authorization": `Bearer ${token}` }
+        });
+        const data = await res.json();
+        const select = document.getElementById("ram-budget-select");
+        if (select && data.ram_budget) {
+            const options = Array.from(select.options).map(o => o.value);
+            if (options.includes(data.ram_budget)) {
+                select.value = data.ram_budget;
+            } else {
+                select.value = "custom";
+                document.getElementById("custom-ram-div").style.display = "block";
+                document.getElementById("custom-ram-input").value = data.ram_budget;
+            }
+        }
+    }
+
+    async function saveRamBudget() {
+        const value = document.getElementById("ram-budget-select").value;
+        const customDiv = document.getElementById("custom-ram-div");
+        if (value === "custom") {
+            customDiv.style.display = "block";
+            return;
+        }
+        customDiv.style.display = "none";
+        await fetch("/settings", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${token}`
+            },
+            body: JSON.stringify({ ram_budget: value })
+        });
+    }
+
+    async function saveCustomRam() {
+        const value = document.getElementById("custom-ram-input").value;
+        if (!value || value < 512) return;
+        await fetch("/settings", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${token}`
+            },
+            body: JSON.stringify({ ram_budget: value })
+        });
+    }
+
     async function openSettings() {
         document.getElementById("settings-overlay").classList.add("open");
         closeSidebar();
+        await loadSystemSettings();
         await loadMemories();
     }
 

@@ -11,9 +11,36 @@ def _get_connection() -> sqlite3.Connection:
     return conn
 
 
+def get_setting(key: str, default: str = "") -> str:
+    """Récupère un setting depuis la DB."""
+    try:
+        with _get_connection() as conn:
+            row = conn.execute(
+                "SELECT value FROM settings WHERE key = ?", (key,)
+            ).fetchone()
+        return row["value"] if row else default
+    except Exception:
+        return default
+
+
+def save_setting(key: str, value: str):
+    """Sauvegarde un setting dans la DB."""
+    with _get_connection() as conn:
+        conn.execute("""
+            INSERT INTO settings (key, value) VALUES (?, ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+        """, (key, value))
+
+
 def initialize_db():
     """Crée toutes les tables si elles n'existent pas encore."""
     with _get_connection() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS settings (
+                key   TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )
+        """)
         conn.execute("""
             CREATE TABLE IF NOT EXISTS memories (
                 id        INTEGER PRIMARY KEY AUTOINCREMENT,

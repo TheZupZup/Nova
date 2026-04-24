@@ -94,3 +94,24 @@ def chat(history: list[dict], user_input: str, memories: list[dict], forced_mode
     reply = response["message"]["content"]
     extract_and_save_memory(user_input, reply)
     return reply, model
+
+
+def get_history_limit() -> int:
+    """Retourne la limite d'historique selon le RAM budget configuré."""
+    try:
+        from core.memory import get_setting
+        budget_mb = int(get_setting("ram_budget", "2048"))
+        if budget_mb <= 512:
+            return 5
+        elif budget_mb <= 1024:
+            return 10
+        elif budget_mb <= 2048:
+            return 20
+        elif budget_mb <= 4096:
+            return 40
+        elif budget_mb <= 8192:
+            return 80
+        else:
+            return 150
+    except Exception:
+        return 20
