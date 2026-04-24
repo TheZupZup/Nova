@@ -29,7 +29,7 @@ def extract_and_save_memory(user_message: str, assistant_response: str):
         assistant_response=assistant_response
     )
     response = ollama.chat(
-        model="gemma3:1b",
+        model="gemma4",
         messages=[{"role": "user", "content": prompt}]
     )
     result = response["message"]["content"].strip()
