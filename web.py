@@ -6,6 +6,8 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 
 from core.auth import verify_credentials, create_token, verify_token
+from apscheduler.schedulers.background import BackgroundScheduler
+from core.learner import learn_from_feeds
 from core.chat import chat
 from core.memory import (
     initialize_db, load_memories, save_memory,
@@ -25,10 +27,16 @@ MODE_MAP = {
 }
 
 
+scheduler = BackgroundScheduler()
+scheduler.add_job(learn_from_feeds, "interval", hours=6)
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     initialize_db()
+    scheduler.start()
+    learn_from_feeds()
     yield
+    scheduler.shutdown()
 
 
 app = FastAPI(docs_url=None, redoc_url=None, lifespan=lifespan)
