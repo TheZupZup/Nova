@@ -3,3 +3,4 @@ nexus.db
 __pycache__/
 core/auth.py
 core/auth.py
+.env

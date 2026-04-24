@@ -1,36 +1,36 @@
 import jwt
 import bcrypt
+import secrets
 from datetime import datetime, timedelta
+from dotenv import load_dotenv
+import os
 
-# Change ces valeurs avant de mettre en production!
-SECRET_KEY = "nexus-secret-change-moi"
+load_dotenv()
+
+SECRET_KEY = os.getenv("NEXUS_SECRET_KEY", secrets.token_hex(32))
 TOKEN_EXPIRY_HOURS = 24
 
-# Mot de passe par défaut : "nexus"
-# Pour générer un nouveau hash :
-# python -c "import bcrypt; print(bcrypt.hashpw(b'tonmotdepasse', bcrypt.gensalt()).decode())"
-HASHED_PASSWORD = bcrypt.hashpw(b"w*5zbVDZ4Naw90MWC7gG", bcrypt.gensalt())
+VALID_USERNAME = os.getenv("NEXUS_USERNAME", "nexus")
+HASHED_PASSWORD = bcrypt.hashpw(
+    os.getenv("NEXUS_PASSWORD", "nexus").encode(),
+    bcrypt.gensalt()
+)
 
 
-def verify_password(plain_password: str) -> bool:
-    """Vérifie si le mot de passe est correct."""
-    return bcrypt.checkpw(plain_password.encode(), HASHED_PASSWORD)
+def verify_credentials(username: str, password: str) -> bool:
+    if username != VALID_USERNAME:
+        return False
+    return bcrypt.checkpw(password.encode(), HASHED_PASSWORD)
 
 
 def create_token() -> str:
-    """Génère un token JWT valide pour 24h."""
-    payload = {
-        "exp": datetime.utcnow() + timedelta(hours=TOKEN_EXPIRY_HOURS)
-    }
+    payload = {"exp": datetime.utcnow() + timedelta(hours=TOKEN_EXPIRY_HOURS)}
     return jwt.encode(payload, SECRET_KEY, algorithm="HS256")
 
 
 def verify_token(token: str) -> bool:
-    """Vérifie si le token JWT est valide et non expiré."""
     try:
         jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
         return True
-    except jwt.ExpiredSignatureError:
-        return False
-    except jwt.InvalidTokenError:
+    except (jwt.ExpiredSignatureError, jwt.InvalidTokenError):
         return False
