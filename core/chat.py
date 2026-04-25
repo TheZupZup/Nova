@@ -50,7 +50,7 @@ def extract_and_save_memory(user_message: str, assistant_response: str):
             save_memory(parts[0].strip(), parts[1].strip())
 
 
-def build_messages(history: list[dict], user_input: str, memories: list[dict], extra_context: str = None, context_type: str = None) -> list[dict]:
+def build_messages(history: list[dict], user_input: str, memories: list[dict], extra_context: str = None, context_type: str = None, image: str = None) -> list[dict]:
     if context_type == "weather":
         system_prompt = WEATHER_SYSTEM_PROMPT.format(weather_data=extra_context)
     elif context_type == "search":
@@ -61,12 +61,25 @@ def build_messages(history: list[dict], user_input: str, memories: list[dict], e
 
     messages = [{"role": "system", "content": system_prompt}]
     messages += history[-CHAT_HISTORY_LIMIT:]
-    messages.append({"role": "user", "content": user_input})
+
+    if image:
+        messages.append({
+            "role": "user",
+            "content": user_input or "Analyse cette image.",
+            "images": [image]
+        })
+    else:
+        messages.append({"role": "user", "content": user_input})
+
     return messages
 
 
-def chat(history: list[dict], user_input: str, memories: list[dict], forced_model: str = None, force_search: bool = False) -> tuple[str, str]:
-    model = forced_model if forced_model else route(user_input)
+def chat(history: list[dict], user_input: str, memories: list[dict], forced_model: str = None, force_search: bool = False, image: str = None) -> tuple[str, str]:
+    # Si image → force gemma4 (vision)
+    if image:
+        model = "gemma4"
+    else:
+        model = forced_model if forced_model else route(user_input)
 
     # Météo en temps réel
     weather_city = detect_weather_city(user_input)

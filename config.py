@@ -1,3 +1,7 @@
+import os
+
+OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
+
 OLLAMA_MODEL = "gemma4"
 
 NOVA_SYSTEM_PROMPT = """Tu es Nova, un assistant personnel intelligent créé par TheZupZup.

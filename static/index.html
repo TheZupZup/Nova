@@ -492,6 +492,49 @@
 
         #search-btn:hover { border-color: var(--cyan); color: var(--cyan); }
         #search-btn.active { border-color: var(--cyan); color: var(--cyan); background: rgba(0,188,212,0.1); }
+
+        #image-btn {
+            padding: 10px 12px;
+            background: transparent;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            color: var(--text-dim);
+            font-size: 1rem;
+            cursor: pointer;
+            height: 44px;
+            transition: all 0.2s;
+            flex-shrink: 0;
+        }
+
+        #image-btn:hover { border-color: var(--cyan); color: var(--cyan); }
+        #image-btn.active { border-color: var(--cyan); color: var(--cyan); background: rgba(0,188,212,0.1); }
+
+        #image-preview {
+            display: none;
+            padding: 8px 16px;
+            background: var(--bg2);
+            border-top: 1px solid var(--border);
+            align-items: center;
+            gap: 10px;
+        }
+
+        #image-preview.show { display: flex; }
+
+        #preview-img {
+            height: 60px;
+            width: 60px;
+            object-fit: cover;
+            border-radius: 6px;
+            border: 1px solid var(--border);
+        }
+
+        #remove-image {
+            background: transparent;
+            border: none;
+            color: var(--danger);
+            cursor: pointer;
+            font-size: 1rem;
+        }
         #send-btn:disabled { background: var(--border); color: var(--text-dim); cursor: not-allowed; }
 
         /* ── MOBILE ── */
@@ -815,9 +858,18 @@
                 </div>
             </div>
 
+            <!-- IMAGE PREVIEW -->
+            <div id="image-preview">
+                <img id="preview-img" src="" alt="preview" />
+                <span style="font-size:0.8rem;color:var(--text-dim);flex:1;">Image prête à envoyer</span>
+                <button id="remove-image" onclick="removeImage()">✕</button>
+            </div>
+
             <!-- INPUT -->
+            <input type="file" id="image-input" accept="image/*" style="display:none" onchange="handleImageSelect(event)" />
             <div id="input-area">
                 <input type="text" id="user-input" placeholder="Parle à Nova..." inputmode="text" enterkeyhint="send" autocomplete="off" />
+                <button id="image-btn" onclick="document.getElementById('image-input').click()" title="Envoyer une image">📷</button>
                 <button id="search-btn" onclick="toggleSearch()" title="Recherche web">🔍</button>
                 <button id="send-btn" onclick="sendMessage()">Envoyer</button>
             </div>
@@ -1011,6 +1063,30 @@
     let isThinking = false;
     let currentMode = localStorage.getItem("nova_mode") || "auto";
     let searchEnabled = false;
+    let currentImage = null;
+
+    function handleImageSelect(event) {
+        const file = event.target.files[0];
+        if (!file) return;
+
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            const base64 = e.target.result.split(",")[1];
+            currentImage = base64;
+            document.getElementById("preview-img").src = e.target.result;
+            document.getElementById("image-preview").classList.add("show");
+            document.getElementById("image-btn").classList.add("active");
+        };
+        reader.readAsDataURL(file);
+        event.target.value = "";
+    }
+
+    function removeImage() {
+        currentImage = null;
+        document.getElementById("image-preview").classList.remove("show");
+        document.getElementById("image-btn").classList.remove("active");
+        document.getElementById("preview-img").src = "";
+    }
 
     function toggleSearch() {
         searchEnabled = !searchEnabled;
@@ -1263,6 +1339,7 @@
         messagesEl.appendChild(thinkingRow);
         messagesEl.scrollTop = messagesEl.scrollHeight;
 
+        console.log("Sending image:", currentImage ? "YES (" + currentImage.substring(0,20) + "...)" : "NO");
         const res = await fetch("/chat", {
             method: "POST",
             headers: {
@@ -1273,7 +1350,8 @@
                 message: text,
                 conversation_id: currentConvId,
                 mode: currentMode,
-                search: searchEnabled
+                search: searchEnabled,
+                image: currentImage
             })
         });
 
@@ -1289,6 +1367,7 @@
         btn.disabled = false;
         searchEnabled = false;
         document.getElementById("search-btn").classList.remove("active");
+        removeImage();
         input.focus();
 
         loadConversations();

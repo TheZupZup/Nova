@@ -55,6 +55,7 @@ class ChatRequest(BaseModel):
     conversation_id: int | None = None
     mode: str = "auto"
     search: bool = False
+    image: str | None = None  # base64 encoded image
 
 
 class NewConversationRequest(BaseModel):
@@ -126,7 +127,7 @@ def chat_endpoint(request: ChatRequest, _: bool = Depends(get_current_user)):
     ]
 
     forced_model = MODE_MAP.get(request.mode)
-    response, model_used = chat(history, request.message, memories, forced_model=forced_model, force_search=request.search)
+    response, model_used = chat(history, request.message, memories, forced_model=forced_model, force_search=request.search, image=request.image)
 
     save_message(conversation_id, "user", request.message)
     save_message(conversation_id, "assistant", response, model_used)
