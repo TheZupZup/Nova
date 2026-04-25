@@ -113,6 +113,23 @@ def chat(history: list[dict], user_input: str, memories: list[dict], forced_mode
     messages = build_messages(history, user_input, memories)
     response = ollama.chat(model=model, messages=messages)
     reply = response["message"]["content"]
+
+    # Si Nova sait pas → cherche sur le web automatiquement
+    uncertainty_triggers = [
+        "je ne sais pas", "je n'ai pas", "je n'ai aucune",
+        "je ne peux pas", "je ne dispose pas", "je n'ai pas accès",
+        "i don't know", "i don't have", "i cannot",
+        "je ne trouve pas", "aucune information",
+        "je ne suis pas sûr", "je ne suis pas certain",
+    ]
+    
+    if any(t in reply.lower() for t in uncertainty_triggers):
+        search_results = web_search(user_input)
+        if search_results and "Aucun résultat" not in search_results:
+            messages = build_messages(history, user_input, memories, search_results, "search")
+            response = ollama.chat(model=model, messages=messages)
+            reply = response["message"]["content"]
+
     extract_and_save_memory(user_input, reply)
     return reply, model
 
