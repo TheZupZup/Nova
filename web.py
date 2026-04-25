@@ -18,12 +18,14 @@ from core.memory import (
     get_setting, save_setting,
     list_memories, update_memory, delete_memory,
 )
+from config import MODELS
+
 security = HTTPBearer()
 
 MODE_MAP = {
-    "chat": "gemma4",
-    "code": "deepseek-coder-v2",
-    "deep": "qwen2.5:32b",
+    "chat": MODELS["default"],
+    "code": MODELS["code"],
+    "deep": MODELS["advanced"],
 }
 
 

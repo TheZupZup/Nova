@@ -2,13 +2,10 @@ import subprocess
 import json
 import ollama
 from datetime import datetime
+from config import MODELS
 
-TRACKED_MODELS = [
-    "gemma4",
-    "deepseek-coder-v2",
-    "qwen2.5:32b",
-    "gemma3:1b",
-]
+# Deduplicated in case two roles share a model
+TRACKED_MODELS = list(dict.fromkeys(MODELS.values()))
 
 
 def get_local_model_digest(model_name: str) -> str:

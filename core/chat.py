@@ -1,5 +1,5 @@
 import ollama
-from config import NOVA_SYSTEM_PROMPT, CHAT_HISTORY_LIMIT
+from config import NOVA_SYSTEM_PROMPT, CHAT_HISTORY_LIMIT, MODELS
 from core.memory import format_memories_for_prompt, save_memory
 from core.router import route
 from core.search import web_search, should_search
@@ -42,7 +42,7 @@ def extract_and_save_memory(user_message: str, assistant_response: str):
         assistant_response=assistant_response
     )
     response = ollama.chat(
-        model="gemma4",
+        model=MODELS["default"],
         messages=[{"role": "user", "content": prompt}]
     )
     result = response["message"]["content"].strip()
@@ -80,14 +80,14 @@ def build_image_messages(user_input: str, image: str) -> list[dict]:
 def chat(history: list[dict], user_input: str, memories: list[dict], forced_model: str = None, force_search: bool = False, image: str = None) -> tuple[str, str]:
     """Envoie un message à Nova et retourne sa réponse et le modèle utilisé."""
 
-    # Image → gemma4 vision direct
+    # Image → vision model, no routing
     if image:
         print(f"CHAT IMAGE: True len={len(image)}")
         messages = build_image_messages(user_input, image)
-        response = ollama.chat(model="gemma4", messages=messages)
+        response = ollama.chat(model=MODELS["default"], messages=messages)
         reply = response["message"]["content"]
         extract_and_save_memory(user_input or "image", reply)
-        return reply, "gemma4"
+        return reply, MODELS["default"]
 
     model = forced_model if forced_model else route(user_input)
 

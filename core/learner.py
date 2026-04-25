@@ -1,5 +1,6 @@
 import feedparser
 import ollama
+from config import MODELS
 from core.memory import save_memory, cleanup_old_knowledge
 
 SOURCES = [
@@ -45,7 +46,7 @@ def learn_from_feeds():
                 summary = entry.get("summary", "")[:500]
                 prompt = EXTRACT_PROMPT.format(title=title, summary=summary)
                 response = ollama.chat(
-                    model="gemma3:1b",
+                    model=MODELS["router"],
                     messages=[{"role": "user", "content": prompt}]
                 )
                 result = response["message"]["content"].strip()

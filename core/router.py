@@ -1,6 +1,5 @@
 import ollama
-
-ROUTER_MODEL = "gemma3:1b"
+from config import MODELS
 
 ROUTER_PROMPT = """Classify this request with ONE word only.
 
@@ -18,20 +17,20 @@ Request: {query}
 Reply with ONE word (simple/code/normal/advanced):"""
 
 MODEL_MAP = {
-    "simple":   "gemma4",
-    "normal":   "gemma4",
-    "advanced": "qwen2.5:32b",
-    "code":     "deepseek-coder-v2",
+    "simple":   MODELS["default"],
+    "normal":   MODELS["default"],
+    "advanced": MODELS["advanced"],
+    "code":     MODELS["code"],
 }
 
-FALLBACK_MODEL = "gemma4"
+FALLBACK_MODEL = MODELS["default"]
 
 
 def route(user_input: str) -> str:
     """Choisit le bon modèle selon la complexité de la requête."""
     prompt = ROUTER_PROMPT.format(query=user_input)
     response = ollama.chat(
-        model=ROUTER_MODEL,
+        model=MODELS["router"],
         messages=[{"role": "user", "content": prompt}]
     )
     category = response["message"]["content"].strip().lower().split()[0]
