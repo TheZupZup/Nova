@@ -5,7 +5,7 @@ To protect the hard work put into this project and ensure it remains accessible 
     Individuals: You are free to use, modify, and explore the code for personal and non-profit projects.
     Companies & Resellers: Any commercial use, reselling, or hosting Nova as a service (SaaS) is strictly prohibited without prior written authorization.
 
-If you are interested in using Auryn for your business or want to discuss a commercial license, please contact me directly:
+If you are interested in using Nova for your business or want to discuss a commercial license, please contact me directly:
 📩 [Contact me for Commercial Licensing](mailto:copyright.crewmate858@passmail.net)
 
 
