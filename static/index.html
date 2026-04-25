@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Nova</title>
+    <script src="/marked.min.js"></script>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -564,6 +565,50 @@
             #sidebar { width: 300px; min-width: 300px; }
             .message { max-width: 65%; }
         }
+
+        /* ── MARKDOWN ── */
+        .message.nova h1, .message.nova h2, .message.nova h3 {
+            color: var(--cyan);
+            margin: 8px 0 4px 0;
+        }
+        .message.nova h1 { font-size: 1.1rem; }
+        .message.nova h2 { font-size: 1rem; }
+        .message.nova h3 { font-size: 0.95rem; }
+        .message.nova p { margin: 4px 0; }
+        .message.nova ul, .message.nova ol { padding-left: 20px; margin: 4px 0; }
+        .message.nova li { margin: 2px 0; }
+        .message.nova code {
+            background: var(--bg);
+            padding: 1px 5px;
+            border-radius: 3px;
+            font-family: monospace;
+            font-size: 0.85rem;
+            color: var(--cyan);
+        }
+        .message.nova pre {
+            background: var(--bg);
+            padding: 10px;
+            border-radius: 6px;
+            overflow-x: auto;
+            margin: 6px 0;
+            border: 1px solid var(--border);
+        }
+        .message.nova pre code {
+            background: none;
+            padding: 0;
+            color: var(--text);
+        }
+        .message.nova strong { color: var(--text); }
+        .message.nova em { color: var(--text-dim); }
+        .message.nova a { color: var(--cyan); }
+        .message.nova hr { border-color: var(--border); margin: 8px 0; }
+        .message.nova table { border-collapse: collapse; width: 100%; margin: 6px 0; }
+        .message.nova th, .message.nova td { 
+            border: 1px solid var(--border); 
+            padding: 5px 10px; 
+            text-align: left;
+        }
+        .message.nova th { background: var(--bg3); color: var(--cyan); }
 
         /* ── COPY BUTTON ── */
         .message-row.nova:hover .copy-btn { opacity: 1; }
@@ -1288,9 +1333,15 @@
         }
 
         if (content) {
-            const text = document.createElement("span");
-            text.textContent = content;
-            bubble.appendChild(text);
+            if (role === "nova") {
+                const div = document.createElement("div");
+                div.innerHTML = marked.parse(content);
+                bubble.appendChild(div);
+            } else {
+                const text = document.createElement("span");
+                text.textContent = content;
+                bubble.appendChild(text);
+            }
         }
 
         if (role === "nova") {
@@ -1298,11 +1349,12 @@
             copyBtn.className = "copy-btn";
             copyBtn.textContent = "copier";
             copyBtn.onclick = () => {
+                const plainText = bubble.innerText.replace("copier", "").replace("copié!", "").trim();
                 try {
-                    navigator.clipboard.writeText(content);
+                    navigator.clipboard.writeText(plainText);
                 } catch {
                     const ta = document.createElement("textarea");
-                    ta.value = content;
+                    ta.value = plainText;
                     document.body.appendChild(ta);
                     ta.select();
                     document.execCommand("copy");
