@@ -1,7 +1,16 @@
 import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
-OLLAMA_MODEL = "gemma4"
+
+MODELS = {
+    "router":   "gemma3:1b",        # lightweight classifier, learner
+    "default":  "gemma4",           # general chat, vision, memory extraction
+    "code":     "deepseek-coder-v2",
+    "advanced": "qwen2.5:32b",
+}
 
 NOVA_SYSTEM_PROMPT = """Tu es Nova, un assistant personnel intelligent créé par TheZupZup.
 Tu tournes localement sur la machine de ton utilisateur via Ollama.

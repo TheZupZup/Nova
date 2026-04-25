@@ -161,3 +161,42 @@ def delete_conversation(conversation_id: int):
     with _get_connection() as conn:
         conn.execute("DELETE FROM messages WHERE conversation_id = ?", (conversation_id,))
         conn.execute("DELETE FROM conversations WHERE id = ?", (conversation_id,))
+
+
+def list_memories() -> list[dict]:
+    """Charge tous les souvenirs avec id et created — pour l'interface web (pas pour les prompts)."""
+    with _get_connection() as conn:
+        rows = conn.execute(
+            "SELECT id, category, content, created FROM memories ORDER BY created DESC"
+        ).fetchall()
+    return [{"id": r["id"], "category": r["category"], "content": r["content"], "created": r["created"]} for r in rows]
+
+
+def update_memory(memory_id: int, category: str, content: str):
+    """Met à jour la catégorie et le contenu d'un souvenir."""
+    with _get_connection() as conn:
+        conn.execute(
+            "UPDATE memories SET category = ?, content = ? WHERE id = ?",
+            (category, content, memory_id)
+        )
+
+
+def delete_memory(memory_id: int):
+    """Supprime un souvenir par son id."""
+    with _get_connection() as conn:
+        conn.execute("DELETE FROM memories WHERE id = ?", (memory_id,))
+
+
+def cleanup_old_knowledge(max_count: int = 500):
+    """Garde seulement les max_count dernières mémoires de type knowledge."""
+    with _get_connection() as conn:
+        conn.execute("""
+            DELETE FROM memories
+            WHERE category = 'knowledge'
+            AND id NOT IN (
+                SELECT id FROM memories
+                WHERE category = 'knowledge'
+                ORDER BY created DESC
+                LIMIT ?
+            )
+        """, (max_count,))

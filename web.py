@@ -15,17 +15,17 @@ from core.memory import (
     create_conversation, load_conversations,
     load_conversation_messages, save_message,
     delete_conversation, update_conversation_title,
-    get_setting, save_setting
+    get_setting, save_setting,
+    list_memories, update_memory, delete_memory,
 )
-import sqlite3
+from config import MODELS
 
-DB_PATH = "nova.db"
 security = HTTPBearer()
 
 MODE_MAP = {
-    "chat": "gemma4",
-    "code": "deepseek-coder-v2",
-    "deep": "qwen2.5:32b",
+    "chat": MODELS["default"],
+    "code": MODELS["code"],
+    "deep": MODELS["advanced"],
 }
 
 
@@ -147,33 +147,18 @@ def chat_endpoint(request: ChatRequest, _: bool = Depends(get_current_user)):
 
 @app.get("/memories")
 def get_memories(_: bool = Depends(get_current_user)):
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    rows = conn.execute(
-        "SELECT id, category, content, created FROM memories ORDER BY created DESC"
-    ).fetchall()
-    conn.close()
-    return [{"id": r["id"], "category": r["category"], "content": r["content"], "created": r["created"]} for r in rows]
+    return list_memories()
 
 
 @app.put("/memories/{memory_id}")
-def update_memory(memory_id: int, request: MemoryUpdateRequest, _: bool = Depends(get_current_user)):
-    conn = sqlite3.connect(DB_PATH)
-    conn.execute(
-        "UPDATE memories SET category = ?, content = ? WHERE id = ?",
-        (request.category, request.content, memory_id)
-    )
-    conn.commit()
-    conn.close()
+def update_memory_endpoint(memory_id: int, request: MemoryUpdateRequest, _: bool = Depends(get_current_user)):
+    update_memory(memory_id, request.category, request.content)
     return {"ok": True}
 
 
 @app.delete("/memories/{memory_id}")
-def delete_memory(memory_id: int, _: bool = Depends(get_current_user)):
-    conn = sqlite3.connect(DB_PATH)
-    conn.execute("DELETE FROM memories WHERE id = ?", (memory_id,))
-    conn.commit()
-    conn.close()
+def delete_memory_endpoint(memory_id: int, _: bool = Depends(get_current_user)):
+    delete_memory(memory_id)
     return {"ok": True}
 
 

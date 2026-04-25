@@ -1,6 +1,7 @@
 import feedparser
-import ollama
-from core.memory import save_memory
+from config import MODELS
+from core.memory import save_memory, cleanup_old_knowledge
+from core.ollama_client import client
 
 SOURCES = [
     # Tech & IA
@@ -34,24 +35,6 @@ Résumé: {summary}"""
 MAX_KNOWLEDGE_MEMORIES = 500
 
 
-def cleanup_old_knowledge():
-    """Garde seulement les 500 dernières mémoires de type knowledge."""
-    import sqlite3
-    conn = sqlite3.connect("nova.db")
-    conn.execute("""
-        DELETE FROM memories 
-        WHERE category = 'knowledge' 
-        AND id NOT IN (
-            SELECT id FROM memories 
-            WHERE category = 'knowledge' 
-            ORDER BY created DESC 
-            LIMIT ?
-        )
-    """, (MAX_KNOWLEDGE_MEMORIES,))
-    conn.commit()
-    conn.close()
-
-
 def learn_from_feeds():
     """Scanne les flux RSS et sauvegarde les infos importantes."""
     print("Nova learning from web...")
@@ -62,8 +45,8 @@ def learn_from_feeds():
                 title = entry.get("title", "")
                 summary = entry.get("summary", "")[:500]
                 prompt = EXTRACT_PROMPT.format(title=title, summary=summary)
-                response = ollama.chat(
-                    model="gemma3:1b",
+                response = client.chat(
+                    model=MODELS["router"],
                     messages=[{"role": "user", "content": prompt}]
                 )
                 result = response["message"]["content"].strip()
@@ -73,5 +56,5 @@ def learn_from_feeds():
                         save_memory(parts[0].strip(), parts[1].strip())
         except Exception as e:
             print(f"Error learning from {url}: {e}")
-    cleanup_old_knowledge()
+    cleanup_old_knowledge(MAX_KNOWLEDGE_MEMORIES)
     print("Nova learning done.")
