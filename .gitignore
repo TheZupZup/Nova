@@ -6,3 +6,13 @@ core/auth.py
 .env
 nova.db
 nova.db
+
+# Database
+*.db
+*.db.*
+
+# Backup
+*.backup
+
+# Temp
+*.save
