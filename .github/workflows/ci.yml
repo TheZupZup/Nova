@@ -33,3 +33,7 @@ jobs:
           python -c "import config"
           python -c "import core.chat"
           python -c "import core.memory"
+
+      - name: Run tests
+        run: |
+          pytest tests/ -v

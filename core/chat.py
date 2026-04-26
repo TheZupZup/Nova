@@ -3,7 +3,7 @@ import httpx
 import ollama
 from config import NOVA_SYSTEM_PROMPT, CHAT_HISTORY_LIMIT, MODELS
 from core.ollama_client import client
-from core.memory import format_memories_for_prompt, save_memory
+from core.memory import format_memories_for_prompt, parse_and_save
 from core.router import route
 from core.search import web_search, should_search
 from core.weather import detect_weather_city, get_weather
@@ -63,10 +63,7 @@ def extract_and_save_memory(user_message: str, assistant_response: str):
     except (ollama.ResponseError, ConnectionError, httpx.HTTPError):
         return
     result = response["message"]["content"].strip()
-    if result.startswith("SAVE:"):
-        parts = result[5:].split(":", 1)
-        if len(parts) == 2:
-            save_memory(parts[0].strip(), parts[1].strip())
+    parse_and_save(result)
 
 
 def build_messages(history: list[dict], user_input: str, memories: list[dict], extra_context: str = None, context_type: str = None) -> list[dict]:
