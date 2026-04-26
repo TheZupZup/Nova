@@ -42,7 +42,6 @@ Données météo:
 {weather_data}"""
 
 
-
 def extract_and_save_memory(user_message: str, assistant_response: str):
     """Extrait automatiquement les infos importantes et les sauvegarde."""
     prompt = MEMORY_EXTRACTION_PROMPT.format(
