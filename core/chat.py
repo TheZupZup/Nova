@@ -1,9 +1,16 @@
+import logging
+import httpx
+import ollama
 from config import NOVA_SYSTEM_PROMPT, CHAT_HISTORY_LIMIT, MODELS
 from core.ollama_client import client
 from core.memory import format_memories_for_prompt, save_memory
 from core.router import route
 from core.search import web_search, should_search
 from core.weather import detect_weather_city, get_weather
+
+logger = logging.getLogger(__name__)
+
+OLLAMA_UNAVAILABLE = "Ollama is unreachable. Make sure Ollama is running, then try again."
 
 MEMORY_EXTRACTION_PROMPT = """Analyse cette conversation et extrait UNIQUEMENT les informations personnelles importantes sur l'utilisateur.
 
@@ -48,10 +55,13 @@ def extract_and_save_memory(user_message: str, assistant_response: str):
         user_message=user_message,
         assistant_response=assistant_response
     )
-    response = client.chat(
-        model=MODELS["default"],
-        messages=[{"role": "user", "content": prompt}]
-    )
+    try:
+        response = client.chat(
+            model=MODELS["default"],
+            messages=[{"role": "user", "content": prompt}]
+        )
+    except (ollama.ResponseError, httpx.HTTPError):
+        return
     result = response["message"]["content"].strip()
     if result.startswith("SAVE:"):
         parts = result[5:].split(":", 1)
@@ -86,63 +96,67 @@ def build_image_messages(user_input: str, image: str) -> list[dict]:
 
 def chat(history: list[dict], user_input: str, memories: list[dict], forced_model: str = None, force_search: bool = False, image: str = None) -> tuple[str, str]:
     """Envoie un message à Nova et retourne sa réponse et le modèle utilisé."""
+    try:
+        # Image → vision model, no routing
+        if image:
+            print(f"CHAT IMAGE: True len={len(image)}")
+            messages = build_image_messages(user_input, image)
+            response = client.chat(model=MODELS["default"], messages=messages)
+            reply = response["message"]["content"]
+            extract_and_save_memory(user_input or "image", reply)
+            return reply, MODELS["default"]
 
-    # Image → vision model, no routing
-    if image:
-        print(f"CHAT IMAGE: True len={len(image)}")
-        messages = build_image_messages(user_input, image)
-        response = client.chat(model=MODELS["default"], messages=messages)
-        reply = response["message"]["content"]
-        extract_and_save_memory(user_input or "image", reply)
-        return reply, MODELS["default"]
+        model = forced_model if forced_model else route(user_input)
 
-    model = forced_model if forced_model else route(user_input)
+        # Météo en temps réel
+        weather_city = detect_weather_city(user_input)
+        if weather_city:
+            lat, lon, city = weather_city
+            weather_data = get_weather(lat, lon, city)
+            messages = build_messages(history, user_input, memories, weather_data, "weather")
+            response = client.chat(model=model, messages=messages)
+            reply = response["message"]["content"]
+            return reply, model
 
-    # Météo en temps réel
-    weather_city = detect_weather_city(user_input)
-    if weather_city:
-        lat, lon, city = weather_city
-        weather_data = get_weather(lat, lon, city)
-        messages = build_messages(history, user_input, memories, weather_data, "weather")
-        response = client.chat(model=model, messages=messages)
-        reply = response["message"]["content"]
-        return reply, model
+        # Weather query but no city recognized → short clarification, no LLM
+        if is_weather_query(user_input):
+            return "Quelle ville ?", model
 
-    # Weather query but no city recognized → short clarification, no LLM
-    if is_weather_query(user_input):
-        return "Quelle ville ?", model
-
-    # Web search
-    if force_search or should_search(user_input):
-        search_results = web_search(user_input)
-        messages = build_messages(history, user_input, memories, search_results, "search")
-        response = client.chat(model=model, messages=messages)
-        reply = response["message"]["content"]
-        return reply, model
-
-    # Chat normal
-    messages = build_messages(history, user_input, memories)
-    response = client.chat(model=model, messages=messages)
-    reply = response["message"]["content"]
-
-    # Si Nova sait pas → cherche sur le web automatiquement
-    uncertainty_triggers = [
-        "je ne sais pas", "je n'ai pas", "je n'ai aucune",
-        "je ne peux pas", "je ne dispose pas", "je n'ai pas accès",
-        "i don't know", "i don't have", "i cannot",
-        "je ne trouve pas", "aucune information",
-        "je ne suis pas sûr", "je ne suis pas certain",
-    ]
-    
-    if any(t in reply.lower() for t in uncertainty_triggers):
-        search_results = web_search(user_input)
-        if search_results and "Aucun résultat" not in search_results:
+        # Web search
+        if force_search or should_search(user_input):
+            search_results = web_search(user_input)
             messages = build_messages(history, user_input, memories, search_results, "search")
             response = client.chat(model=model, messages=messages)
             reply = response["message"]["content"]
+            return reply, model
 
-    extract_and_save_memory(user_input, reply)
-    return reply, model
+        # Chat normal
+        messages = build_messages(history, user_input, memories)
+        response = client.chat(model=model, messages=messages)
+        reply = response["message"]["content"]
+
+        # Si Nova sait pas → cherche sur le web automatiquement
+        uncertainty_triggers = [
+            "je ne sais pas", "je n'ai pas", "je n'ai aucune",
+            "je ne peux pas", "je ne dispose pas", "je n'ai pas accès",
+            "i don't know", "i don't have", "i cannot",
+            "je ne trouve pas", "aucune information",
+            "je ne suis pas sûr", "je ne suis pas certain",
+        ]
+
+        if any(t in reply.lower() for t in uncertainty_triggers):
+            search_results = web_search(user_input)
+            if search_results and "Aucun résultat" not in search_results:
+                messages = build_messages(history, user_input, memories, search_results, "search")
+                response = client.chat(model=model, messages=messages)
+                reply = response["message"]["content"]
+
+        extract_and_save_memory(user_input, reply)
+        return reply, model
+
+    except (ollama.ResponseError, httpx.HTTPError) as e:
+        logger.warning("Ollama unreachable during chat: %s", e)
+        return OLLAMA_UNAVAILABLE, MODELS["default"]
 
 
 def get_history_limit() -> int:
