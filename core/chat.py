@@ -110,7 +110,7 @@ def chat(history: list[dict], user_input: str, memories: list[dict], forced_mode
 
     # Weather query but no city recognized → short clarification, no LLM
     if is_weather_query(user_input):
-        return "Précise la ville.", model
+        return "Quelle ville ?", model
 
     # Web search
     if force_search or should_search(user_input):
