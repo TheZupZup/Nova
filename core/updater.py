@@ -1,7 +1,6 @@
 import logging
 import sqlite3
 import subprocess
-import json
 import httpx
 import ollama
 from datetime import datetime
