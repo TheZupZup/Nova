@@ -22,7 +22,7 @@ def get_weather(lat: float, lon: float, city: str) -> str:
 
         return f"Météo actuelle à {city} : {temp}°C, humidité {humidity}%, vent {wind} km/h"
 
-    except (urllib.error.URLError, json.JSONDecodeError, KeyError) as e:
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, KeyError) as e:
         return f"Erreur météo : {e}"
 
 

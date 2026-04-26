@@ -2,6 +2,8 @@ import logging
 import sqlite3
 import subprocess
 import json
+import httpx
+import ollama
 from datetime import datetime
 from config import MODELS
 from core.ollama_client import client
@@ -19,7 +21,7 @@ def get_local_model_digest(model_name: str) -> str:
         for model in models.get("models", []):
             if model["name"].startswith(model_name):
                 return model.get("digest", "")
-    except (ConnectionError, OSError):
+    except (ConnectionError, OSError, ollama.ResponseError, httpx.HTTPError):
         pass
     return ""
 
