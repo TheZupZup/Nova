@@ -1,5 +1,15 @@
+import html
+import re
 import httpx
 from ddgs import DDGS
+
+
+def sanitize_search_text(text: str, max_length: int = 500) -> str:
+    """Strip HTML, decode entities, normalize whitespace, and cap length."""
+    text = html.unescape(text)
+    text = re.sub(r'<[^>]+>', ' ', text)
+    text = re.sub(r'\s+', ' ', text).strip()
+    return text[:max_length]
 
 
 def clean_query(query: str) -> str:
@@ -24,7 +34,9 @@ def web_search(query: str, max_results: int = 5) -> str:
 
         formatted = []
         for i, r in enumerate(results, 1):
-            formatted.append(f"[{i}] {r['title']}\n{r['href']}\n{r['body']}")
+            title = sanitize_search_text(r['title'], max_length=200)
+            body = sanitize_search_text(r['body'], max_length=500)
+            formatted.append(f"[{i}] {title}\n{r['href']}\n{body}")
 
         return "\n\n".join(formatted)
 
