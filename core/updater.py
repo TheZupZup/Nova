@@ -36,6 +36,8 @@ def pull_model(model_name: str) -> bool:
             text=True,
             timeout=3600
         )
+        if result.returncode != 0:
+            logger.warning("Failed to pull model %s: %s", model_name, result.stderr.strip())
         return result.returncode == 0
     except (subprocess.TimeoutExpired, OSError, FileNotFoundError) as e:
         logger.warning("Failed to pull model %s: %s", model_name, e)
@@ -46,6 +48,7 @@ def check_and_update_models():
     """Vérifie et met à jour tous les modèles trackés."""
     print(f"Model update check started at {datetime.now().isoformat()}")
     updated = []
+    any_failed = False
 
     for model in TRACKED_MODELS:
         old_digest = get_local_model_digest(model)
@@ -58,18 +61,21 @@ def check_and_update_models():
                 updated.append(model)
             else:
                 print(f"Already up to date: {model}")
-
-    # Sauvegarde toujours la date de vérification
-    try:
-        from core.memory import save_setting
-        save_setting("last_model_update", datetime.now().isoformat())
-        if updated:
-            save_setting("last_updated_models", ", ".join(updated))
-            print(f"Models updated: {updated}")
         else:
-            save_setting("last_updated_models", "All up to date")
-    except (sqlite3.OperationalError, sqlite3.DatabaseError) as e:
-        logger.warning("Failed to save model update timestamp: %s", e)
+            any_failed = True
+
+    # Only save the timestamp when every pull succeeded
+    if not any_failed:
+        try:
+            from core.memory import save_setting
+            save_setting("last_model_update", datetime.now().isoformat())
+            if updated:
+                save_setting("last_updated_models", ", ".join(updated))
+                print(f"Models updated: {updated}")
+            else:
+                save_setting("last_updated_models", "All up to date")
+        except (sqlite3.OperationalError, sqlite3.DatabaseError) as e:
+            logger.warning("Failed to save model update timestamp: %s", e)
 
     print("Model update check done.")
     return updated
