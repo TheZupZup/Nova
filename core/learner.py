@@ -3,7 +3,7 @@ import httpx
 import ollama
 import sqlite3
 from config import MODELS
-from core.memory import save_memory, cleanup_old_knowledge
+from core.memory import cleanup_old_knowledge, parse_and_save
 from core.ollama_client import client
 
 SOURCES = [
@@ -53,10 +53,7 @@ def learn_from_feeds():
                     messages=[{"role": "user", "content": prompt}]
                 )
                 result = response["message"]["content"].strip()
-                if result.startswith("SAVE:"):
-                    parts = result[5:].split(":", 1)
-                    if len(parts) == 2:
-                        save_memory(parts[0].strip(), parts[1].strip())
+                parse_and_save(result)
         except (ollama.ResponseError, ConnectionError, httpx.HTTPError,
                 KeyError, sqlite3.OperationalError, sqlite3.DatabaseError) as e:
             print(f"Error learning from {url}: {e}")

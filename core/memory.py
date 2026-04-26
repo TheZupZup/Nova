@@ -94,6 +94,20 @@ def save_memory(category: str, content: str):
         )
 
 
+def parse_and_save(result: str) -> bool:
+    """Parses a 'SAVE:category:content' string and saves to memory. Returns True if saved."""
+    if not result:
+        return False
+    text = result.strip()
+    if not text.startswith("SAVE:"):
+        return False
+    parts = text[5:].split(":", 1)
+    if len(parts) != 2:
+        return False
+    save_memory(parts[0].strip(), parts[1].strip())
+    return True
+
+
 def load_memories() -> list[dict]:
     """Charge tous les souvenirs existants."""
     with _get_connection() as conn:
