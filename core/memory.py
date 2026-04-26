@@ -95,16 +95,28 @@ def save_memory(category: str, content: str):
 
 
 def parse_and_save(result: str) -> bool:
-    """Parses a 'SAVE:category:content' string and saves to memory. Returns True if saved."""
-    if not result:
+    """
+    Parse un résultat de l'LLM et sauvegarde la mémoire si le format est valide.
+    Retourne True si une mémoire a été sauvegardée, False sinon.
+    """
+    if not result or not isinstance(result, str):
         return False
-    text = result.strip()
-    if not text.startswith("SAVE:"):
+
+    result = result.strip()
+    if not result.startswith("SAVE:"):
         return False
-    parts = text[5:].split(":", 1)
+
+    parts = result[5:].split(":", 1)
     if len(parts) != 2:
         return False
-    save_memory(parts[0].strip(), parts[1].strip())
+
+    category = parts[0].strip()
+    content = parts[1].strip()
+
+    if not category or not content:
+        return False
+
+    save_memory(category, content)
     return True
 
 
