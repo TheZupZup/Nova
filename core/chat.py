@@ -60,7 +60,7 @@ def extract_and_save_memory(user_message: str, assistant_response: str):
             model=MODELS["default"],
             messages=[{"role": "user", "content": prompt}]
         )
-    except (ollama.ResponseError, httpx.HTTPError):
+    except (ollama.ResponseError, ConnectionError, httpx.HTTPError):
         return
     result = response["message"]["content"].strip()
     if result.startswith("SAVE:"):
@@ -154,7 +154,7 @@ def chat(history: list[dict], user_input: str, memories: list[dict], forced_mode
         extract_and_save_memory(user_input, reply)
         return reply, model
 
-    except (ollama.ResponseError, httpx.HTTPError) as e:
+    except (ollama.ResponseError, ConnectionError, httpx.HTTPError) as e:
         logger.warning("Ollama unreachable during chat: %s", e)
         return OLLAMA_UNAVAILABLE, MODELS["default"]
 

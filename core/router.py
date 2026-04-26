@@ -41,6 +41,6 @@ def route(user_input: str) -> str:
         )
         category = response["message"]["content"].strip().lower().split()[0]
         return MODEL_MAP.get(category, FALLBACK_MODEL)
-    except (ollama.ResponseError, httpx.HTTPError) as e:
+    except (ollama.ResponseError, ConnectionError, httpx.HTTPError) as e:
         logger.warning("Router model unavailable, falling back to default: %s", e)
         return FALLBACK_MODEL
