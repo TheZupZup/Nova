@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.staticfiles import StaticFiles
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 from core.auth import verify_credentials, create_token, verify_token
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -55,7 +55,7 @@ class ChatRequest(BaseModel):
     conversation_id: int | None = None
     mode: str = "auto"
     search: bool = False
-    image: str | None = None  # base64 encoded image
+    image: str | None = Field(default=None, max_length=13_000_000)
 
 
 class NewConversationRequest(BaseModel):
