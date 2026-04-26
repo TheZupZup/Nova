@@ -27,7 +27,7 @@ def get_setting(key: str, default: str = "") -> str:
                 "SELECT value FROM settings WHERE key = ?", (key,)
             ).fetchone()
         return row["value"] if row else default
-    except Exception:
+    except (sqlite3.OperationalError, sqlite3.DatabaseError):
         return default
 
 

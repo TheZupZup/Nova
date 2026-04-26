@@ -1,8 +1,12 @@
+import logging
+import sqlite3
 import subprocess
 import json
 from datetime import datetime
 from config import MODELS
 from core.ollama_client import client
+
+logger = logging.getLogger(__name__)
 
 # Deduplicated in case two roles share a model
 TRACKED_MODELS = list(dict.fromkeys(MODELS.values()))
@@ -15,7 +19,7 @@ def get_local_model_digest(model_name: str) -> str:
         for model in models.get("models", []):
             if model["name"].startswith(model_name):
                 return model.get("digest", "")
-    except Exception:
+    except (ConnectionError, OSError):
         pass
     return ""
 
@@ -31,8 +35,8 @@ def pull_model(model_name: str) -> bool:
             timeout=3600
         )
         return result.returncode == 0
-    except Exception as e:
-        print(f"Error pulling {model_name}: {e}")
+    except (subprocess.TimeoutExpired, OSError, FileNotFoundError) as e:
+        logger.warning("Failed to pull model %s: %s", model_name, e)
         return False
 
 
@@ -62,8 +66,8 @@ def check_and_update_models():
             print(f"Models updated: {updated}")
         else:
             save_setting("last_updated_models", "All up to date")
-    except Exception:
-        pass
+    except (sqlite3.OperationalError, sqlite3.DatabaseError) as e:
+        logger.warning("Failed to save model update timestamp: %s", e)
 
     print("Model update check done.")
     return updated

@@ -176,5 +176,5 @@ def get_history_limit() -> int:
             return 80
         else:
             return 150
-    except Exception:
+    except (ValueError, TypeError):
         return 20

@@ -1,3 +1,4 @@
+import httpx
 from ddgs import DDGS
 
 
@@ -27,7 +28,7 @@ def web_search(query: str, max_results: int = 5) -> str:
 
         return "\n\n".join(formatted)
 
-    except Exception as e:
+    except (httpx.HTTPError, httpx.ConnectError, httpx.TimeoutException, ValueError) as e:
         return f"Erreur de recherche : {e}"
 
 
