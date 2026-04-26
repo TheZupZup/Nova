@@ -35,6 +35,13 @@ Données météo:
 {weather_data}"""
 
 
+def is_weather_query(text: str) -> bool:
+    """Détecte si la requête concerne la météo."""
+    keywords = ["météo", "temperature", "température", "weather", "il fait combien"]
+    lower = text.lower()
+    return any(k in lower for k in keywords)
+
+
 def extract_and_save_memory(user_message: str, assistant_response: str):
     """Extrait automatiquement les infos importantes et les sauvegarde."""
     prompt = MEMORY_EXTRACTION_PROMPT.format(
@@ -101,8 +108,8 @@ def chat(history: list[dict], user_input: str, memories: list[dict], forced_mode
         reply = response["message"]["content"]
         return reply, model
 
-    # Web search
-    if force_search or should_search(user_input):
+    # Web search — skip for weather queries (handled by weather tool above)
+    if not is_weather_query(user_input) and (force_search or should_search(user_input)):
         search_results = web_search(user_input)
         messages = build_messages(history, user_input, memories, search_results, "search")
         response = client.chat(model=model, messages=messages)
@@ -123,7 +130,7 @@ def chat(history: list[dict], user_input: str, memories: list[dict], forced_mode
         "je ne suis pas sûr", "je ne suis pas certain",
     ]
     
-    if any(t in reply.lower() for t in uncertainty_triggers):
+    if not is_weather_query(user_input) and any(t in reply.lower() for t in uncertainty_triggers):
         search_results = web_search(user_input)
         if search_results and "Aucun résultat" not in search_results:
             messages = build_messages(history, user_input, memories, search_results, "search")

@@ -1,7 +1,15 @@
 import sqlite3
+import shutil
+import os
 from datetime import datetime
 
 DB_PATH = "nova.db"
+
+
+def backup_db():
+    """Copie nova.db → nova.db.backup avant chaque écriture."""
+    if os.path.exists(DB_PATH):
+        shutil.copy2(DB_PATH, DB_PATH + ".backup")
 
 
 def _get_connection() -> sqlite3.Connection:
@@ -72,6 +80,7 @@ def initialize_db():
 
 def save_memory(category: str, content: str):
     """Sauvegarde un nouveau souvenir dans la base."""
+    backup_db()
     with _get_connection() as conn:
         conn.execute(
             "INSERT INTO memories (category, content, created) VALUES (?, ?, ?)",
@@ -174,6 +183,7 @@ def list_memories() -> list[dict]:
 
 def update_memory(memory_id: int, category: str, content: str):
     """Met à jour la catégorie et le contenu d'un souvenir."""
+    backup_db()
     with _get_connection() as conn:
         conn.execute(
             "UPDATE memories SET category = ?, content = ? WHERE id = ?",
@@ -183,12 +193,14 @@ def update_memory(memory_id: int, category: str, content: str):
 
 def delete_memory(memory_id: int):
     """Supprime un souvenir par son id."""
+    backup_db()
     with _get_connection() as conn:
         conn.execute("DELETE FROM memories WHERE id = ?", (memory_id,))
 
 
 def cleanup_old_knowledge(max_count: int = 500):
     """Garde seulement les max_count dernières mémoires de type knowledge."""
+    backup_db()
     with _get_connection() as conn:
         conn.execute("""
             DELETE FROM memories
