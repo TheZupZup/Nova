@@ -113,3 +113,15 @@ def test_weather_adjective_sunny_is_no_city():
 
 def test_weather_adjective_forecast_is_no_city():
     assert detect_weather_city("weather forecast") == "no_city"
+
+
+def test_numeric_token_is_no_city():
+    assert detect_weather_city("météo dans 5 jours") == "no_city"
+
+
+def test_numeric_mixed_token_is_no_city():
+    assert detect_weather_city("weather in 2h") == "no_city"
+
+
+def test_numeric_unit_token_is_no_city():
+    assert detect_weather_city("météo 10km") == "no_city"

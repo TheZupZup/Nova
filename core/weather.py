@@ -51,7 +51,7 @@ _NOISE = {
     "quel", "quelle", "quels", "quelles", "fait", "il", "y", "a", "à",
     "de", "du", "des", "la", "le", "les", "un", "une", "pour", "en",
     "et", "ou", "je", "tu", "nous", "vous", "comment", "est", "c",
-    "qu", "combien", "quand", "où", "ce", "cet", "cette", "ces",
+    "qu", "combien", "quand", "où", "ce", "cet", "cette", "ces", "dans", "sur",
     # common contextual words
     "actuelle", "actuel", "aujourd", "hui", "maintenant",
     # English function words
@@ -66,7 +66,8 @@ _TIME_WORDS = {
     # French
     "demain", "aujourd'hui", "maintenant", "hier", "matin", "soir",
     "midi", "nuit", "semaine", "weekend", "week-end", "prochain",
-    "prochaine", "après-midi", "aprem",
+    "prochaine", "après-midi", "aprem", "jours", "jour", "heures", "heure",
+    "minutes", "minute",
     # English
     "today", "tomorrow", "yesterday", "morning", "evening", "night",
     "afternoon", "now", "soon", "later", "week", "weekend", "next",
@@ -91,7 +92,7 @@ _CITY_IGNORED = _NOISE | _TIME_WORDS | _WEATHER_CONTEXT_WORDS
 def _has_unrecognized_city(lower_input: str) -> bool:
     """Returns True if the input contains a token that realistically looks like a city name."""
     words = re.sub(r"[^\w\s]", " ", lower_input).split()
-    return any(w not in _CITY_IGNORED and len(w) > 1 for w in words)
+    return any(w not in _CITY_IGNORED and len(w) > 1 and not w[0].isdigit() for w in words)
 
 
 def detect_weather_city(user_input: str):
