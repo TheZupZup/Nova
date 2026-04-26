@@ -64,18 +64,19 @@ def check_and_update_models():
         else:
             any_failed = True
 
-    # Only save the timestamp when every pull succeeded
-    if not any_failed:
-        try:
-            from core.memory import save_setting
-            save_setting("last_model_update", datetime.now().isoformat())
-            if updated:
-                save_setting("last_updated_models", ", ".join(updated))
-                print(f"Models updated: {updated}")
-            else:
-                save_setting("last_updated_models", "All up to date")
-        except (sqlite3.OperationalError, sqlite3.DatabaseError) as e:
-            logger.warning("Failed to save model update timestamp: %s", e)
+    if any_failed:
+        logger.warning("Model update completed with partial failures")
+
+    try:
+        from core.memory import save_setting
+        save_setting("last_model_update", datetime.now().isoformat())
+        if updated:
+            save_setting("last_updated_models", ", ".join(updated))
+            print(f"Models updated: {updated}")
+        else:
+            save_setting("last_updated_models", "All up to date")
+    except (sqlite3.OperationalError, sqlite3.DatabaseError) as e:
+        logger.warning("Failed to save model update timestamp: %s", e)
 
     print("Model update check done.")
     return updated
