@@ -1,5 +1,10 @@
+import logging
+import httpx
+import ollama
 from config import MODELS
 from core.ollama_client import client
+
+logger = logging.getLogger(__name__)
 
 ROUTER_PROMPT = """Classify this request with ONE word only.
 
@@ -29,9 +34,13 @@ FALLBACK_MODEL = MODELS["default"]
 def route(user_input: str) -> str:
     """Choisit le bon modèle selon la complexité de la requête."""
     prompt = ROUTER_PROMPT.format(query=user_input)
-    response = client.chat(
-        model=MODELS["router"],
-        messages=[{"role": "user", "content": prompt}]
-    )
-    category = response["message"]["content"].strip().lower().split()[0]
-    return MODEL_MAP.get(category, FALLBACK_MODEL)
+    try:
+        response = client.chat(
+            model=MODELS["router"],
+            messages=[{"role": "user", "content": prompt}]
+        )
+        category = response["message"]["content"].strip().lower().split()[0]
+        return MODEL_MAP.get(category, FALLBACK_MODEL)
+    except (ollama.ResponseError, httpx.HTTPError) as e:
+        logger.warning("Router model unavailable, falling back to default: %s", e)
+        return FALLBACK_MODEL
