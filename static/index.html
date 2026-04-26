@@ -1404,37 +1404,41 @@
         messagesEl.scrollTop = messagesEl.scrollHeight;
 
         console.log("Sending image:", currentImage ? "YES (" + currentImage.substring(0,20) + "...)" : "NO");
-        const res = await fetch("/chat", {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                "Authorization": `Bearer ${token}`
-            },
-            body: JSON.stringify({
-                message: text,
-                conversation_id: currentConvId,
-                mode: currentMode,
-                search: searchEnabled,
-                image: currentImage
-            })
-        });
+        try {
+            const res = await fetch("/chat", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "Authorization": `Bearer ${token}`
+                },
+                body: JSON.stringify({
+                    message: text,
+                    conversation_id: currentConvId,
+                    mode: currentMode,
+                    search: searchEnabled,
+                    image: currentImage
+                })
+            });
 
-        thinkingRow.remove();
+            thinkingRow.remove();
 
-        if (res.status === 401) { logout(); return; }
+            if (res.status === 401) { logout(); return; }
 
-        const data = await res.json();
-        currentConvId = data.conversation_id;
-        appendMessage("nova", data.response, data.model);
-
-        isThinking = false;
-        btn.disabled = false;
-        searchEnabled = false;
-        document.getElementById("search-btn").classList.remove("active");
-        removeImage();
-        input.focus();
-
-        loadConversations();
+            const data = await res.json();
+            currentConvId = data.conversation_id;
+            appendMessage("nova", data.response, data.model);
+            loadConversations();
+        } catch (e) {
+            thinkingRow.remove();
+            appendMessage("nova", "Ollama is unreachable. Make sure Ollama is running, then try again.");
+        } finally {
+            isThinking = false;
+            btn.disabled = false;
+            searchEnabled = false;
+            document.getElementById("search-btn").classList.remove("active");
+            removeImage();
+            input.focus();
+        }
     }
 
     // ── SETTINGS ──
