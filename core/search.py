@@ -14,7 +14,7 @@ def sanitize_search_text(text: str, max_length: int = 500) -> str:
 
 def clean_query(query: str) -> str:
     """Nettoie la requête pour une meilleure recherche."""
-    stop_words = ["cherche", "trouve", "dis-moi", "quelle", "quelles", "est-ce que", 
+    stop_words = ["cherche", "trouve", "dis-moi", "quelle", "quelles", "est-ce que",
                   "je veux savoir", "peux-tu", "pourrait-tu", "s'il te plait"]
     q = query.lower()
     for word in stop_words:

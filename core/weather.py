@@ -42,7 +42,7 @@ def detect_weather_city(user_input: str):
     """Détecte si la requête est une demande météo et retourne la ville."""
     lower = user_input.lower()
     weather_words = ["météo", "meteo", "température", "temperature", "temps qu'il fait", "weather"]
-    
+
     if not any(w in lower for w in weather_words):
         return None
 
