@@ -1,6 +1,7 @@
 import urllib.request
 import urllib.error
 import json
+import re
 
 
 def get_weather(lat: float, lon: float, city: str) -> str:
@@ -37,17 +38,68 @@ CITIES = {
     "vancouver": (49.2827, -123.1207, "Vancouver"),
 }
 
+_WEATHER_KEYWORDS = [
+    "météo", "meteo", "température", "temperature",
+    "temps qu'il fait", "weather", "il fait combien",
+]
+
+# Words that cannot be city names — used to detect whether a city was mentioned
+_NOISE = {
+    # weather keywords
+    "météo", "meteo", "température", "temperature", "temps", "weather",
+    # French function words
+    "quel", "quelle", "quels", "quelles", "fait", "il", "y", "a", "à",
+    "de", "du", "des", "la", "le", "les", "un", "une", "pour", "en",
+    "et", "ou", "je", "tu", "nous", "vous", "comment", "est", "c",
+    "qu", "combien", "quand", "où",
+    # common contextual words
+    "actuelle", "actuel", "aujourd", "hui", "maintenant",
+    # English function words
+    "what", "is", "the", "it", "like", "how", "at", "in", "for",
+    "are", "me", "can", "you", "tell",
+    # single-letter fragments left after punctuation stripping
+    "s", "d", "l", "m", "n", "j", "t",
+}
+
+
+def _has_unrecognized_city(lower_input: str) -> bool:
+    """Returns True if the input contains a word that looks like an unsupported city name."""
+    words = re.sub(r"[^\w\s]", " ", lower_input).split()
+    return any(w not in _NOISE and len(w) > 1 for w in words)
+
 
 def detect_weather_city(user_input: str):
-    """Détecte si la requête est une demande météo et retourne la ville."""
-    lower = user_input.lower()
-    weather_words = ["météo", "meteo", "température", "temperature", "temps qu'il fait", "weather"]
+    """
+    Détecte si la requête concerne la météo et identifie la ville.
 
-    if not any(w in lower for w in weather_words):
+    Returns:
+      (lat, lon, city_name)  — single recognized city
+      "multiple"             — multiple distinct recognized cities
+      "no_city"              — weather query but no city mentioned
+      "unknown_city"         — weather query with an unrecognized city
+      None                   — not a weather query at all
+    """
+    lower = user_input.lower()
+
+    if not any(w in lower for w in _WEATHER_KEYWORDS):
         return None
 
+    # Collect all matching cities, deduplicated by coordinates
+    seen: set = set()
+    matches = []
     for key, value in CITIES.items():
-        if key in lower:
-            return value
+        if key in lower and value[:2] not in seen:
+            seen.add(value[:2])
+            matches.append(value)
 
-    return None
+    if len(matches) == 1:
+        return matches[0]
+
+    if len(matches) > 1:
+        return "multiple"
+
+    # No recognized city — check if a city name was mentioned anyway
+    if _has_unrecognized_city(lower):
+        return "unknown_city"
+
+    return "no_city"
