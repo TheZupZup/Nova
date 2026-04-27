@@ -1,18 +1,45 @@
 # Contributing
 
-Thanks for wanting to contribute.
+Thanks for your interest in contributing.
 
-Please keep contributions small, focused, and easy to review.
+## Branch rules
 
-## Branch workflow
+- Do NOT push directly to `main`
+- Do NOT use or push to `dev/thezupzup-private` (this branch is reserved for the maintainer)
 
-The `main` branch is protected and should always stay stable.
-
-Do not push directly to `main`.
-
-Use a feature or fix branch:
+Instead, always create your own branch from `main`:
 
 ```bash
 git checkout main
 git pull origin main
-git checkout -b feature/issue-XX-short-name
+git checkout -b feature/your-change-name
+```
+
+Examples:
+
+feature/add-download-status
+fix/crash-on-start
+refactor/split-modules
+Pull Requests
+
+All changes must go through a Pull Request to main.
+
+Before opening a PR:
+
+git fetch origin
+git rebase origin/main
+Important rules
+One change per PR (keep it small)
+Do not modify unrelated files
+Do not change LICENSE or packaging unless required
+Keep the code simple and readable
+Maintainer branch
+
+The branch dev/thezupzup-private is used only by the maintainer for fast development.
+
+Please do not use it.
+
+Summary
+Work on your own branch
+Open a PR to main
+Keep changes small and clean
