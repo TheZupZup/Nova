@@ -15,13 +15,6 @@ git pull origin main
 git checkout -b feature/your-change-name
 ```
 
-Examples:
-
- ###feature/add-download-status
- ###fix/crash-on-start
- ###refactor/split-modules
- ###Pull Requests
-
 All changes must go through a Pull Request to main.
 
 Before opening a PR:
