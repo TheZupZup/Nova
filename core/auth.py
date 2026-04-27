@@ -1,5 +1,6 @@
 import jwt
 import bcrypt
+import logging
 import secrets
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
@@ -7,8 +8,19 @@ import os
 
 load_dotenv()
 
-SECRET_KEY = os.getenv("NOVA_SECRET_KEY", secrets.token_hex(32))
+logger = logging.getLogger(__name__)
+
+_secret_key_env = os.getenv("NOVA_SECRET_KEY")
+if _secret_key_env is None:
+    logger.warning(
+        "NOVA_SECRET_KEY is not set; using a temporary secret key. "
+        "Sessions will be invalidated on restart."
+    )
+    SECRET_KEY = secrets.token_hex(32)
+else:
+    SECRET_KEY = _secret_key_env
 TOKEN_EXPIRY_HOURS = 24
+
 
 VALID_USERNAME = os.getenv("NOVA_USERNAME", "nova")
 HASHED_PASSWORD = bcrypt.hashpw(
