@@ -130,4 +130,4 @@ Credentials are loaded from `.env` and never committed to the repository.
 
 ## License
 
-MIT
+MPL-2.0 license
