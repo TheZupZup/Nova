@@ -32,6 +32,7 @@ import contextlib
 import time
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -231,3 +232,92 @@ class TestSessionCookieProperties:
         """/auth/github must set a cookie with SameSite=Lax."""
         resp = alpha_client.get("/auth/github", follow_redirects=False)
         assert "samesite=lax" in resp.headers.get("set-cookie", "").lower()
+
+
+# ── Session store: TTL purge ────────────────────────────────────────────────────
+
+class TestSessionPurge:
+    def test_expired_entries_are_removed_on_next_create(self):
+        """_session_create must evict all expired entries before inserting a new one."""
+        web._sessions.clear()
+        for i in range(3):
+            web._sessions[f"stale-{i}"] = {"data": {}, "exp": time.time() - 1}
+
+        web._session_create({"oauth_state": "x"})
+
+        # Purge removed the 3 stale entries; _session_create added exactly 1 new one
+        assert len(web._sessions) == 1
+        assert not any(k.startswith("stale-") for k in web._sessions)
+
+    def test_valid_entries_are_not_purged(self):
+        """_session_purge must leave sessions that have not yet expired."""
+        web._sessions.clear()
+        sid = web._session_create({"github_user": "thezupzup"})
+        web._session_purge()
+        assert sid in web._sessions
+
+
+# ── github_oauth: hardened network calls ───────────────────────────────────────
+
+class TestOAuthNetworkHardening:
+    @pytest.mark.anyio
+    async def test_exchange_code_returns_none_on_timeout(self):
+        with patch("core.github_oauth.httpx.AsyncClient") as mock_cls:
+            mock_cls.return_value.__aenter__.return_value.post.side_effect = (
+                httpx.TimeoutException("timed out")
+            )
+            from core.github_oauth import exchange_code
+            result = await exchange_code("any-code")
+        assert result is None
+
+    @pytest.mark.anyio
+    async def test_exchange_code_returns_none_on_transport_error(self):
+        with patch("core.github_oauth.httpx.AsyncClient") as mock_cls:
+            mock_cls.return_value.__aenter__.return_value.post.side_effect = (
+                httpx.ConnectError("refused")
+            )
+            from core.github_oauth import exchange_code
+            result = await exchange_code("any-code")
+        assert result is None
+
+    @pytest.mark.anyio
+    async def test_exchange_code_returns_none_on_invalid_json(self):
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.side_effect = ValueError("not json")
+        with patch("core.github_oauth.httpx.AsyncClient") as mock_cls:
+            mock_cls.return_value.__aenter__.return_value.post.return_value = mock_resp
+            from core.github_oauth import exchange_code
+            result = await exchange_code("any-code")
+        assert result is None
+
+    @pytest.mark.anyio
+    async def test_fetch_username_returns_none_on_timeout(self):
+        with patch("core.github_oauth.httpx.AsyncClient") as mock_cls:
+            mock_cls.return_value.__aenter__.return_value.get.side_effect = (
+                httpx.TimeoutException("timed out")
+            )
+            from core.github_oauth import fetch_username
+            result = await fetch_username("some-token")
+        assert result is None
+
+    @pytest.mark.anyio
+    async def test_fetch_username_returns_none_on_transport_error(self):
+        with patch("core.github_oauth.httpx.AsyncClient") as mock_cls:
+            mock_cls.return_value.__aenter__.return_value.get.side_effect = (
+                httpx.ConnectError("refused")
+            )
+            from core.github_oauth import fetch_username
+            result = await fetch_username("some-token")
+        assert result is None
+
+    @pytest.mark.anyio
+    async def test_fetch_username_returns_none_on_invalid_json(self):
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.side_effect = ValueError("not json")
+        with patch("core.github_oauth.httpx.AsyncClient") as mock_cls:
+            mock_cls.return_value.__aenter__.return_value.get.return_value = mock_resp
+            from core.github_oauth import fetch_username
+            result = await fetch_username("some-token")
+        assert result is None

@@ -24,35 +24,41 @@ def build_auth_url(state: str) -> str:
 
 async def exchange_code(code: str) -> str | None:
     """Exchange an OAuth code for an access token. Returns the token or None."""
-    async with httpx.AsyncClient(timeout=10) as client:
-        resp = await client.post(
-            _TOKEN_URL,
-            data={
-                "client_id": GITHUB_CLIENT_ID,
-                "client_secret": GITHUB_CLIENT_SECRET,
-                "code": code,
-                "redirect_uri": GITHUB_OAUTH_REDIRECT_URI,
-            },
-            headers={"Accept": "application/json"},
-        )
-    if resp.status_code != 200:
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.post(
+                _TOKEN_URL,
+                data={
+                    "client_id": GITHUB_CLIENT_ID,
+                    "client_secret": GITHUB_CLIENT_SECRET,
+                    "code": code,
+                    "redirect_uri": GITHUB_OAUTH_REDIRECT_URI,
+                },
+                headers={"Accept": "application/json"},
+            )
+        if resp.status_code != 200:
+            return None
+        return resp.json().get("access_token") or None
+    except (httpx.HTTPError, ValueError):
         return None
-    return resp.json().get("access_token") or None
 
 
 async def fetch_username(token: str) -> str | None:
     """Return the GitHub login for the given access token, or None on failure."""
-    async with httpx.AsyncClient(timeout=10) as client:
-        resp = await client.get(
-            _USER_URL,
-            headers={
-                "Authorization": f"token {token}",
-                "Accept": "application/vnd.github+json",
-            },
-        )
-    if resp.status_code != 200:
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(
+                _USER_URL,
+                headers={
+                    "Authorization": f"token {token}",
+                    "Accept": "application/vnd.github+json",
+                },
+            )
+        if resp.status_code != 200:
+            return None
+        return resp.json().get("login") or None
+    except (httpx.HTTPError, ValueError):
         return None
-    return resp.json().get("login") or None
 
 
 def is_allowed(username: str) -> bool:
