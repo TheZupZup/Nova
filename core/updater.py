@@ -18,7 +18,12 @@ def get_local_model_digest(model_name: str) -> str:
     try:
         models = client.list()
         for model in models.get("models", []):
-            if model["name"].startswith(model_name):
+            if not isinstance(model, dict):
+                continue
+            model_entry_name = model.get("name")
+            if not model_entry_name:
+                continue
+            if model_entry_name.startswith(model_name):
                 return model.get("digest", "")
     except (ConnectionError, OSError, ollama.ResponseError, httpx.HTTPError):
         pass
