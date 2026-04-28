@@ -2,6 +2,7 @@ import sqlite3
 import shutil
 import os
 from datetime import datetime
+from memory.store import initialize_memory_database as _init_natural_memory
 
 DB_PATH = "nova.db"
 
@@ -82,6 +83,7 @@ def initialize_db():
                 FOREIGN KEY (conversation_id) REFERENCES conversations(id)
             )
         """)
+    _init_natural_memory(DB_PATH)
 
 
 def save_memory(category: str, content: str):

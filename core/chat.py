@@ -7,6 +7,10 @@ from core.memory import format_memories_for_prompt, parse_and_save
 from core.router import route
 from core.search import web_search, should_search
 from core.weather import detect_weather_city, get_weather
+from memory.extractor import extract_memories
+from memory.policy import is_memory_allowed
+from memory.retriever import get_relevant_memories, format_for_prompt
+from memory.store import save_memory as save_natural_memory
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +46,16 @@ Données météo:
 {weather_data}"""
 
 
+def _extract_and_save_natural_memories(user_message: str):
+    """Runs the rule-based extractor on the user message and persists allowed memories."""
+    try:
+        for mem in extract_memories(user_message):
+            if is_memory_allowed(mem):
+                save_natural_memory(mem)
+    except Exception:
+        pass  # never let memory extraction break the chat flow
+
+
 def extract_and_save_memory(user_message: str, assistant_response: str):
     """Extrait automatiquement les infos importantes et les sauvegarde."""
     prompt = MEMORY_EXTRACTION_PROMPT.format(
@@ -59,7 +73,7 @@ def extract_and_save_memory(user_message: str, assistant_response: str):
     parse_and_save(result)
 
 
-def build_messages(history: list[dict], user_input: str, memories: list[dict], extra_context: str = None, context_type: str = None) -> list[dict]:
+def build_messages(history: list[dict], user_input: str, memories: list[dict], extra_context: str = None, context_type: str = None, natural_memories=None) -> list[dict]:
     """Construit la liste de messages à envoyer à Ollama."""
     if context_type == "weather":
         system_prompt = WEATHER_SYSTEM_PROMPT.format(weather_data=extra_context)
@@ -67,7 +81,9 @@ def build_messages(history: list[dict], user_input: str, memories: list[dict], e
         system_prompt = SEARCH_SYSTEM_PROMPT.format(search_results=extra_context)
     else:
         memory_text = format_memories_for_prompt(memories)
-        system_prompt = NOVA_SYSTEM_PROMPT.format(memories=memory_text)
+        natural_text = format_for_prompt(natural_memories) if natural_memories else ""
+        combined = "\n\n".join(filter(None, [memory_text, natural_text]))
+        system_prompt = NOVA_SYSTEM_PROMPT.format(memories=combined)
 
     messages = [{"role": "system", "content": system_prompt}]
     messages += history[-CHAT_HISTORY_LIMIT:]
@@ -98,6 +114,8 @@ def chat(history: list[dict], user_input: str, memories: list[dict], forced_mode
 
         model = forced_model if forced_model else route(user_input)
 
+        natural_mems = get_relevant_memories(user_input)
+
         # Météo en temps réel
         weather_result = detect_weather_city(user_input)
         if isinstance(weather_result, tuple):
@@ -122,8 +140,8 @@ def chat(history: list[dict], user_input: str, memories: list[dict], forced_mode
             reply = response["message"]["content"]
             return reply, model
 
-        # Chat normal
-        messages = build_messages(history, user_input, memories)
+        # Chat normal — inject relevant natural memories into context
+        messages = build_messages(history, user_input, memories, natural_memories=natural_mems)
         response = client.chat(model=model, messages=messages)
         reply = response["message"]["content"]
 
@@ -144,6 +162,7 @@ def chat(history: list[dict], user_input: str, memories: list[dict], forced_mode
                 reply = response["message"]["content"]
 
         extract_and_save_memory(user_input, reply)
+        _extract_and_save_natural_memories(user_input)
         return reply, model
 
     except (ollama.ResponseError, ConnectionError, httpx.HTTPError) as e:
