@@ -1,6 +1,9 @@
+import time
+import secrets as _secrets
 import uvicorn
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, Depends, Request
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field, field_validator
@@ -22,7 +25,76 @@ from memory.store import (
     list_memories as list_natural_memories,
     delete_memories_matching,
 )
-from config import MODELS, ALLOWED_SETTINGS
+from config import (
+    MODELS, ALLOWED_SETTINGS,
+    NOVA_CHANNEL, NOVA_BRANCH, NOVA_ADMIN_UI,
+    GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET, GITHUB_OAUTH_REDIRECT_URI,
+)
+from core.github_oauth import build_auth_url, exchange_code, fetch_username, is_allowed
+
+# ── ALPHA CHANNEL: SESSION STORE ──────────────────────────────────────────────
+# In-memory store keyed by a random, opaque session ID (256-bit entropy).
+# Only the GitHub username is persisted — the OAuth token is never stored.
+# Limitation: sessions are cleared on server restart and are not shared
+# across multiple workers or containers. Acceptable for a single-process
+# Alpha instance; replace with a persistent store for multi-worker setups.
+_sessions: dict[str, dict] = {}
+_SESSION_COOKIE = "nova_alpha_sess"
+_SESSION_TTL = 28800  # 8 hours
+_SECURE_COOKIE = GITHUB_OAUTH_REDIRECT_URI.startswith("https://")
+
+
+def _session_read(request: Request) -> dict | None:
+    sid = request.cookies.get(_SESSION_COOKIE)
+    if not sid:
+        return None
+    entry = _sessions.get(sid)
+    if not entry or entry["exp"] < time.time():
+        _sessions.pop(sid, None)
+        return None
+    return entry["data"]
+
+
+def _session_create(data: dict) -> str:
+    sid = _secrets.token_urlsafe(32)
+    _sessions[sid] = {"data": data, "exp": time.time() + _SESSION_TTL}
+    return sid
+
+
+def _session_destroy(request: Request) -> None:
+    sid = request.cookies.get(_SESSION_COOKIE)
+    if sid:
+        _sessions.pop(sid, None)
+
+
+def _set_cookie(response, sid: str) -> None:
+    response.set_cookie(
+        _SESSION_COOKIE, sid,
+        httponly=True,
+        secure=_SECURE_COOKIE,
+        samesite="lax",
+        max_age=_SESSION_TTL,
+    )
+
+
+def _access_denied_page(username: str) -> str:
+    return (
+        "<!DOCTYPE html><html><head><title>Access Denied — Nova</title>"
+        "<style>*{box-sizing:border-box;margin:0;padding:0}"
+        "body{background:#0d0d0d;color:#e0e0e0;font-family:monospace;"
+        "display:flex;align-items:center;justify-content:center;height:100dvh}"
+        ".box{text-align:center;border:1px solid #222;border-radius:12px;"
+        "padding:32px 40px;background:#111}"
+        "h1{color:#f44336;font-size:1rem;letter-spacing:2px;margin-bottom:12px}"
+        "p{color:#666;font-size:0.85rem;margin:6px 0}"
+        "a{color:#00bcd4;text-decoration:none;font-size:0.8rem}"
+        "</style></head><body><div class='box'>"
+        "<h1>⬡ ACCESS DENIED</h1>"
+        f"<p>@{username} is not authorised to access this instance.</p>"
+        "<p style='margin-top:16px'><a href='/auth/logout'>← Sign out</a></p>"
+        "</div></body></html>"
+    )
+
 
 security = HTTPBearer()
 
@@ -48,6 +120,85 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(docs_url=None, redoc_url=None, lifespan=lifespan)
+
+
+# ── ALPHA CHANNEL GUARD ────────────────────────────────────────────────────────
+@app.middleware("http")
+async def alpha_channel_guard(request: Request, call_next):
+    if NOVA_CHANNEL != "alpha":
+        return await call_next(request)
+
+    # OAuth flow paths are always open
+    if request.url.path.startswith("/auth/"):
+        return await call_next(request)
+
+    if not GITHUB_CLIENT_ID or not GITHUB_CLIENT_SECRET:
+        return HTMLResponse(
+            "<h1 style='font-family:monospace;color:#f44336'>"
+            "Alpha channel requires GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET.</h1>",
+            status_code=503,
+        )
+
+    sess = _session_read(request)
+    github_user = sess.get("github_user") if sess else None
+
+    if not github_user:
+        # API callers with a Bearer token get a JSON 401, not a redirect
+        if request.headers.get("authorization"):
+            return JSONResponse({"detail": "GitHub authentication required."}, status_code=401)
+        return RedirectResponse("/auth/github")
+
+    if not is_allowed(github_user):
+        return HTMLResponse(_access_denied_page(github_user), status_code=403)
+
+    return await call_next(request)
+
+
+# ── GITHUB OAUTH ROUTES ────────────────────────────────────────────────────────
+@app.get("/auth/github")
+async def auth_github(request: Request):
+    state = _secrets.token_urlsafe(16)
+    sid = _session_create({"oauth_state": state})
+    response = RedirectResponse(build_auth_url(state), status_code=302)
+    _set_cookie(response, sid)
+    return response
+
+
+@app.get("/auth/github/callback")
+async def auth_github_callback(
+    request: Request,
+    code: str = "",
+    state: str = "",
+):
+    sess = _session_read(request)
+    if not sess or not state or sess.get("oauth_state") != state:
+        return HTMLResponse("Invalid or expired OAuth state. Please try again.", status_code=400)
+
+    token = await exchange_code(code)
+    if not token:
+        return HTMLResponse("Failed to obtain access token from GitHub.", status_code=400)
+
+    username = await fetch_username(token)
+    # Token is used once and immediately discarded — never stored or logged
+    if not username:
+        return HTMLResponse("Failed to verify GitHub identity.", status_code=400)
+
+    # Upgrade the pending session to an authenticated one
+    sid = request.cookies.get(_SESSION_COOKIE, "")
+    if sid in _sessions:
+        _sessions[sid]["data"] = {"github_user": username}
+        _sessions[sid]["exp"] = time.time() + _SESSION_TTL
+
+    response = RedirectResponse("/", status_code=302)
+    return response
+
+
+@app.get("/auth/logout")
+async def auth_logout(request: Request):
+    _session_destroy(request)
+    response = RedirectResponse("/auth/github" if NOVA_CHANNEL == "alpha" else "/", status_code=302)
+    response.delete_cookie(_SESSION_COOKIE)
+    return response
 
 
 class LoginRequest(BaseModel):
@@ -240,6 +391,11 @@ def update_settings(data: SettingsUpdateRequest, _: bool = Depends(get_current_u
     if data.ram_budget is not None:
         save_setting("ram_budget", str(data.ram_budget))
     return {"ok": True}
+
+
+@app.get("/channel")
+def get_channel():
+    return {"channel": NOVA_CHANNEL, "branch": NOVA_BRANCH, "admin_ui_enabled": NOVA_ADMIN_UI}
 
 
 @app.get("/health")
