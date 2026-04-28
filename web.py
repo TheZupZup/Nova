@@ -33,8 +33,11 @@ from config import (
 from core.github_oauth import build_auth_url, exchange_code, fetch_username, is_allowed
 
 # ── ALPHA CHANNEL: SESSION STORE ──────────────────────────────────────────────
-# In-memory store keyed by a random, opaque session ID.
+# In-memory store keyed by a random, opaque session ID (256-bit entropy).
 # Only the GitHub username is persisted — the OAuth token is never stored.
+# Limitation: sessions are cleared on server restart and are not shared
+# across multiple workers or containers. Acceptable for a single-process
+# Alpha instance; replace with a persistent store for multi-worker setups.
 _sessions: dict[str, dict] = {}
 _SESSION_COOKIE = "nova_alpha_sess"
 _SESSION_TTL = 28800  # 8 hours
