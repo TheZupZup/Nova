@@ -18,3 +18,4 @@ class Memory(BaseModel):
     created_at: str = Field(default_factory=lambda: datetime.now().isoformat())
     updated_at: str = Field(default_factory=lambda: datetime.now().isoformat())
     last_seen_at: str = Field(default_factory=lambda: datetime.now().isoformat())
+    embedding: list[float] | None = None
