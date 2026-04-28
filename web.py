@@ -55,7 +55,15 @@ def _session_read(request: Request) -> dict | None:
     return entry["data"]
 
 
+def _session_purge() -> None:
+    """Remove all expired entries from the session store."""
+    now = time.time()
+    for sid in [s for s, e in _sessions.items() if e["exp"] < now]:
+        del _sessions[sid]
+
+
 def _session_create(data: dict) -> str:
+    _session_purge()
     sid = _secrets.token_urlsafe(32)
     _sessions[sid] = {"data": data, "exp": time.time() + _SESSION_TTL}
     return sid
