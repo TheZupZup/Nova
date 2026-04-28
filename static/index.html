@@ -160,7 +160,7 @@
         #conversations-list {
             flex: 1;
             overflow-y: auto;
-            padding: 8px;
+            padding: 6px 8px;
         }
 
         .conv-item {
@@ -176,7 +176,7 @@
         }
 
         .conv-item:hover { background: var(--bg3); }
-        .conv-item.active { background: var(--bg3); border-color: var(--border); }
+        .conv-item.active { background: var(--bg3); border-color: var(--border); border-left: 2px solid var(--cyan); }
 
         .conv-title {
             flex: 1;
@@ -864,7 +864,7 @@
         <div id="main">
             <div id="chat-header">
                 <button id="menu-toggle" onclick="toggleSidebar()">☰</button>
-                <span id="chat-title">Sélectionne une conversation</span>
+                <span id="chat-title">Discute avec Nova</span>
                 <span id="model-badge">—</span>
             </div>
 
@@ -995,9 +995,9 @@
             new_conv: "+ Nouveau",
             logout: "Déconnexion",
             no_conv: "Aucune conversation",
-            select_conv: "Sélectionne une conversation",
+            select_conv: "Discute avec Nova",
             new_conv_title: "Nouvelle conversation",
-            empty_state: "Commence une nouvelle conversation",
+            empty_state: "Discute avec Nova",
             placeholder: "Parle à Nova...",
             send: "Envoyer",
             thinking: "réfléchit...",
@@ -1023,9 +1023,9 @@
             new_conv: "+ New",
             logout: "Logout",
             no_conv: "No conversations",
-            select_conv: "Select a conversation",
+            select_conv: "Start chatting with Nova",
             new_conv_title: "New conversation",
-            empty_state: "Start a new conversation",
+            empty_state: "Start chatting with Nova",
             placeholder: "Talk to Nova...",
             send: "Send",
             thinking: "thinking...",
@@ -1075,11 +1075,12 @@
         if (codeDesc) codeDesc.textContent = t("mode_code_desc");
         if (deepDesc) deepDesc.textContent = t("mode_deep_desc");
 
-        // Chat header
+        // Chat header — update only when no real conversation title is set
         const chatTitle = document.getElementById("chat-title");
-        if (chatTitle && chatTitle.textContent === "Sélectionne une conversation" || 
-            chatTitle && chatTitle.textContent === "Select a conversation") {
-            chatTitle.textContent = t("select_conv");
+        const neutralTitles = ["Sélectionne une conversation", "Select a conversation",
+            "Discute avec Nova", "Start chatting with Nova", "Nouvelle conversation", "New conversation"];
+        if (chatTitle && neutralTitles.includes(chatTitle.textContent)) {
+            chatTitle.textContent = currentConvId === null ? t("select_conv") : chatTitle.textContent;
         }
 
         // Empty state
@@ -1090,9 +1091,9 @@
         const langBtn = document.getElementById("lang-btn");
         if (langBtn) langBtn.textContent = lang === "fr" ? "FR" : "EN";
 
-        // Conversations list empty
+        // Conversations list empty label
         const noConv = document.querySelector("#conversations-list div");
-        if (noConv && (noConv.textContent === "Aucune conversation" || noConv.textContent === "No conversations")) {
+        if (noConv && !noConv.classList.contains("conv-item")) {
             noConv.textContent = t("no_conv");
         }
     }
@@ -1236,6 +1237,11 @@
         if (res.status === 401) { logout(); return; }
         const convs = await res.json();
         renderConversations(convs);
+
+        if (currentConvId === null && convs.length > 0) {
+            const sorted = [...convs].sort((a, b) => b.id - a.id);
+            openConversation(sorted[0].id, sorted[0].title);
+        }
     }
 
     function renderConversations(convs) {
@@ -1243,11 +1249,12 @@
         list.innerHTML = "";
 
         if (convs.length === 0) {
-            list.innerHTML = '<div style="padding:16px;color:var(--text-dim);font-size:0.8rem;">Aucune conversation</div>';
+            list.innerHTML = '<div style="padding:12px 16px;color:var(--text-dim);font-size:0.8rem;">Aucune conversation</div>';
             return;
         }
 
-        for (const conv of convs) {
+        const sorted = [...convs].sort((a, b) => b.id - a.id).slice(0, 15);
+        for (const conv of sorted) {
             const div = document.createElement("div");
             div.className = "conv-item" + (conv.id === currentConvId ? " active" : "");
             div.dataset.id = conv.id;
@@ -1260,19 +1267,19 @@
         }
     }
 
-    async function newConversation() {
+    function newConversation() {
         currentConvId = null;
         document.getElementById("messages").innerHTML = `
             <div id="empty-state">
                 <h2>⬡ NOVA</h2>
-                <span>Commence une nouvelle conversation</span>
+                <span>${t("empty_state")}</span>
             </div>
         `;
-        document.getElementById("chat-title").textContent = "Nouvelle conversation";
+        document.getElementById("chat-title").textContent = t("new_conv_title");
         document.getElementById("model-badge").textContent = "—";
         document.querySelectorAll(".conv-item").forEach(el => el.classList.remove("active"));
-        document.getElementById("user-input").focus();
         closeSidebar();
+        document.getElementById("user-input").focus();
     }
 
     async function openConversation(id, title) {
@@ -1297,6 +1304,7 @@
 
         messagesEl.scrollTop = messagesEl.scrollHeight;
         closeSidebar();
+        document.getElementById("user-input").focus();
     }
 
     async function deleteConversation(event, id) {
