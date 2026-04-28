@@ -18,6 +18,10 @@ from core.memory import (
     get_setting, save_setting,
     list_memories, update_memory, delete_memory,
 )
+from memory.store import (
+    list_memories as list_natural_memories,
+    delete_memories_matching,
+)
 from config import MODELS, ALLOWED_SETTINGS
 
 security = HTTPBearer()
@@ -132,6 +136,34 @@ def chat_endpoint(request: ChatRequest, _: bool = Depends(get_current_user)):
         if len(parts) == 2:
             save_memory(parts[0].strip(), parts[1].strip())
             return {"response": "Souvenir sauvegardé.", "model": "system", "conversation_id": request.conversation_id}
+
+    msg_lower = request.message.lower().strip()
+
+    if msg_lower.startswith("forget that ") or msg_lower.startswith("oublie que "):
+        query = request.message.split(" ", 2)[2].strip()
+        count = delete_memories_matching(query)
+        reply = f"Done. Removed {count} memory(ies) matching '{query}'." if count else "No matching memories found."
+        return {"response": reply, "model": "system", "conversation_id": request.conversation_id}
+
+    if msg_lower.startswith("forget everything about ") or msg_lower.startswith("oublie tout sur "):
+        parts = msg_lower.split(" ", 3)
+        query = request.message.split(" ", 3)[-1].strip()
+        count = delete_memories_matching(query)
+        reply = f"Done. Removed {count} memory(ies) about '{query}'." if count else "No matching memories found."
+        return {"response": reply, "model": "system", "conversation_id": request.conversation_id}
+
+    if msg_lower in (
+        "what do you remember about me?", "show my memories", "show memories",
+        "what do you know about me?", "que sais-tu de moi ?", "que sais-tu de moi?",
+        "montre mes souvenirs", "montre-moi mes souvenirs",
+    ):
+        mems = list_natural_memories()
+        if not mems:
+            return {"response": "I don't have any natural memories stored yet.", "model": "system", "conversation_id": request.conversation_id}
+        lines = ["Here's what I remember about you:\n"]
+        for m in mems:
+            lines.append(f"- [{m.kind}/{m.topic}] {m.content}")
+        return {"response": "\n".join(lines), "model": "system", "conversation_id": request.conversation_id}
 
     conversation_id = request.conversation_id
     if not conversation_id:
