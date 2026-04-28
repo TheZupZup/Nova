@@ -8,6 +8,7 @@ OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
 _raw_channel = os.getenv("NOVA_CHANNEL", "stable").lower()
 NOVA_CHANNEL = _raw_channel if _raw_channel in ("stable", "beta", "alpha") else "stable"
 NOVA_BRANCH = os.getenv("NOVA_BRANCH", "main")
+NOVA_ADMIN_UI = os.getenv("NOVA_ADMIN_UI", "false").lower() == "true"
 
 MODELS = {
     "router":   "gemma3:1b",        # lightweight classifier, learner

@@ -903,6 +903,17 @@
         }
 
         .channel-option.active .channel-opt-url { color: var(--cyan-dim); }
+
+        #channel-branch-row {
+            display: none;
+            padding: 7px 14px 9px;
+            border-top: 1px solid var(--border);
+            font-size: 0.7rem;
+            color: var(--text-dim);
+            font-family: monospace;
+        }
+
+        #channel-branch-row.show { display: block; }
     </style>
 </head>
 <body>
@@ -967,13 +978,14 @@
                                 <span class="channel-opt-url">beta.nova.borealnode.ca</span>
                             </a>
                         </div>
-                        <div class="channel-option" data-channel="alpha">
+                        <div class="channel-option" id="channel-alpha-opt" data-channel="alpha" style="display:none">
                             <a href="https://alpha.nova.borealnode.ca">
                                 <span class="channel-dot alpha"></span>
                                 Alpha
                                 <span class="channel-opt-url">alpha.nova.borealnode.ca</span>
                             </a>
                         </div>
+                        <div id="channel-branch-row"></div>
                     </div>
                 </div>
                 <span id="model-badge">—</span>
@@ -1306,14 +1318,30 @@
             if (res.ok) {
                 const data = await res.json();
                 const channel = (data.channel || "stable").toLowerCase();
+                const admin = !!data.admin_ui_enabled;
+
                 const badge = document.getElementById("channel-badge");
                 if (badge) {
                     badge.textContent = channel.toUpperCase();
                     badge.className = "channel-badge channel-" + channel;
                 }
+
                 document.querySelectorAll(".channel-option").forEach(opt => {
                     opt.classList.toggle("active", opt.dataset.channel === channel);
                 });
+
+                const alphaOpt = document.getElementById("channel-alpha-opt");
+                if (alphaOpt) alphaOpt.style.display = admin ? "" : "none";
+
+                const branchRow = document.getElementById("channel-branch-row");
+                if (branchRow) {
+                    if (admin && data.branch) {
+                        branchRow.textContent = "branch: " + data.branch;
+                        branchRow.classList.add("show");
+                    } else {
+                        branchRow.classList.remove("show");
+                    }
+                }
             }
         } catch (e) {}
     }
