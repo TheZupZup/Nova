@@ -1,13 +1,46 @@
-from memory.store import search_memories, DB_PATH
+from memory.embeddings import generate_embedding, cosine_similarity
+from memory.store import search_memories, list_memories, DB_PATH
 from memory.schema import Memory
+
+# Memories with a cosine score below this threshold are considered irrelevant.
+_COSINE_THRESHOLD = 0.40
 
 
 def get_relevant_memories(message: str, limit: int = 8, db_path: str = DB_PATH) -> list[Memory]:
     """
-    Returns up to `limit` memories relevant to the given user message.
-    Uses keyword matching against memory topic and content.
+    Returns up to `limit` memories relevant to `message`.
+
+    Strategy:
+    - If Ollama is reachable, use cosine similarity for memories that have
+      embeddings, and keyword search for older memories that don't.
+    - If Ollama is unreachable (generate_embedding returns None), fall back
+      entirely to keyword search (v1 behaviour).
     """
-    return search_memories(message, limit=limit, db_path=db_path)
+    query_emb = generate_embedding(message)
+    if query_emb is None:
+        return search_memories(message, limit=limit, db_path=db_path)
+
+    all_mems = list_memories(db_path=db_path)
+
+    scored: list[tuple[float, Memory]] = []
+    without_embedding: list[Memory] = []
+
+    for mem in all_mems:
+        if mem.embedding:
+            scored.append((cosine_similarity(query_emb, mem.embedding), mem))
+        else:
+            without_embedding.append(mem)
+
+    scored.sort(key=lambda x: x[0], reverse=True)
+    results = [m for score, m in scored if score >= _COSINE_THRESHOLD][:limit]
+
+    # Fill remaining slots with keyword matches for legacy memories (no embedding).
+    if without_embedding and len(results) < limit:
+        kw = search_memories(message, limit=limit - len(results), db_path=db_path)
+        seen = {m.id for m in results}
+        results += [m for m in kw if m.id not in seen]
+
+    return results[:limit]
 
 
 def format_for_prompt(memories: list[Memory]) -> str:
