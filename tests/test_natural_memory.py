@@ -7,8 +7,6 @@ Tests for Natural Memory v1:
   - retriever: return relevant memories
   - forget command: delete matching memories
 """
-import os
-import tempfile
 import pytest
 
 from memory.schema import Memory

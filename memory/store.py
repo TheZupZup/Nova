@@ -73,14 +73,18 @@ def list_memories(db_path: str = DB_PATH) -> list[Memory]:
     return [_row_to_memory(r) for r in rows]
 
 
+def _tokenize(text: str) -> list[str]:
+    """Lowercases, splits on non-alphanumeric characters (including underscores), returns tokens > 2 chars."""
+    import re
+    return [t for t in re.split(r"[\W_]+", text.lower()) if len(t) > 2]
+
+
 def search_memories(query: str, limit: int = 8, db_path: str = DB_PATH) -> list[Memory]:
     """
-    Returns up to `limit` memories scored by keyword overlap with `query`.
-    Matches are checked against topic + content (case-insensitive).
+    Returns up to `limit` memories scored by token overlap with `query`.
+    Tokens are normalized (lowercased, punctuation stripped) before matching.
     """
-    if not query.strip():
-        return []
-    words = [w.lower() for w in query.split() if len(w) > 2]
+    words = _tokenize(query)
     if not words:
         return []
 
@@ -96,8 +100,8 @@ def search_memories(query: str, limit: int = 8, db_path: str = DB_PATH) -> list[
     scored: list[tuple[int, Memory]] = []
     for row in rows:
         mem = _row_to_memory(row)
-        haystack = f"{mem.topic} {mem.content}".lower()
-        score = sum(1 for w in words if w in haystack)
+        haystack_tokens = set(_tokenize(f"{mem.topic} {mem.content}"))
+        score = sum(1 for w in words if w in haystack_tokens)
         if score > 0:
             scored.append((score, mem))
 
@@ -106,11 +110,28 @@ def search_memories(query: str, limit: int = 8, db_path: str = DB_PATH) -> list[
 
 
 def delete_memories_matching(query: str, db_path: str = DB_PATH) -> int:
-    """Deletes all memories matching the query keywords. Returns the count deleted."""
-    matches = search_memories(query, limit=200, db_path=db_path)
-    for mem in matches:
-        delete_memory(mem.id, db_path=db_path)
-    return len(matches)
+    """Deletes ALL memories matching the query keywords. Returns the count deleted."""
+    words = _tokenize(query)
+    if not words:
+        return 0
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute("SELECT * FROM natural_memories").fetchall()
+    finally:
+        conn.close()
+
+    to_delete = []
+    for row in rows:
+        mem = _row_to_memory(row)
+        haystack_tokens = set(_tokenize(f"{mem.topic} {mem.content}"))
+        if any(w in haystack_tokens for w in words):
+            to_delete.append(mem.id)
+
+    for memory_id in to_delete:
+        delete_memory(memory_id, db_path=db_path)
+    return len(to_delete)
 
 
 def _row_to_memory(row: sqlite3.Row) -> Memory:
