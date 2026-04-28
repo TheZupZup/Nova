@@ -239,19 +239,19 @@ class TestSessionCookieProperties:
 class TestSessionPurge:
     def test_expired_entries_are_removed_on_next_create(self):
         """_session_create must evict all expired entries before inserting a new one."""
-        # Seed three expired entries directly
+        web._sessions.clear()
         for i in range(3):
             web._sessions[f"stale-{i}"] = {"data": {}, "exp": time.time() - 1}
 
-        before = len(web._sessions)
         web._session_create({"oauth_state": "x"})
-        after = len(web._sessions)
 
-        # All three stale entries removed; only the new one remains
-        assert after == before - 3
+        # Purge removed the 3 stale entries; _session_create added exactly 1 new one
+        assert len(web._sessions) == 1
+        assert not any(k.startswith("stale-") for k in web._sessions)
 
     def test_valid_entries_are_not_purged(self):
         """_session_purge must leave sessions that have not yet expired."""
+        web._sessions.clear()
         sid = web._session_create({"github_user": "thezupzup"})
         web._session_purge()
         assert sid in web._sessions
