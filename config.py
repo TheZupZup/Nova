@@ -5,6 +5,10 @@ load_dotenv()
 
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
 
+_raw_channel = os.getenv("NOVA_CHANNEL", "stable").lower()
+NOVA_CHANNEL = _raw_channel if _raw_channel in ("stable", "beta", "alpha") else "stable"
+NOVA_BRANCH = os.getenv("NOVA_BRANCH", "main")
+
 MODELS = {
     "router":   "gemma3:1b",        # lightweight classifier, learner
     "default":  "gemma4",           # general chat, vision, memory extraction

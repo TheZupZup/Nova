@@ -22,7 +22,7 @@ from memory.store import (
     list_memories as list_natural_memories,
     delete_memories_matching,
 )
-from config import MODELS, ALLOWED_SETTINGS
+from config import MODELS, ALLOWED_SETTINGS, NOVA_CHANNEL, NOVA_BRANCH
 
 security = HTTPBearer()
 
@@ -240,6 +240,11 @@ def update_settings(data: SettingsUpdateRequest, _: bool = Depends(get_current_u
     if data.ram_budget is not None:
         save_setting("ram_budget", str(data.ram_budget))
     return {"ok": True}
+
+
+@app.get("/channel")
+def get_channel():
+    return {"channel": NOVA_CHANNEL, "branch": NOVA_BRANCH}
 
 
 @app.get("/health")
