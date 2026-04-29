@@ -11,8 +11,14 @@ Usage (FastAPI dependency)::
 
 Configuration (environment variables):
 
-    LOGIN_RATE_LIMIT_MAX     – max attempts per window (default: 5)
-    LOGIN_RATE_LIMIT_WINDOW  – window duration in seconds  (default: 60)
+    LOGIN_RATE_LIMIT_MAX               – max attempts per window (default: 5)
+    LOGIN_RATE_LIMIT_WINDOW            – window duration in seconds (default: 60)
+    LOGIN_RATE_LIMIT_TRUSTED_PROXIES   – comma-separated list of IPs whose
+                                         X-Forwarded-For header is trusted.
+                                         Empty (default) means no proxy is
+                                         trusted and the direct connection IP
+                                         is always used.
+                                         Example: "127.0.0.1,::1,10.0.0.5"
 
 Extension note:
     To back this with Redis, replace ``defaultdict(deque)`` inside
@@ -31,20 +37,49 @@ _MAX_ATTEMPTS: int = int(os.getenv("LOGIN_RATE_LIMIT_MAX", "5"))
 _WINDOW_SECONDS: int = int(os.getenv("LOGIN_RATE_LIMIT_WINDOW", "60"))
 
 
-def _client_ip(request: Request) -> str:
-    """
-    Returns the most specific IP available.
+def _parse_trusted_proxies(raw: str) -> frozenset[str]:
+    """Parses a comma-separated list of IPs, ignoring blanks."""
+    return frozenset(part.strip() for part in raw.split(",") if part.strip())
 
-    Trusts X-Forwarded-For when present so the limiter works correctly
-    behind a reverse proxy (nginx, caddy, etc.). For deployments without
-    a proxy this falls back to the direct connection address.
+
+_TRUSTED_PROXIES: frozenset[str] = _parse_trusted_proxies(
+    os.getenv("LOGIN_RATE_LIMIT_TRUSTED_PROXIES", "")
+)
+
+
+def _client_ip(
+    request: Request,
+    trusted_proxies: frozenset[str] | None = None,
+) -> str:
     """
-    forwarded_for = request.headers.get("x-forwarded-for")
-    if forwarded_for:
-        return forwarded_for.split(",")[0].strip()
-    if request.client:
-        return request.client.host
-    return "unknown"
+    Returns the client IP used as the rate-limit key.
+
+    Security:
+        ``X-Forwarded-For`` is **only** honoured when the direct connection
+        comes from an IP listed in ``LOGIN_RATE_LIMIT_TRUSTED_PROXIES``.
+        Without this guard, any client could spoof the header and bypass
+        per-IP limiting by rotating fake values.
+
+    Behaviour:
+        - Direct client IP is in trusted set → use the leftmost
+          X-Forwarded-For entry (the real client behind the proxy).
+        - Direct client IP is NOT trusted → use the direct connection IP,
+          ignoring any X-Forwarded-For header (potentially spoofed).
+        - No client info available → return ``"unknown"``.
+    """
+    if trusted_proxies is None:
+        trusted_proxies = _TRUSTED_PROXIES
+
+    direct_ip = request.client.host if request.client else None
+
+    if direct_ip and direct_ip in trusted_proxies:
+        forwarded_for = request.headers.get("x-forwarded-for")
+        if forwarded_for:
+            first = forwarded_for.split(",")[0].strip()
+            if first:
+                return first
+
+    return direct_ip or "unknown"
 
 
 class _SlidingWindowLimiter:

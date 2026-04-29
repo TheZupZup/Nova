@@ -10,7 +10,11 @@ import pytest
 from fastapi.testclient import TestClient
 
 import web
-from core.rate_limiter import _SlidingWindowLimiter, _client_ip
+from core.rate_limiter import (
+    _SlidingWindowLimiter,
+    _client_ip,
+    _parse_trusted_proxies,
+)
 
 
 # ── _SlidingWindowLimiter unit tests ──────────────────────────────────────────
@@ -89,27 +93,95 @@ class TestClientIp:
         req.headers = {}
         if forwarded_for is not None:
             req.headers = {"x-forwarded-for": forwarded_for}
-        req.client = MagicMock()
-        req.client.host = client_host
+        if client_host is None:
+            req.client = None
+        else:
+            req.client = MagicMock()
+            req.client.host = client_host
         return req
 
+    # ── Direct-connection (untrusted) behaviour ────────────────────────────────
+
     def test_uses_direct_ip_when_no_proxy_header(self):
+        """No XFF, no trusted proxies — direct IP wins."""
         req = self._request()
-        assert _client_ip(req) == "1.2.3.4"
-
-    def test_uses_first_entry_of_forwarded_for(self):
-        req = self._request(forwarded_for="10.0.0.1, 10.0.0.2, 10.0.0.3")
-        assert _client_ip(req) == "10.0.0.1"
-
-    def test_strips_whitespace_from_forwarded_for(self):
-        req = self._request(forwarded_for="  192.168.1.1  , 10.0.0.1")
-        assert _client_ip(req) == "192.168.1.1"
+        assert _client_ip(req, trusted_proxies=frozenset()) == "1.2.3.4"
 
     def test_returns_unknown_when_no_client(self):
-        req = MagicMock()
-        req.headers = {}
-        req.client = None
-        assert _client_ip(req) == "unknown"
+        req = self._request(client_host=None)
+        assert _client_ip(req, trusted_proxies=frozenset()) == "unknown"
+
+    # ── Spoofing protection ────────────────────────────────────────────────────
+
+    def test_direct_client_with_spoofed_xff_uses_direct_ip(self):
+        """
+        Untrusted client sends X-Forwarded-For trying to impersonate another IP.
+        The header must be ignored and the direct connection IP used instead.
+        """
+        req = self._request(
+            forwarded_for="1.1.1.1",          # spoofed value
+            client_host="203.0.113.50",       # real attacker IP
+        )
+        result = _client_ip(req, trusted_proxies=frozenset())
+        assert result == "203.0.113.50"
+
+    def test_xff_ignored_when_direct_ip_not_in_trusted_set(self):
+        """Even with XFF and a populated trusted set, mismatched direct IP → ignore XFF."""
+        req = self._request(
+            forwarded_for="1.1.1.1",
+            client_host="203.0.113.50",
+        )
+        result = _client_ip(req, trusted_proxies=frozenset({"127.0.0.1", "::1"}))
+        assert result == "203.0.113.50"
+
+    # ── Trusted-proxy behaviour ────────────────────────────────────────────────
+
+    def test_trusted_proxy_extracts_first_xff_entry(self):
+        """When the direct IP IS in the trusted set, the leftmost XFF entry is used."""
+        req = self._request(
+            forwarded_for="198.51.100.7, 10.0.0.1, 10.0.0.2",
+            client_host="127.0.0.1",
+        )
+        result = _client_ip(req, trusted_proxies=frozenset({"127.0.0.1"}))
+        assert result == "198.51.100.7"
+
+    def test_trusted_proxy_strips_whitespace_in_xff(self):
+        req = self._request(
+            forwarded_for="   198.51.100.7   ,  10.0.0.1",
+            client_host="127.0.0.1",
+        )
+        result = _client_ip(req, trusted_proxies=frozenset({"127.0.0.1"}))
+        assert result == "198.51.100.7"
+
+    def test_trusted_proxy_with_empty_xff_falls_back_to_direct(self):
+        """Trusted proxy but no XFF header → direct IP (the proxy itself)."""
+        req = self._request(client_host="127.0.0.1")
+        result = _client_ip(req, trusted_proxies=frozenset({"127.0.0.1"}))
+        assert result == "127.0.0.1"
+
+
+# ── _parse_trusted_proxies ─────────────────────────────────────────────────────
+
+class TestParseTrustedProxies:
+    def test_empty_string_yields_empty_set(self):
+        """Empty/missing config must trust no proxy."""
+        assert _parse_trusted_proxies("") == frozenset()
+
+    def test_whitespace_only_yields_empty_set(self):
+        assert _parse_trusted_proxies("   ,  ,") == frozenset()
+
+    def test_single_value(self):
+        assert _parse_trusted_proxies("127.0.0.1") == frozenset({"127.0.0.1"})
+
+    def test_multiple_values_with_whitespace(self):
+        """Comma-separated list must be parsed and trimmed."""
+        result = _parse_trusted_proxies("127.0.0.1, ::1 ,10.0.0.5")
+        assert result == frozenset({"127.0.0.1", "::1", "10.0.0.5"})
+
+    def test_returns_frozenset(self):
+        """Result must be immutable so the trusted set cannot be mutated at runtime."""
+        result = _parse_trusted_proxies("127.0.0.1")
+        assert isinstance(result, frozenset)
 
 
 # ── /login integration tests ───────────────────────────────────────────────────
@@ -167,7 +239,12 @@ class TestLoginRateLimiting:
         def side_effect(key):
             return real_limiter.is_allowed(key)
 
+        # TestClient connects from a virtual host called "testclient"; whitelist
+        # it so the spoof-protected _client_ip honours the X-Forwarded-For
+        # header set by _post_login(). Without this patch, every request would
+        # collapse onto the single key "testclient".
         with patch("core.rate_limiter._login_limiter.is_allowed", side_effect=side_effect), \
+             patch("core.rate_limiter._TRUSTED_PROXIES", frozenset({"testclient"})), \
              patch("web.verify_credentials", return_value=False):
             # Exhaust IP A
             _post_login(client, ip="192.168.0.1")
