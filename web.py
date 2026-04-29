@@ -9,6 +9,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field, field_validator
 
 from core.auth import verify_credentials, create_token, verify_token
+from core.rate_limiter import check_login_rate_limit
 from apscheduler.schedulers.background import BackgroundScheduler
 from core.learner import learn_from_feeds
 from core.updater import check_and_update_models
@@ -271,7 +272,7 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(securit
 
 
 @app.post("/login")
-def login(request: LoginRequest):
+def login(request: LoginRequest, _: None = Depends(check_login_rate_limit)):
     if not verify_credentials(request.username, request.password):
         raise HTTPException(status_code=401, detail="Identifiants incorrects.")
     return {"token": create_token()}
