@@ -1090,6 +1090,25 @@
                     </button>
                 </div>
             </div>
+            <div id="settings-section-title" style="margin-top:12px;">Nova Model</div>
+            <div class="memory-item" style="flex-direction:column;gap:10px;">
+                <div style="display:flex;align-items:center;justify-content:space-between;">
+                    <div style="display:flex;flex-direction:column;gap:3px;">
+                        <span style="font-size:0.85rem;">Use Nova model</span>
+                        <span style="font-size:0.72rem;color:var(--text-dim);">Override all routing with a single model</span>
+                    </div>
+                    <button id="nova-model-toggle-btn" onclick="toggleNovaModel()"
+                        style="font-family:monospace;font-size:0.75rem;padding:4px 12px;border-radius:6px;cursor:pointer;border:1px solid var(--border);background:var(--bg);color:var(--text-dim);min-width:52px;">
+                        OFF
+                    </button>
+                </div>
+                <div id="nova-model-name-div" style="display:none;flex-direction:column;gap:4px;">
+                    <input id="nova-model-name-input" type="text" placeholder="nova-assistant"
+                        style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:monospace;font-size:0.8rem;padding:6px 10px;outline:none;box-sizing:border-box;"
+                        onblur="saveNovaModelName()" onkeydown="if(event.key==='Enter')saveNovaModelName()" />
+                    <div style="font-size:0.7rem;color:var(--text-dim);">Ollama model name (e.g. nova-assistant, llama3:8b)</div>
+                </div>
+            </div>
             <div id="settings-section-title" style="margin-top:12px;">Memories</div>
             <div id="memories-list"></div>
             <div id="add-memory-form">
@@ -1638,9 +1657,14 @@
         }
         const lastUpdate = document.getElementById("last-update-text");
         if (lastUpdate && data.last_model_update) {
-            const date = data.last_model_update === "Never" ? "Never" : 
+            const date = data.last_model_update === "Never" ? "Never" :
                 new Date(data.last_model_update).toLocaleDateString();
             lastUpdate.textContent = `Last update: ${date}`;
+        }
+        applyNovaModelUI(!!data.nova_model_enabled);
+        const nameInput = document.getElementById("nova-model-name-input");
+        if (nameInput && data.nova_model_name) {
+            nameInput.value = data.nova_model_name;
         }
     }
 
@@ -1687,6 +1711,37 @@
                 "Authorization": `Bearer ${token}`
             },
             body: JSON.stringify({ ram_budget: value })
+        });
+    }
+
+    async function toggleNovaModel() {
+        const btn = document.getElementById("nova-model-toggle-btn");
+        const isOn = btn.textContent.trim() === "ON";
+        const newVal = !isOn;
+        await fetch("/settings", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
+            body: JSON.stringify({ nova_model_enabled: newVal })
+        });
+        applyNovaModelUI(newVal);
+    }
+
+    function applyNovaModelUI(enabled) {
+        const btn = document.getElementById("nova-model-toggle-btn");
+        const nameDiv = document.getElementById("nova-model-name-div");
+        btn.textContent = enabled ? "ON" : "OFF";
+        btn.style.color = enabled ? "var(--cyan)" : "var(--text-dim)";
+        btn.style.borderColor = enabled ? "var(--cyan)" : "var(--border)";
+        nameDiv.style.display = enabled ? "flex" : "none";
+    }
+
+    async function saveNovaModelName() {
+        const value = document.getElementById("nova-model-name-input").value.trim();
+        if (!value) return;
+        await fetch("/settings", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
+            body: JSON.stringify({ nova_model_name: value })
         });
     }
 

@@ -26,7 +26,7 @@ from memory.store import (
     delete_memories_matching,
 )
 from config import (
-    MODELS, ALLOWED_SETTINGS,
+    MODELS, ALLOWED_SETTINGS, NOVA_MODEL_DEFAULT_NAME,
     NOVA_CHANNEL, NOVA_BRANCH, NOVA_ADMIN_UI,
     GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET, GITHUB_OAUTH_REDIRECT_URI,
 )
@@ -240,6 +240,8 @@ class SettingsUpdateRequest(BaseModel):
     model_config = {"extra": "forbid"}
 
     ram_budget: int | None = None
+    nova_model_enabled: bool | None = None
+    nova_model_name: str | None = None
 
     @field_validator("ram_budget")
     @classmethod
@@ -248,6 +250,17 @@ class SettingsUpdateRequest(BaseModel):
             spec = ALLOWED_SETTINGS["ram_budget"]
             if not (spec["min"] <= v <= spec["max"]):
                 raise ValueError(f"must be between {spec['min']} and {spec['max']}")
+        return v
+
+    @field_validator("nova_model_name")
+    @classmethod
+    def validate_nova_model_name(cls, v):
+        if v is not None:
+            v = v.strip()
+            if not v:
+                raise ValueError("model name cannot be empty")
+            if len(v) > ALLOWED_SETTINGS["nova_model_name"]["max_len"]:
+                raise ValueError("model name too long (max 100 characters)")
         return v
 
 
@@ -333,7 +346,11 @@ def chat_endpoint(request: ChatRequest, _: bool = Depends(get_current_user)):
         for m in load_conversation_messages(conversation_id)
     ]
 
-    forced_model = MODE_MAP.get(request.mode)
+    nova_enabled = get_setting("nova_model_enabled", "false") == "true"
+    if nova_enabled:
+        forced_model = get_setting("nova_model_name", NOVA_MODEL_DEFAULT_NAME)
+    else:
+        forced_model = MODE_MAP.get(request.mode)
     print(f"IMAGE RECEIVED: {bool(request.image)} - Length: {len(request.image) if request.image else 0}")
     response, model_used = chat(history, request.message, memories, forced_model=forced_model, force_search=request.search, image=request.image)
 
@@ -380,7 +397,9 @@ def get_settings(_: bool = Depends(get_current_user)):
     return {
         "ram_budget": get_setting("ram_budget", "2048"),
         "last_model_update": get_setting("last_model_update", "Never"),
-        "last_updated_models": get_setting("last_updated_models", "")
+        "last_updated_models": get_setting("last_updated_models", ""),
+        "nova_model_enabled": get_setting("nova_model_enabled", "false") == "true",
+        "nova_model_name": get_setting("nova_model_name", NOVA_MODEL_DEFAULT_NAME),
     }
 
 
@@ -398,6 +417,10 @@ def trigger_model_update(_: bool = Depends(get_current_user)):
 def update_settings(data: SettingsUpdateRequest, _: bool = Depends(get_current_user)):
     if data.ram_budget is not None:
         save_setting("ram_budget", str(data.ram_budget))
+    if data.nova_model_enabled is not None:
+        save_setting("nova_model_enabled", "true" if data.nova_model_enabled else "false")
+    if data.nova_model_name is not None:
+        save_setting("nova_model_name", data.nova_model_name)
     return {"ok": True}
 
 

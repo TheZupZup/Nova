@@ -26,6 +26,8 @@ MODELS = {
     "advanced": "qwen2.5:32b",
 }
 
+NOVA_MODEL_DEFAULT_NAME = "nova-assistant"
+
 NOVA_SYSTEM_PROMPT = """Tu es Nova, un assistant personnel intelligent créé par TheZupZup.
 Tu fonctionnes localement via Ollama sur la machine de l'utilisateur.
 Tu n'es pas ChatGPT, pas Gemini, pas un modèle Google et pas OpenAI.
@@ -99,4 +101,6 @@ CHAT_HISTORY_LIMIT = 20
 
 ALLOWED_SETTINGS = {
     "ram_budget": {"type": int, "min": 256, "max": 16384},
+    "nova_model_enabled": {"type": str, "allowed": ["true", "false"]},
+    "nova_model_name": {"type": str, "max_len": 100},
 }
