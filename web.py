@@ -28,12 +28,12 @@ from memory.store import (
 )
 from config import (
     MODELS, ALLOWED_SETTINGS, NOVA_MODEL_DEFAULT_NAME,
-    NOVA_CHANNEL, NOVA_BRANCH, NOVA_ADMIN_UI,
+    NOVA_CHANNEL, NOVA_BRANCH,
     GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET, GITHUB_OAUTH_REDIRECT_URI,
 )
 from core.github_oauth import build_auth_url, exchange_code, fetch_username, is_allowed
 
-# ── ALPHA CHANNEL: SESSION STORE ──────────────────────────────────────────────
+# ── ALPHA CHANNEL: SESSION STORE ────────────────────────────────────────────
 # In-memory store keyed by a random, opaque session ID (256-bit entropy).
 # Only the GitHub username is persisted — the OAuth token is never stored.
 # Limitation: sessions are cleared on server restart and are not shared
@@ -131,7 +131,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(docs_url=None, redoc_url=None, lifespan=lifespan)
 
 
-# ── ALPHA CHANNEL GUARD ────────────────────────────────────────────────────────
+# ── ALPHA CHANNEL GUARD ─────────────────────────────────────────────
 @app.middleware("http")
 async def alpha_channel_guard(request: Request, call_next):
     if NOVA_CHANNEL != "alpha":
@@ -163,7 +163,7 @@ async def alpha_channel_guard(request: Request, call_next):
     return await call_next(request)
 
 
-# ── GITHUB OAUTH ROUTES ────────────────────────────────────────────────────────
+# ── GITHUB OAUTH ROUTES ────────────────────────────────────────────
 @app.get("/auth/github")
 async def auth_github(request: Request):
     state = _secrets.token_urlsafe(16)
@@ -427,7 +427,7 @@ def update_settings(data: SettingsUpdateRequest, _: bool = Depends(get_current_u
 
 @app.get("/channel")
 def get_channel():
-    return {"channel": NOVA_CHANNEL, "branch": NOVA_BRANCH, "admin_ui_enabled": NOVA_ADMIN_UI}
+    return {"channel": NOVA_CHANNEL, "branch": NOVA_BRANCH}
 
 
 @app.get("/health")
