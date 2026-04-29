@@ -1,3 +1,4 @@
+import logging
 import feedparser
 import httpx
 import ollama
@@ -37,10 +38,12 @@ Résumé: {summary}"""
 
 MAX_KNOWLEDGE_MEMORIES = 500
 
+logger = logging.getLogger(__name__)
+
 
 def learn_from_feeds():
     """Scanne les flux RSS et sauvegarde les infos importantes."""
-    print("Nova learning from web...")
+    logger.info("Nova learning from web...")
     for url in SOURCES:
         try:
             feed = feedparser.parse(url)
@@ -56,6 +59,6 @@ def learn_from_feeds():
                 parse_and_save(result)
         except (ollama.ResponseError, ConnectionError, httpx.HTTPError,
                 KeyError, sqlite3.OperationalError, sqlite3.DatabaseError) as e:
-            print(f"Error learning from {url}: {e}")
+            logger.warning("Error learning from %s: %s", url, e)
     cleanup_old_knowledge(MAX_KNOWLEDGE_MEMORIES)
-    print("Nova learning done.")
+    logger.info("Nova learning done.")

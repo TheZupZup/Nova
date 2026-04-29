@@ -33,7 +33,7 @@ def get_local_model_digest(model_name: str) -> str:
 def pull_model(model_name: str) -> bool:
     """Télécharge la dernière version d'un modèle."""
     try:
-        print(f"Checking for updates: {model_name}")
+        logger.info("Checking for updates: %s", model_name)
         result = subprocess.run(
             ["ollama", "pull", model_name],
             capture_output=True,
@@ -50,7 +50,7 @@ def pull_model(model_name: str) -> bool:
 
 def check_and_update_models():
     """Vérifie et met à jour tous les modèles trackés."""
-    print(f"Model update check started at {datetime.now().isoformat()}")
+    logger.info("Model update check started at %s", datetime.now().isoformat())
     updated = []
     any_failed = False
 
@@ -61,10 +61,10 @@ def check_and_update_models():
         if success:
             new_digest = get_local_model_digest(model)
             if old_digest != new_digest:
-                print(f"Updated: {model}")
+                logger.info("Updated: %s", model)
                 updated.append(model)
             else:
-                print(f"Already up to date: {model}")
+                logger.debug("Already up to date: %s", model)
         else:
             any_failed = True
 
@@ -76,11 +76,11 @@ def check_and_update_models():
         save_setting("last_model_update", datetime.now().isoformat())
         if updated:
             save_setting("last_updated_models", ", ".join(updated))
-            print(f"Models updated: {updated}")
+            logger.info("Models updated: %s", updated)
         else:
             save_setting("last_updated_models", "All up to date")
     except (sqlite3.OperationalError, sqlite3.DatabaseError) as e:
         logger.warning("Failed to save model update timestamp: %s", e)
 
-    print("Model update check done.")
+    logger.info("Model update check done.")
     return updated

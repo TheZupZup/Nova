@@ -105,7 +105,7 @@ def chat(history: list[dict], user_input: str, memories: list[dict], forced_mode
     try:
         # Image → vision model, no routing
         if image:
-            print(f"CHAT IMAGE: True len={len(image)}")
+            logger.debug("Processing image request, encoded length=%d", len(image))
             messages = build_image_messages(user_input, image)
             response = client.chat(model=MODELS["default"], messages=messages)
             reply = response["message"]["content"]

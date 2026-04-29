@@ -352,7 +352,6 @@ def chat_endpoint(request: ChatRequest, _: bool = Depends(get_current_user)):
         forced_model = get_setting("nova_model_name", NOVA_MODEL_DEFAULT_NAME)
     else:
         forced_model = MODE_MAP.get(request.mode)
-    print(f"IMAGE RECEIVED: {bool(request.image)} - Length: {len(request.image) if request.image else 0}")
     response, model_used = chat(history, request.message, memories, forced_model=forced_model, force_search=request.search, image=request.image)
 
     save_message(conversation_id, "user", request.message)
