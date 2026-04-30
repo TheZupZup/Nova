@@ -1,7 +1,8 @@
 from rich.console import Console
 from rich.prompt import Prompt
 from core.chat import chat
-from core.memory import initialize_db, load_memories, save_memory
+from core.memory import initialize_db, load_memories
+from core.memory_command import handle_manual_memory_command
 from memory.store import list_memories as list_natural_memories, delete_memories_matching
 
 console = Console()
@@ -22,13 +23,11 @@ def run():
             console.print("[bold cyan]Nova hors ligne.[/bold cyan]")
             break
 
-        if user_input.lower().startswith("souviens-toi:"):
-            parts = user_input[13:].strip().split(":", 1)
-            if len(parts) == 2:
-                save_memory(parts[0].strip(), parts[1].strip())
-                memories = load_memories()
-                console.print("[dim]Souvenir sauvegardé.[/dim]\n")
-                continue
+        reply = handle_manual_memory_command(user_input)
+        if reply is not None:
+            memories = load_memories()
+            console.print(f"[dim]{reply}[/dim]\n")
+            continue
 
         low = user_input.lower().strip()
 

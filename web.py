@@ -14,6 +14,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from core.learner import learn_from_feeds
 from core.updater import check_and_update_models
 from core.chat import chat
+from core.memory_command import handle_manual_memory_command
 from core.memory import (
     initialize_db, load_memories, save_memory,
     create_conversation, load_conversations,
@@ -307,11 +308,9 @@ def remove_conversation(conversation_id: int, _: bool = Depends(get_current_user
 def chat_endpoint(request: ChatRequest, _: bool = Depends(get_current_user)):
     memories = load_memories()
 
-    if request.message.lower().startswith("souviens-toi:"):
-        parts = request.message[13:].strip().split(":", 1)
-        if len(parts) == 2:
-            save_memory(parts[0].strip(), parts[1].strip())
-            return {"response": "Souvenir sauvegardé.", "model": "system", "conversation_id": request.conversation_id}
+    reply = handle_manual_memory_command(request.message)
+    if reply is not None:
+        return {"response": reply, "model": "system", "conversation_id": request.conversation_id}
 
     msg_lower = request.message.lower().strip()
 
