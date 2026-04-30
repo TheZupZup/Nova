@@ -4,6 +4,7 @@ import ollama
 from config import NOVA_SYSTEM_PROMPT, CHAT_HISTORY_LIMIT, MODELS
 from core.ollama_client import client
 from core.memory import format_memories_for_prompt, parse_and_save
+from core.identity import IDENTITY_CONTRACT
 from core.router import route
 from core.search import web_search, should_search
 from core.weather import detect_weather_city, get_weather
@@ -85,7 +86,7 @@ def build_messages(history: list[dict], user_input: str, memories: list[dict], e
         combined = "\n\n".join(filter(None, [memory_text, natural_text]))
         system_prompt = NOVA_SYSTEM_PROMPT.format(memories=combined)
 
-    messages = [{"role": "system", "content": system_prompt}]
+    messages = [{"role": "system", "content": IDENTITY_CONTRACT + "\n\n" + system_prompt}]
     messages += history[-CHAT_HISTORY_LIMIT:]
     messages.append({"role": "user", "content": user_input})
     return messages
