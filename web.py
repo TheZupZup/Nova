@@ -30,6 +30,7 @@ from config import (
     MODELS, ALLOWED_SETTINGS, NOVA_MODEL_DEFAULT_NAME,
     NOVA_CHANNEL, NOVA_BRANCH,
     GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET, GITHUB_OAUTH_REDIRECT_URI,
+    NOVA_AUTO_WEB_LEARNING,
 )
 from core.github_oauth import build_auth_url, exchange_code, fetch_username, is_allowed
 
@@ -115,7 +116,8 @@ MODE_MAP = {
 
 
 scheduler = BackgroundScheduler()
-scheduler.add_job(learn_from_feeds, "interval", hours=1)
+if NOVA_AUTO_WEB_LEARNING:
+    scheduler.add_job(learn_from_feeds, "interval", hours=1)
 scheduler.add_job(check_and_update_models, "interval", weeks=1)
 
 
@@ -123,7 +125,8 @@ scheduler.add_job(check_and_update_models, "interval", weeks=1)
 async def lifespan(app: FastAPI):
     initialize_db()
     scheduler.start()
-    learn_from_feeds()
+    if NOVA_AUTO_WEB_LEARNING:
+        learn_from_feeds()
     yield
     scheduler.shutdown()
 

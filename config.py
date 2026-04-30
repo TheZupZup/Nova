@@ -9,6 +9,9 @@ _raw_channel = os.getenv("NOVA_CHANNEL", "stable").lower()
 NOVA_CHANNEL = _raw_channel if _raw_channel in ("stable", "beta", "alpha") else "stable"
 NOVA_BRANCH = os.getenv("NOVA_BRANCH", "main")
 NOVA_ADMIN_UI = os.getenv("NOVA_ADMIN_UI", "false").lower() == "true"
+# Automatic background RSS/web learning is off by default to avoid polluting the memory DB.
+# Set NOVA_AUTO_WEB_LEARNING=true in .env to re-enable it.
+NOVA_AUTO_WEB_LEARNING = os.getenv("NOVA_AUTO_WEB_LEARNING", "false").lower() == "true"
 
 GITHUB_CLIENT_ID = os.getenv("GITHUB_CLIENT_ID", "")
 GITHUB_CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET", "")
