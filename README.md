@@ -13,7 +13,7 @@ Nova is under active development. Core features are functional. Some subsystems 
 - Multi-model routing: a lightweight classifier (`gemma3:1b`) decides which model handles each request
 - Persistent memory stored in SQLite with automatic extraction from conversations
 - Manual memory commands for explicit fact storage (`Retiens ça:`, `Souviens-toi:`, `Souviens-toi de ça:`)
-- JWT-secured web interface, accessible from mobile and desktop browsers
+- JWT-secured web interface accessible from desktop and mobile browsers on your network
 - Conversation history with a sidebar for navigation
 - Mode selector: Auto / Chat / Code / Deep
 - Real-time weather via Open-Meteo (no API key required)
@@ -27,11 +27,10 @@ Nova is under active development. Core features are functional. Some subsystems 
 
 ## Privacy and local-first principles
 
-- All inference runs through Ollama on your own hardware. No conversation data leaves your machine.
+- Model inference runs locally through Ollama. Optional tools such as web search and weather can contact external services only when explicitly triggered.
 - The memory database is a local SQLite file under your control.
 - Credentials live in `.env` and are never committed to the repository.
 - No telemetry, no cloud sync, no third-party analytics.
-- Web search and weather are optional features. Web search calls DuckDuckGo; weather calls Open-Meteo. Both require an explicit user action to trigger.
 
 ## Architecture overview
 
@@ -199,13 +198,12 @@ Short version:
 
 ## Good first issues
 
-Check the [open issues](https://github.com/TheZupZup/Nova/issues) on GitHub, particularly those labelled `good first issue`. Useful areas for new contributors:
+Check the [open issues](https://github.com/TheZupZup/Nova/issues) on GitHub, particularly those labelled `good first issue`. Current tracked issues suitable for new contributors:
 
-- Improving test coverage for `core/chat.py` and the `memory/` subsystem
-- Documentation fixes and accuracy improvements
-- Making the natural language memory retriever ready for everyday use
-- UI improvements (the interface lives in `static/index.html`)
-- Translating the default system prompt / identity contract to support multilingual defaults cleanly
+- [#3](https://github.com/TheZupZup/Nova/issues/3) Add a favicon to the web interface
+- [#23](https://github.com/TheZupZup/Nova/issues/23) Persist the selected model mode across sessions
+- [#49](https://github.com/TheZupZup/Nova/issues/49) Add `max_length` constraints to relevant input fields
+- [#66](https://github.com/TheZupZup/Nova/issues/66) Replace deprecated `datetime.utcnow()` calls
 
 ## Roadmap
 
