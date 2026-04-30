@@ -1,133 +1,220 @@
 # Nova
 
-A self-hosted AI assistant with intelligent model routing, persistent memory, and a web interface accessible from any device.
+A self-hosted, local AI assistant built on FastAPI and Ollama.
 
-## Overview
+## What Nova is
 
-Nova runs entirely on your local machine. It automatically routes each request to the most appropriate model based on complexity, balancing speed and capability without any manual intervention.
+Nova is a personal AI assistant that runs entirely on your own machine. It routes each conversation to the most appropriate local model based on complexity, maintains a persistent memory database across sessions, and serves a web interface reachable from any browser on your network.
 
-## Model Stack
+Nova is under active development. Core features are functional. Some subsystems — the natural language memory retriever and the embedding pipeline — are present in the codebase but are not yet fully validated for production use.
 
-| Model | Role |
-|---|---|
-| gemma3:1b | Router and simple requests |
-| gemma4 | General use and vision |
-| deepseek-coder-v2 | Code generation and debugging |
-| qwen2.5:32b | Complex reasoning and analysis |
+## What works today
 
-## Features
+- Multi-model routing: a lightweight classifier (`gemma3:1b`) decides which model handles each request
+- Persistent memory stored in SQLite with automatic extraction from conversations
+- Manual memory commands for explicit fact storage (`Retiens ça:`, `Souviens-toi:`, `Souviens-toi de ça:`)
+- JWT-secured web interface accessible from desktop and mobile browsers on your network
+- Conversation history with a sidebar for navigation
+- Mode selector: Auto / Chat / Code / Deep
+- Real-time weather via Open-Meteo (no API key required)
+- Web search via DuckDuckGo (manual trigger)
+- Settings panel: view, add, edit, and delete stored memories; RAM budget control
+- Login rate limiting (5 attempts per 60-second window, configurable via environment variables)
+- Nova identity contract: Nova presents itself as a named assistant rather than exposing the underlying model name
+- Background RSS/web learning (disabled by default, opt-in via `NOVA_AUTO_WEB_LEARNING=true`)
+- AMD GPU acceleration via ROCm; falls back to CPU automatically
+- systemd service configuration for unattended startup
 
-- Intelligent automatic routing across multiple local models
-- Persistent memory via SQLite
-- Secured web interface with JWT authentication
-- Conversation history with sidebar navigation
-- Fully accessible from mobile via any browser
-- AMD GPU support via ROCm
-- Runs as a systemd service
+## Privacy and local-first principles
 
-## Requirements
+- Model inference runs locally through Ollama. Optional tools such as web search and weather can contact external services only when explicitly triggered.
+- The memory database is a local SQLite file under your control.
+- Credentials live in `.env` and are never committed to the repository.
+- No telemetry, no cloud sync, no third-party analytics.
 
-- Linux (tested on Fedora KDE)
+## Architecture overview
+
+```
+web.py              FastAPI application and REST endpoints
+main.py             Terminal interface (no web server required)
+config.py           Central configuration loaded from .env
+
+core/
+  router.py         Model selection via gemma3:1b classifier
+  chat.py           Conversation logic and message assembly
+  memory.py         SQLite memory: facts, conversations, settings
+  memory_command.py Manual memory command parser
+  identity.py       Nova identity contract injected into the system prompt
+  auth.py           JWT creation and verification
+  rate_limiter.py   Per-IP sliding-window rate limiter for the login endpoint
+  learner.py        Background RSS feed ingestion (opt-in)
+  weather.py        Open-Meteo integration
+  search.py         DuckDuckGo integration
+  updater.py        Model version management
+
+memory/
+  store.py          Natural language memory store
+  retriever.py      Semantic memory retrieval
+  extractor.py      Memory extraction pipeline
+  schema.py         Memory data schema
+  policy.py         Retention and cleanup policy
+
+static/
+  index.html        Web interface
+
+tests/              Pytest test suite
+```
+
+## Getting started
+
+### Requirements
+
+- Linux (tested on Fedora)
 - Python 3.11+
-- Ollama
-- AMD GPU with ROCm support (or CPU fallback)
+- [Ollama](https://ollama.com) installed and running
+- AMD GPU with ROCm (optional — falls back to CPU)
 
-## Installation
-
-**1. Clone the repository**
+### 1. Clone the repository
 
 ```bash
 git clone https://github.com/TheZupZup/Nova.git
 cd Nova
-```bash
+```
 
-**2. Create a virtual environment and install dependencies**
+### 2. Create a virtual environment and install dependencies
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-```bash
+```
 
-**3. Pull the required models**
+### 3. Pull the required Ollama models
 
 ```bash
 ollama pull gemma3:1b
 ollama pull gemma4
 ollama pull deepseek-coder-v2
 ollama pull qwen2.5:32b
-```bash
+```
 
-**4. Configure your credentials**
+`qwen2.5:32b` requires significant disk space and RAM. If your hardware is constrained, you can skip it; the router falls back to `gemma4` for advanced requests.
+
+### 4. Configure credentials
 
 ```bash
 cp .env.example .env
-nano .env
-```bash
+```
 
-Edit `.env` with your chosen username, password, and a secure secret key.
+Edit `.env` and set at minimum:
 
-**5. Run Nova**
+```
+NOVA_USERNAME=your_username
+NOVA_PASSWORD=your_password
+NOVA_SECRET_KEY=a-long-random-string
+```
+
+The defaults in `.env.example` are intentionally weak placeholders. Change them before any deployment, especially if Nova is exposed beyond localhost.
+
+### 5. Start Nova
 
 ```bash
 python web.py
-```bash
+```
 
-Nova will be available at `http://localhost:8080`.
+Nova is available at `http://localhost:8080`.
 
-## Running as a Service
+## Running as a systemd service
 
-To run Nova automatically on boot:
-
-```bash
-sudo nano /etc/systemd/system/nova.service
-```bash
+Create `/etc/systemd/system/nova.service`:
 
 ```ini
 [Unit]
-Description=Nova AI
+Description=Nova AI Assistant
 After=network.target ollama.service
 
 [Service]
 Type=simple
 User=yourusername
-WorkingDirectory=/path/to/nova
-ExecStart=/path/to/nova/.venv/bin/uvicorn web:app --host 0.0.0.0 --port 8080
+WorkingDirectory=/path/to/Nova
+ExecStart=/path/to/Nova/.venv/bin/uvicorn web:app --host 0.0.0.0 --port 8080
 Restart=always
 RestartSec=5
-Environment="PATH=/path/to/nova/.venv/bin:/usr/bin:/usr/local/bin"
+Environment="PATH=/path/to/Nova/.venv/bin:/usr/bin:/usr/local/bin"
 
 [Install]
 WantedBy=multi-user.target
-```bash
+```
 
 ```bash
 sudo systemctl daemon-reload
 sudo systemctl enable nova
 sudo systemctl start nova
-```bash
-
-## Project Structure
-nova/
-├── core/
-│   ├── chat.py       # Conversation logic
-│   ├── memory.py     # SQLite persistent memory
-│   └── router.py     # Automatic model routing
-├── static/
-│   └── index.html    # Web interface
-├── main.py           # Terminal interface
-├── web.py            # FastAPI web server
-├── config.py         # Central configuration
-└── .env.example      # Credentials template
+```
 
 ## Configuration
 
-All model assignments are defined in `core/router.py`. To swap a model, update the `MODEL_MAP` dictionary.
+All configuration is read from `.env` at startup. Key variables:
 
-All application settings are in `config.py`.
+| Variable | Default | Description |
+|---|---|---|
+| `NOVA_USERNAME` | — | Login username |
+| `NOVA_PASSWORD` | — | Login password |
+| `NOVA_SECRET_KEY` | — | JWT signing secret |
+| `OLLAMA_HOST` | `http://localhost:11434` | Ollama API base URL |
+| `NOVA_AUTO_WEB_LEARNING` | `false` | Enable background RSS/web learning |
+| `LOGIN_RATE_LIMIT_MAX` | `5` | Max login attempts per window |
+| `LOGIN_RATE_LIMIT_WINDOW` | `60` | Rate limit window in seconds (sliding) |
+| `LOGIN_RATE_LIMIT_TRUSTED_PROXIES` | — | Comma-separated proxy IPs to trust for `X-Forwarded-For` |
 
-Credentials are loaded from `.env` and never committed to the repository.
+Model assignments are defined in `config.py` in the `MODELS` dictionary. To swap a model, update that dictionary and restart Nova.
+
+A note on language: the default system prompt and Nova's persona are written in French. Nova auto-detects the language of each message and replies in kind, so English conversations work without any configuration change.
+
+## Development workflow
+
+```bash
+# Run the full test suite
+pytest
+
+# Run a specific test file with verbose output
+pytest tests/test_router.py -v
+```
+
+The test suite covers model routing, memory storage and parsing, manual memory commands, rate limiting, the identity contract, and weather integration.
+
+A `Dockerfile` is included in the repository for containerised setups. It is not the primary supported deployment method at this stage.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for branch and pull request rules.
+
+Short version:
+
+- Branch from `main` with a descriptive name (`feature/…`, `fix/…`, `refactor/…`)
+- One change per PR
+- Avoid modifying unrelated files
+- Keep changes small and readable
+
+## Good first issues
+
+Check the [open issues](https://github.com/TheZupZup/Nova/issues) on GitHub, particularly those labelled `good first issue`. Current tracked issues suitable for new contributors:
+
+- [#3](https://github.com/TheZupZup/Nova/issues/3) Add a favicon to the web interface
+- [#23](https://github.com/TheZupZup/Nova/issues/23) Persist the selected model mode across sessions
+- [#49](https://github.com/TheZupZup/Nova/issues/49) Add `max_length` constraints to relevant input fields
+- [#66](https://github.com/TheZupZup/Nova/issues/66) Replace deprecated `datetime.utcnow()` calls
+
+## Roadmap
+
+The following are areas of active interest, not commitments:
+
+- Hardening the natural language memory pipeline for production use
+- Multi-user support (currently single-user via one set of credentials)
+- Improved model fallback and error reporting in the web UI
+- Docker Compose setup for simpler deployment
+- Broader test coverage
 
 ## License
 
-MPL-2.0 license
+[Mozilla Public License 2.0](LICENSE)
