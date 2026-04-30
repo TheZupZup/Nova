@@ -321,7 +321,6 @@ def chat_endpoint(request: ChatRequest, _: bool = Depends(get_current_user)):
         return {"response": reply, "model": "system", "conversation_id": request.conversation_id}
 
     if msg_lower.startswith("forget everything about ") or msg_lower.startswith("oublie tout sur "):
-        parts = msg_lower.split(" ", 3)
         query = request.message.split(" ", 3)[-1].strip()
         count = delete_memories_matching(query)
         reply = f"Done. Removed {count} memory(ies) about '{query}'." if count else "No matching memories found."
