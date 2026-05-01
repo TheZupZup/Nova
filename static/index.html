@@ -1247,6 +1247,39 @@
     let currentMode = localStorage.getItem("nova_mode") || "auto";
     let searchEnabled = false;
     let currentImage = null;
+    let activeChatController = null;
+    let activeThinkingRow = null;
+
+    function setSendButtonToSend() {
+        const btn = document.getElementById("send-btn");
+        if (!btn) return;
+        btn.disabled = false;
+        btn.textContent = t("send");
+        btn.onclick = sendMessage;
+    }
+
+    function setSendButtonToStop() {
+        const btn = document.getElementById("send-btn");
+        if (!btn) return;
+        btn.disabled = false;
+        btn.textContent = "Stop";
+        btn.onclick = stopMessage;
+    }
+
+    function stopMessage() {
+        if (!isThinking) return;
+        if (activeChatController) {
+            activeChatController.abort();
+        }
+        if (activeThinkingRow && activeThinkingRow.isConnected) {
+            activeThinkingRow.remove();
+        }
+        activeThinkingRow = null;
+        isThinking = false;
+        activeChatController = null;
+        setSendButtonToSend();
+        document.getElementById("user-input")?.focus();
+    }
 
     function handleImageSelect(event) {
         const file = event.target.files[0];
@@ -1576,7 +1609,7 @@
 
         input.value = "";
         isThinking = true;
-        btn.disabled = true;
+        setSendButtonToStop();
 
         appendMessage("user", text || "", null, currentImage);
 
@@ -1589,6 +1622,8 @@
         `;
         messagesEl.appendChild(thinkingRow);
         messagesEl.scrollTop = messagesEl.scrollHeight;
+        activeThinkingRow = thinkingRow;
+        activeChatController = new AbortController();
 
         console.log("Sending image:", currentImage ? "YES (" + currentImage.substring(0,20) + "...)" : "NO");
         try {
@@ -1604,10 +1639,14 @@
                     mode: currentMode,
                     search: searchEnabled,
                     image: currentImage
-                })
+                }),
+                signal: activeChatController.signal
             });
 
-            thinkingRow.remove();
+            if (thinkingRow.isConnected) {
+                thinkingRow.remove();
+            }
+            activeThinkingRow = null;
 
             if (res.status === 401) { logout(); return; }
 
@@ -1616,11 +1655,17 @@
             appendMessage("nova", data.response, data.model);
             loadConversations();
         } catch (e) {
-            thinkingRow.remove();
-            appendMessage("nova", "Ollama is unreachable. Make sure Ollama is running, then try again.");
+            if (thinkingRow.isConnected) {
+                thinkingRow.remove();
+            }
+            activeThinkingRow = null;
+            if (e?.name !== "AbortError") {
+                appendMessage("nova", "Ollama is unreachable. Make sure Ollama is running, then try again.");
+            }
         } finally {
             isThinking = false;
-            btn.disabled = false;
+            activeChatController = null;
+            setSendButtonToSend();
             searchEnabled = false;
             document.getElementById("search-btn").classList.remove("active");
             removeImage();
