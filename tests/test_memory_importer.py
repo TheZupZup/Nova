@@ -19,6 +19,10 @@ SAMPLE_PACK = """
 """
 
 
+# ---------------------------------------------------------------------------
+# parse_markdown_memory_pack
+# ---------------------------------------------------------------------------
+
 def test_headings_become_categories():
     results = parse_markdown_memory_pack(SAMPLE_PACK)
     categories = {r.category for r in results}
@@ -98,8 +102,22 @@ def test_top_level_heading_does_not_become_category():
     assert len(results) == 1
 
 
+def test_candidate_flags_default_to_empty_tuple():
+    results = parse_markdown_memory_pack(SAMPLE_PACK)
+    for r in results:
+        assert hasattr(r, "flags")
+        assert r.flags == ()
+
+
+def test_candidate_duplicate_defaults_to_false():
+    results = parse_markdown_memory_pack(SAMPLE_PACK)
+    for r in results:
+        assert hasattr(r, "duplicate")
+        assert r.duplicate is False
+
+
 # ---------------------------------------------------------------------------
-# Phase 2: build_memory_import_preview
+# build_memory_import_preview — basic
 # ---------------------------------------------------------------------------
 
 def test_preview_returns_candidates_from_valid_markdown():
@@ -132,7 +150,6 @@ def test_preview_empty_input_warning():
 
 
 def test_preview_no_valid_candidates_warning():
-    # Every bullet is too short → no valid candidates
     text_no_valid = "## Info\n- ok\n- hi\n"
     preview = build_memory_import_preview(text_no_valid)
     assert "no valid memory candidates found" in preview.warnings
@@ -147,11 +164,20 @@ def test_preview_short_entries_warning():
     assert "2" in short_warnings[0]
 
 
+def test_preview_rejected_count():
+    text = "## Info\n- ok\n- hi\n- This entry is long enough.\n"
+    preview = build_memory_import_preview(text)
+    assert preview.rejected_count == 2
+
+
+def test_preview_rejected_count_zero_on_clean_input():
+    preview = build_memory_import_preview(SAMPLE_PACK)
+    assert preview.rejected_count == 0
+
+
 def test_preview_does_not_save_anything():
     import core.memory_importer as mod
-    # The module must not expose a save_memory callable — confirming no DB writes are wired in.
     assert not hasattr(mod, "save_memory")
-    # Calling preview must not raise and must return data without side effects.
     preview = build_memory_import_preview(SAMPLE_PACK)
     assert preview.total > 0
 
@@ -168,3 +194,157 @@ def test_preview_is_deterministic():
 def test_preview_no_warnings_on_clean_input():
     preview = build_memory_import_preview(SAMPLE_PACK)
     assert preview.warnings == []
+
+
+# ---------------------------------------------------------------------------
+# Duplicate detection
+# ---------------------------------------------------------------------------
+
+def test_duplicate_detection_marks_candidate():
+    text = "## Info\n- The user wants main to stay stable.\n"
+    existing = ["The user wants main to stay stable."]
+    preview = build_memory_import_preview(text, existing_contents=existing)
+    assert preview.candidates[0].duplicate is True
+
+
+def test_duplicate_count_is_correct():
+    text = (
+        "## Info\n"
+        "- The user wants main to stay stable.\n"
+        "- Something entirely new here.\n"
+    )
+    existing = ["The user wants main to stay stable."]
+    preview = build_memory_import_preview(text, existing_contents=existing)
+    assert preview.duplicate_count == 1
+    non_dup = [c for c in preview.candidates if not c.duplicate]
+    assert len(non_dup) == 1
+
+
+def test_duplicate_detection_is_case_insensitive():
+    text = "## Info\n- THE USER WANTS MAIN TO STAY STABLE.\n"
+    existing = ["The user wants main to stay stable."]
+    preview = build_memory_import_preview(text, existing_contents=existing)
+    assert preview.candidates[0].duplicate is True
+    assert preview.duplicate_count == 1
+
+
+def test_duplicate_detection_ignores_extra_whitespace():
+    text = "## Info\n- The  user   wants main to stay stable.\n"
+    existing = ["The user wants main to stay stable."]
+    preview = build_memory_import_preview(text, existing_contents=existing)
+    assert preview.candidates[0].duplicate is True
+
+
+def test_no_duplicates_without_existing_contents():
+    preview = build_memory_import_preview(SAMPLE_PACK, existing_contents=None)
+    assert preview.duplicate_count == 0
+    assert all(not c.duplicate for c in preview.candidates)
+
+
+def test_no_duplicates_with_empty_existing_contents():
+    preview = build_memory_import_preview(SAMPLE_PACK, existing_contents=[])
+    assert preview.duplicate_count == 0
+
+
+def test_duplicate_candidates_are_marked_not_dropped():
+    text = "## Info\n- The user wants main to stay stable.\n"
+    existing = ["The user wants main to stay stable."]
+    preview = build_memory_import_preview(text, existing_contents=existing)
+    # Duplicate is kept in candidates, just marked.
+    assert preview.total == 1
+    assert preview.candidates[0].duplicate is True
+
+
+def test_duplicate_warning_added_when_duplicates_found():
+    text = "## Info\n- The user wants main to stay stable.\n"
+    existing = ["The user wants main to stay stable."]
+    preview = build_memory_import_preview(text, existing_contents=existing)
+    assert any("duplicate" in w for w in preview.warnings)
+
+
+def test_preview_duplicate_count_field_exists():
+    preview = build_memory_import_preview(SAMPLE_PACK)
+    assert hasattr(preview, "duplicate_count")
+    assert preview.duplicate_count == 0
+
+
+# ---------------------------------------------------------------------------
+# Sensitive / secret flagging
+# ---------------------------------------------------------------------------
+
+def test_password_entry_is_flagged():
+    text = "## Creds\n- My password is hunter2 for the work account.\n"
+    preview = build_memory_import_preview(text)
+    assert preview.flagged_count == 1
+    assert "possible_secret" in preview.candidates[0].flags
+
+
+def test_token_entry_is_flagged():
+    text = "## Access\n- The api key is stored in the config file.\n"
+    preview = build_memory_import_preview(text)
+    flagged = [c for c in preview.candidates if c.flags]
+    assert len(flagged) == 1
+
+
+def test_private_key_entry_is_flagged():
+    text = "## Security\n- The private key is saved in the secrets folder.\n"
+    preview = build_memory_import_preview(text)
+    assert preview.flagged_count == 1
+
+
+def test_flagged_count_is_correct():
+    text = (
+        "## Creds\n"
+        "- My password is xyz for the login.\n"
+        "- The user prefers dark mode settings.\n"
+    )
+    preview = build_memory_import_preview(text)
+    assert preview.flagged_count == 1
+
+
+def test_flagged_entries_still_appear_in_preview():
+    text = "## Secrets\n- My password is hunter2 for the work account.\n"
+    preview = build_memory_import_preview(text)
+    assert preview.total == 1
+    assert len(preview.candidates) == 1
+
+
+def test_suspicious_long_string_is_flagged():
+    token = "a" * 25  # 25 alphanumeric chars, no spaces
+    text = f"## Tokens\n- The access token is {token} and it works.\n"
+    preview = build_memory_import_preview(text)
+    assert preview.flagged_count == 1
+    assert "suspicious_string" in preview.candidates[0].flags
+
+
+def test_clean_entries_not_flagged():
+    preview = build_memory_import_preview(SAMPLE_PACK)
+    assert preview.flagged_count == 0
+    assert all(c.flags == () for c in preview.candidates)
+
+
+def test_preview_flagged_count_field_exists():
+    preview = build_memory_import_preview(SAMPLE_PACK)
+    assert hasattr(preview, "flagged_count")
+
+
+# ---------------------------------------------------------------------------
+# No external dependencies or DB access
+# ---------------------------------------------------------------------------
+
+def test_no_external_dependencies():
+    import importlib.util
+    spec = importlib.util.find_spec("core.memory_importer")
+    with open(spec.origin) as f:
+        source = f.read()
+    for lib in ("requests", "numpy", "pandas", "httpx", "aiohttp", "sqlalchemy"):
+        assert lib not in source
+
+
+def test_no_sqlite_usage_in_importer():
+    import importlib.util
+    spec = importlib.util.find_spec("core.memory_importer")
+    with open(spec.origin) as f:
+        source = f.read()
+    assert "sqlite3" not in source
+    assert "save_memory" not in source
