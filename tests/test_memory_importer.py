@@ -1,4 +1,9 @@
-from core.memory_importer import MemoryImportCandidate, parse_markdown_memory_pack
+from core.memory_importer import (
+    MemoryImportCandidate,
+    MemoryImportPreview,
+    build_memory_import_preview,
+    parse_markdown_memory_pack,
+)
 
 
 SAMPLE_PACK = """
@@ -91,3 +96,75 @@ def test_top_level_heading_does_not_become_category():
     results = parse_markdown_memory_pack(text)
     assert all(r.category != "Top Level" for r in results)
     assert len(results) == 1
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: build_memory_import_preview
+# ---------------------------------------------------------------------------
+
+def test_preview_returns_candidates_from_valid_markdown():
+    preview = build_memory_import_preview(SAMPLE_PACK)
+    assert isinstance(preview, MemoryImportPreview)
+    assert len(preview.candidates) == 4
+    assert all(isinstance(c, MemoryImportCandidate) for c in preview.candidates)
+
+
+def test_preview_total_count():
+    preview = build_memory_import_preview(SAMPLE_PACK)
+    assert preview.total == len(preview.candidates)
+    assert preview.total == 4
+
+
+def test_preview_lists_categories():
+    preview = build_memory_import_preview(SAMPLE_PACK)
+    assert "Git workflow" in preview.categories
+    assert "Response style" in preview.categories
+    assert len(preview.categories) == 2
+
+
+def test_preview_empty_input_warning():
+    for empty in ("", "   ", "\n\n"):
+        preview = build_memory_import_preview(empty)
+        assert "empty input" in preview.warnings
+        assert preview.total == 0
+        assert preview.candidates == []
+        assert preview.categories == []
+
+
+def test_preview_no_valid_candidates_warning():
+    # Every bullet is too short → no valid candidates
+    text_no_valid = "## Info\n- ok\n- hi\n"
+    preview = build_memory_import_preview(text_no_valid)
+    assert "no valid memory candidates found" in preview.warnings
+    assert preview.total == 0
+
+
+def test_preview_short_entries_warning():
+    text = "## Info\n- ok\n- hi\n- This entry is long enough.\n"
+    preview = build_memory_import_preview(text)
+    short_warnings = [w for w in preview.warnings if "rejected for being too short" in w]
+    assert len(short_warnings) == 1
+    assert "2" in short_warnings[0]
+
+
+def test_preview_does_not_save_anything():
+    import core.memory_importer as mod
+    # The module must not expose a save_memory callable — confirming no DB writes are wired in.
+    assert not hasattr(mod, "save_memory")
+    # Calling preview must not raise and must return data without side effects.
+    preview = build_memory_import_preview(SAMPLE_PACK)
+    assert preview.total > 0
+
+
+def test_preview_is_deterministic():
+    preview_a = build_memory_import_preview(SAMPLE_PACK)
+    preview_b = build_memory_import_preview(SAMPLE_PACK)
+    assert preview_a.total == preview_b.total
+    assert preview_a.categories == preview_b.categories
+    assert preview_a.warnings == preview_b.warnings
+    assert [c.content for c in preview_a.candidates] == [c.content for c in preview_b.candidates]
+
+
+def test_preview_no_warnings_on_clean_input():
+    preview = build_memory_import_preview(SAMPLE_PACK)
+    assert preview.warnings == []
