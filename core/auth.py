@@ -2,7 +2,7 @@ import jwt
 import bcrypt
 import logging
 import secrets
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
 import os
 
@@ -36,7 +36,7 @@ def verify_credentials(username: str, password: str) -> bool:
 
 
 def create_token() -> str:
-    payload = {"exp": datetime.utcnow() + timedelta(hours=TOKEN_EXPIRY_HOURS)}
+    payload = {"exp": datetime.now(timezone.utc) + timedelta(hours=TOKEN_EXPIRY_HOURS)}
     return jwt.encode(payload, SECRET_KEY, algorithm="HS256")
 
 
