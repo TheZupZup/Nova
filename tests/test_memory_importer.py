@@ -132,7 +132,6 @@ def test_preview_empty_input_warning():
 
 
 def test_preview_no_valid_candidates_warning():
-    text = "## Info\n- no bullets here that are long enough\n"
     # Every bullet is too short → no valid candidates
     text_no_valid = "## Info\n- ok\n- hi\n"
     preview = build_memory_import_preview(text_no_valid)
