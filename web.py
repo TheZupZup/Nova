@@ -25,6 +25,7 @@ from core.memory import (
     create_conversation, load_conversations,
     load_conversation_messages, save_message,
     delete_conversation, update_conversation_title,
+    conversation_belongs_to,
     get_setting, save_setting,
     list_memories, update_memory, delete_memory,
 )
@@ -292,29 +293,43 @@ def login(request: LoginRequest, _: None = Depends(check_login_rate_limit)):
 
 
 @app.get("/conversations")
-def get_conversations(_: bool = Depends(get_current_user)):
-    return load_conversations()
+def get_conversations(user: CurrentUser = Depends(get_current_user)):
+    return load_conversations(user.id)
 
 
 @app.post("/conversations")
-def new_conversation(request: NewConversationRequest, _: bool = Depends(get_current_user)):
-    conv_id = create_conversation(request.title)
+def new_conversation(
+    request: NewConversationRequest,
+    user: CurrentUser = Depends(get_current_user),
+):
+    conv_id = create_conversation(request.title, user.id)
     return {"id": conv_id, "title": request.title}
 
 
 @app.get("/conversations/{conversation_id}/messages")
-def get_messages(conversation_id: int, _: bool = Depends(get_current_user)):
-    return load_conversation_messages(conversation_id)
+def get_messages(
+    conversation_id: int,
+    user: CurrentUser = Depends(get_current_user),
+):
+    messages = load_conversation_messages(conversation_id, user.id)
+    if messages is None:
+        # 404 (not 403) so cross-user access cannot probe for existence.
+        raise HTTPException(status_code=404, detail="Conversation introuvable.")
+    return messages
 
 
 @app.delete("/conversations/{conversation_id}")
-def remove_conversation(conversation_id: int, _: bool = Depends(get_current_user)):
-    delete_conversation(conversation_id)
+def remove_conversation(
+    conversation_id: int,
+    user: CurrentUser = Depends(get_current_user),
+):
+    if not delete_conversation(conversation_id, user.id):
+        raise HTTPException(status_code=404, detail="Conversation introuvable.")
     return {"ok": True}
 
 
 @app.post("/chat")
-def chat_endpoint(request: ChatRequest, _: bool = Depends(get_current_user)):
+def chat_endpoint(request: ChatRequest, user: CurrentUser = Depends(get_current_user)):
     memories = load_memories()
 
     reply = handle_manual_memory_command(request.message)
@@ -349,12 +364,15 @@ def chat_endpoint(request: ChatRequest, _: bool = Depends(get_current_user)):
         return {"response": "\n".join(lines), "model": "system", "conversation_id": request.conversation_id}
 
     conversation_id = request.conversation_id
-    if not conversation_id:
-        conversation_id = create_conversation(request.message[:40])
+    if conversation_id:
+        if not conversation_belongs_to(conversation_id, user.id):
+            raise HTTPException(status_code=404, detail="Conversation introuvable.")
+    else:
+        conversation_id = create_conversation(request.message[:40], user.id)
 
     history = [
         {"role": m["role"], "content": m["content"]}
-        for m in load_conversation_messages(conversation_id)
+        for m in load_conversation_messages(conversation_id, user.id) or []
     ]
 
     nova_enabled = get_setting("nova_model_enabled", "false") == "true"

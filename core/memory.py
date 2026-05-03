@@ -2,6 +2,7 @@ import sqlite3
 import shutil
 import os
 from datetime import datetime
+from typing import Optional
 from memory.store import initialize_memory_database as _init_natural_memory
 from core import users as _users
 
@@ -68,6 +69,7 @@ def initialize_db():
         conn.execute("""
             CREATE TABLE IF NOT EXISTS conversations (
                 id        INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id   INTEGER REFERENCES users(id),
                 title     TEXT NOT NULL,
                 created   TEXT NOT NULL,
                 updated   TEXT NOT NULL
@@ -86,6 +88,7 @@ def initialize_db():
         """)
     _init_natural_memory(DB_PATH)
     _users.migrate(DB_PATH)
+    _migrate_conversation_ownership(DB_PATH)
 
 
 def save_memory(category: str, content: str):
@@ -143,13 +146,61 @@ def format_memories_for_prompt(memories: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def create_conversation(title: str) -> int:
-    """Crée une nouvelle conversation et retourne son ID."""
+def _migrate_conversation_ownership(db_path: str) -> None:
+    """
+    Add a user_id column to the conversations table and backfill existing
+    rows to the legacy admin (issue #105).
+
+    Idempotent: returns immediately if the column is already present.
+
+    The architecture doc (#103) specifies a nullable column for the initial
+    migration, with NOT NULL enforcement deferred to a follow-up. All
+    application paths set user_id explicitly via create_conversation().
+    """
+    with sqlite3.connect(db_path) as conn:
+        cols = {
+            row[1]
+            for row in conn.execute("PRAGMA table_info(conversations)").fetchall()
+        }
+        if "user_id" in cols:
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_conversations_user_id "
+                "ON conversations(user_id)"
+            )
+            return
+
+        row = conn.execute(
+            "SELECT id FROM users ORDER BY id ASC LIMIT 1"
+        ).fetchone()
+        if row is None:
+            raise RuntimeError(
+                "cannot scope conversations: users table is empty; "
+                "users.migrate() must run first"
+            )
+        legacy_owner_id = row[0]
+
+        conn.execute(
+            "ALTER TABLE conversations "
+            "ADD COLUMN user_id INTEGER REFERENCES users(id)"
+        )
+        conn.execute(
+            "UPDATE conversations SET user_id = ? WHERE user_id IS NULL",
+            (legacy_owner_id,),
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_conversations_user_id "
+            "ON conversations(user_id)"
+        )
+
+
+def create_conversation(title: str, user_id: int) -> int:
+    """Crée une nouvelle conversation pour `user_id` et retourne son ID."""
     now = datetime.now().isoformat()
     with _get_connection() as conn:
         cursor = conn.execute(
-            "INSERT INTO conversations (title, created, updated) VALUES (?, ?, ?)",
-            (title, now, now)
+            "INSERT INTO conversations (user_id, title, created, updated) "
+            "VALUES (?, ?, ?, ?)",
+            (user_id, title, now, now)
         )
         return cursor.lastrowid
 
@@ -182,17 +233,39 @@ def save_message(conversation_id: int, role: str, content: str, model: str = Non
     update_conversation_timestamp(conversation_id)
 
 
-def load_conversations() -> list[dict]:
-    """Charge toutes les conversations triées par date."""
+def load_conversations(user_id: int) -> list[dict]:
+    """Charge les conversations de `user_id` triées par date."""
     with _get_connection() as conn:
         rows = conn.execute(
-            "SELECT id, title, updated FROM conversations ORDER BY updated DESC"
+            "SELECT id, title, updated FROM conversations "
+            "WHERE user_id = ? ORDER BY updated DESC",
+            (user_id,)
         ).fetchall()
     return [{"id": row["id"], "title": row["title"], "updated": row["updated"]} for row in rows]
 
 
-def load_conversation_messages(conversation_id: int) -> list[dict]:
-    """Charge tous les messages d'une conversation."""
+def conversation_belongs_to(conversation_id: int, user_id: int) -> bool:
+    """True si la conversation existe et appartient à `user_id`."""
+    with _get_connection() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM conversations WHERE id = ? AND user_id = ?",
+            (conversation_id, user_id),
+        ).fetchone()
+    return row is not None
+
+
+def load_conversation_messages(
+    conversation_id: int, user_id: int
+) -> Optional[list[dict]]:
+    """
+    Charge les messages d'une conversation appartenant à `user_id`.
+
+    Retourne None si la conversation n'existe pas ou n'appartient pas à
+    l'utilisateur — l'appelant doit traduire en 404 pour ne pas révéler
+    l'existence d'une conversation d'un autre utilisateur.
+    """
+    if not conversation_belongs_to(conversation_id, user_id):
+        return None
     with _get_connection() as conn:
         rows = conn.execute(
             "SELECT role, content, model FROM messages WHERE conversation_id = ? ORDER BY created ASC",
@@ -201,11 +274,24 @@ def load_conversation_messages(conversation_id: int) -> list[dict]:
     return [{"role": row["role"], "content": row["content"], "model": row["model"]} for row in rows]
 
 
-def delete_conversation(conversation_id: int):
-    """Supprime une conversation et ses messages."""
+def delete_conversation(conversation_id: int, user_id: int) -> bool:
+    """
+    Supprime une conversation appartenant à `user_id` et ses messages.
+
+    Retourne True si la suppression a eu lieu, False si la conversation
+    n'existe pas ou appartient à un autre utilisateur.
+    """
     with _get_connection() as conn:
-        conn.execute("DELETE FROM messages WHERE conversation_id = ?", (conversation_id,))
-        conn.execute("DELETE FROM conversations WHERE id = ?", (conversation_id,))
+        cursor = conn.execute(
+            "DELETE FROM conversations WHERE id = ? AND user_id = ?",
+            (conversation_id, user_id),
+        )
+        if cursor.rowcount == 0:
+            return False
+        conn.execute(
+            "DELETE FROM messages WHERE conversation_id = ?", (conversation_id,)
+        )
+    return True
 
 
 def list_memories() -> list[dict]:
