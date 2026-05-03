@@ -1007,15 +1007,15 @@
                         </div>
                         <div class="mode-option" data-mode="chat" onclick="setMode('chat')">
                             Chat
-                            <span class="mode-desc">Forces gemma4</span>
+                            <span class="mode-desc">Everyday chat and questions</span>
                         </div>
                         <div class="mode-option" data-mode="code" onclick="setMode('code')">
                             Code
-                            <span class="mode-desc">Forces deepseek-coder-v2</span>
+                            <span class="mode-desc">Code, refactoring, debugging</span>
                         </div>
                         <div class="mode-option" data-mode="deep" onclick="setMode('deep')">
                             Deep
-                            <span class="mode-desc">Forces qwen2.5:32b</span>
+                            <span class="mode-desc">Long, careful reasoning</span>
                         </div>
                     </div>
                 </div>
@@ -1142,10 +1142,10 @@
             copy: "copier",
             copied: "copié!",
             mode: "Mode",
-            mode_auto_desc: "Router decides automatically",
-            mode_chat_desc: "Forces gemma4",
-            mode_code_desc: "Forces deepseek-coder-v2",
-            mode_deep_desc: "Forces qwen2.5:32b",
+            mode_auto_desc: "Choisit automatiquement le bon mode",
+            mode_chat_desc: "Conversation et questions du jour",
+            mode_code_desc: "Code, refactor et débogage",
+            mode_deep_desc: "Réflexion approfondie et longue",
         },
         en: {
             never_checked: "Never checked",
@@ -1170,10 +1170,10 @@
             copy: "copy",
             copied: "copied!",
             mode: "Mode",
-            mode_auto_desc: "Router decides automatically",
-            mode_chat_desc: "Forces gemma4",
-            mode_code_desc: "Forces deepseek-coder-v2",
-            mode_deep_desc: "Forces qwen2.5:32b",
+            mode_auto_desc: "Picks the right mode automatically",
+            mode_chat_desc: "Everyday chat and questions",
+            mode_code_desc: "Code, refactoring, debugging",
+            mode_deep_desc: "Long, careful reasoning",
         }
     };
 
@@ -1537,10 +1537,13 @@
         const messagesEl = document.getElementById("messages");
         const row = document.createElement("div");
         row.className = `message-row ${role}`;
+        // Raw model id is kept on the row for devtools-only inspection;
+        // it is intentionally not rendered in the user-facing label.
+        if (model) row.dataset.model = model;
 
         const label = document.createElement("div");
         label.className = "message-label";
-        label.textContent = role === "user" ? "Toi" : `Nova${model ? ` · ${model}` : ""}`;
+        label.textContent = role === "user" ? "Toi" : "Nova";
 
         const bubble = document.createElement("div");
         bubble.className = `message ${role}`;
@@ -1595,7 +1598,11 @@
         messagesEl.appendChild(row);
         messagesEl.scrollTop = messagesEl.scrollHeight;
 
-        if (model) document.getElementById("model-badge").textContent = model;
+        if (model) {
+            const badge = document.getElementById("model-badge");
+            badge.textContent = "Nova";
+            badge.dataset.model = model;
+        }
         return bubble;
     }
 
