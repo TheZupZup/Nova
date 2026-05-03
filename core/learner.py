@@ -4,8 +4,9 @@ import httpx
 import ollama
 import sqlite3
 from config import MODELS
-from core.memory import cleanup_old_knowledge, parse_and_save
+from core.memory import DB_PATH, cleanup_old_knowledge, parse_and_save
 from core.ollama_client import client
+from core.users import get_legacy_admin_id
 
 SOURCES = [
     # Tech & IA
@@ -42,7 +43,19 @@ logger = logging.getLogger(__name__)
 
 
 def learn_from_feeds():
-    """Scanne les flux RSS et sauvegarde les infos importantes."""
+    """
+    Scanne les flux RSS et sauvegarde les infos importantes.
+
+    Les souvenirs "knowledge" appris automatiquement sont attribués au
+    default admin migré (issue #106) : la tâche tourne en arrière-plan
+    sans utilisateur authentifié, et l'admin est l'héritier naturel
+    des données pré-multi-utilisateur.
+    """
+    user_id = get_legacy_admin_id(DB_PATH)
+    if user_id is None:
+        logger.warning("Skipping web learning: no admin user available.")
+        return
+
     logger.info("Nova learning from web...")
     for url in SOURCES:
         try:
@@ -56,9 +69,9 @@ def learn_from_feeds():
                     messages=[{"role": "user", "content": prompt}]
                 )
                 result = response["message"]["content"].strip()
-                parse_and_save(result)
+                parse_and_save(result, user_id)
         except (ollama.ResponseError, ConnectionError, httpx.HTTPError,
                 KeyError, sqlite3.OperationalError, sqlite3.DatabaseError) as e:
             logger.warning("Error learning from %s: %s", url, e)
-    cleanup_old_knowledge(MAX_KNOWLEDGE_MEMORIES)
+    cleanup_old_knowledge(user_id, MAX_KNOWLEDGE_MEMORIES)
     logger.info("Nova learning done.")

@@ -140,6 +140,26 @@ def create_user(
     return cur.lastrowid
 
 
+def get_legacy_admin_id(db_path: str) -> Optional[int]:
+    """
+    Return the user_id of the first user in the table — the seeded admin.
+
+    Used by code paths that have no authenticated user (CLI in main.py,
+    background learner) to attribute writes to the migrated default admin,
+    preserving single-user behaviour after the multi-user migration.
+
+    Returns None if the users table is empty or missing.
+    """
+    try:
+        with sqlite3.connect(db_path) as conn:
+            row = conn.execute(
+                "SELECT id FROM users ORDER BY id ASC LIMIT 1"
+            ).fetchone()
+    except sqlite3.DatabaseError:
+        return None
+    return int(row[0]) if row else None
+
+
 def seed_default_admin(
     conn: sqlite3.Connection,
     username: str,

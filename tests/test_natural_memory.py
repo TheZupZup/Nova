@@ -9,10 +9,15 @@ Tests for Natural Memory v1 + v2:
   - embedding generation (mocked)
   - deduplication on write
   - preference overwrite
+
+Per issue #106 every store-layer call requires a `user_id`. The fixture
+seeds a single admin row and exposes its id as `uid`.
 """
+import sqlite3
 import pytest
 from unittest.mock import patch
 
+from core import users
 from memory.embeddings import generate_embedding, cosine_similarity
 from memory.schema import Memory
 from memory.store import (
@@ -33,10 +38,20 @@ from memory.retriever import get_relevant_memories, format_for_prompt
 
 @pytest.fixture
 def tmp_db(tmp_path):
-    """Provides a fresh, isolated SQLite database for each test."""
+    """Provides a fresh DB with users + natural_memories tables and one admin user."""
     db = str(tmp_path / "test_memory.db")
+    with sqlite3.connect(db) as conn:
+        users.create_users_table(conn)
+        users.create_user(conn, "admin", "pw", role=users.ROLE_ADMIN)
     initialize_memory_database(db)
     return db
+
+
+@pytest.fixture
+def uid(tmp_db):
+    """Returns the admin user_id for the current `tmp_db`."""
+    with sqlite3.connect(tmp_db) as conn:
+        return conn.execute("SELECT id FROM users LIMIT 1").fetchone()[0]
 
 
 def _mem(**kwargs) -> Memory:
@@ -48,85 +63,85 @@ def _mem(**kwargs) -> Memory:
 # ── DB initialisation ──────────────────────────────────────────────────────────
 
 class TestDatabaseInit:
-    def test_initialise_creates_table(self, tmp_db):
-        mems = list_memories(db_path=tmp_db)
+    def test_initialise_creates_table(self, tmp_db, uid):
+        mems = list_memories(uid, db_path=tmp_db)
         assert isinstance(mems, list)
         assert mems == []
 
-    def test_initialise_is_idempotent(self, tmp_db):
+    def test_initialise_is_idempotent(self, tmp_db, uid):
         # Calling twice must not raise or duplicate the table
         initialize_memory_database(tmp_db)
-        mems = list_memories(db_path=tmp_db)
+        mems = list_memories(uid, db_path=tmp_db)
         assert mems == []
 
 
 # ── save / list / search ───────────────────────────────────────────────────────
 
 class TestSaveAndList:
-    def test_save_and_list_single(self, tmp_db):
+    def test_save_and_list_single(self, tmp_db, uid):
         m = _mem(kind="preference", topic="editor", content="User prefers neovim.")
-        save_memory(m, db_path=tmp_db)
-        result = list_memories(db_path=tmp_db)
+        save_memory(m, uid, db_path=tmp_db)
+        result = list_memories(uid, db_path=tmp_db)
         assert len(result) == 1
         assert result[0].content == "User prefers neovim."
         assert result[0].kind == "preference"
 
-    def test_save_multiple_returns_all(self, tmp_db):
+    def test_save_multiple_returns_all(self, tmp_db, uid):
         # Use distinct kind+topic combinations so dedup doesn't consolidate them.
-        save_memory(_mem(kind="preference", topic="editor", content="User prefers neovim."), db_path=tmp_db)
-        save_memory(_mem(kind="software", topic="terminal", content="User uses alacritty."), db_path=tmp_db)
-        save_memory(_mem(kind="hardware", topic="hardware_setup", content="User has 32GB RAM."), db_path=tmp_db)
-        assert len(list_memories(db_path=tmp_db)) == 3
+        save_memory(_mem(kind="preference", topic="editor", content="User prefers neovim."), uid, db_path=tmp_db)
+        save_memory(_mem(kind="software", topic="terminal", content="User uses alacritty."), uid, db_path=tmp_db)
+        save_memory(_mem(kind="hardware", topic="hardware_setup", content="User has 32GB RAM."), uid, db_path=tmp_db)
+        assert len(list_memories(uid, db_path=tmp_db)) == 3
 
-    def test_list_returns_newest_first(self, tmp_db):
+    def test_list_returns_newest_first(self, tmp_db, uid):
         m1 = _mem(content="first", created_at="2024-01-01T00:00:00")
         m2 = _mem(content="second", created_at="2024-06-01T00:00:00")
-        save_memory(m1, db_path=tmp_db)
-        save_memory(m2, db_path=tmp_db)
-        result = list_memories(db_path=tmp_db)
+        save_memory(m1, uid, db_path=tmp_db)
+        save_memory(m2, uid, db_path=tmp_db)
+        result = list_memories(uid, db_path=tmp_db)
         assert result[0].content == "second"
 
-    def test_delete_removes_memory(self, tmp_db):
+    def test_delete_removes_memory(self, tmp_db, uid):
         m = _mem()
-        save_memory(m, db_path=tmp_db)
-        delete_memory(m.id, db_path=tmp_db)
-        assert list_memories(db_path=tmp_db) == []
+        save_memory(m, uid, db_path=tmp_db)
+        delete_memory(m.id, uid, db_path=tmp_db)
+        assert list_memories(uid, db_path=tmp_db) == []
 
-    def test_update_changes_content(self, tmp_db):
+    def test_update_changes_content(self, tmp_db, uid):
         m = _mem(content="original")
-        save_memory(m, db_path=tmp_db)
+        save_memory(m, uid, db_path=tmp_db)
         m.content = "updated"
-        update_memory(m, db_path=tmp_db)
-        result = list_memories(db_path=tmp_db)
+        update_memory(m, uid, db_path=tmp_db)
+        result = list_memories(uid, db_path=tmp_db)
         assert result[0].content == "updated"
 
 
 class TestSearchMemories:
-    def test_search_returns_matching(self, tmp_db):
-        save_memory(_mem(topic="linux_distribution", content="User prefers Fedora KDE."), db_path=tmp_db)
-        save_memory(_mem(topic="editor", content="User uses neovim."), db_path=tmp_db)
-        results = search_memories("fedora linux", db_path=tmp_db)
+    def test_search_returns_matching(self, tmp_db, uid):
+        save_memory(_mem(topic="linux_distribution", content="User prefers Fedora KDE."), uid, db_path=tmp_db)
+        save_memory(_mem(topic="editor", content="User uses neovim."), uid, db_path=tmp_db)
+        results = search_memories("fedora linux", uid, db_path=tmp_db)
         assert len(results) == 1
         assert "Fedora" in results[0].content
 
-    def test_search_empty_query_returns_nothing(self, tmp_db):
-        save_memory(_mem(), db_path=tmp_db)
-        assert search_memories("", db_path=tmp_db) == []
+    def test_search_empty_query_returns_nothing(self, tmp_db, uid):
+        save_memory(_mem(), uid, db_path=tmp_db)
+        assert search_memories("", uid, db_path=tmp_db) == []
 
-    def test_search_no_match_returns_empty(self, tmp_db):
-        save_memory(_mem(content="User prefers dark mode."), db_path=tmp_db)
-        assert search_memories("kubernetes docker swarm", db_path=tmp_db) == []
+    def test_search_no_match_returns_empty(self, tmp_db, uid):
+        save_memory(_mem(content="User prefers dark mode."), uid, db_path=tmp_db)
+        assert search_memories("kubernetes docker swarm", uid, db_path=tmp_db) == []
 
-    def test_search_respects_limit(self, tmp_db):
+    def test_search_respects_limit(self, tmp_db, uid):
         for i in range(10):
-            save_memory(_mem(topic="python", content=f"User writes python {i}"), db_path=tmp_db)
-        results = search_memories("python", limit=3, db_path=tmp_db)
+            save_memory(_mem(topic="python", content=f"User writes python {i}"), uid, db_path=tmp_db)
+        results = search_memories("python", uid, limit=3, db_path=tmp_db)
         assert len(results) <= 3
 
-    def test_search_ranks_by_keyword_overlap(self, tmp_db):
-        save_memory(_mem(topic="linux", content="User uses linux fedora kde"), db_path=tmp_db)
-        save_memory(_mem(topic="linux2", content="User uses linux"), db_path=tmp_db)
-        results = search_memories("linux fedora kde", db_path=tmp_db)
+    def test_search_ranks_by_keyword_overlap(self, tmp_db, uid):
+        save_memory(_mem(topic="linux", content="User uses linux fedora kde"), uid, db_path=tmp_db)
+        save_memory(_mem(topic="linux2", content="User uses linux"), uid, db_path=tmp_db)
+        results = search_memories("linux fedora kde", uid, db_path=tmp_db)
         assert "fedora" in results[0].content.lower()
 
 
@@ -248,20 +263,20 @@ class TestExtractor:
 # ── retriever ──────────────────────────────────────────────────────────────────
 
 class TestRetriever:
-    def test_returns_relevant_memories(self, tmp_db):
-        save_memory(_mem(topic="linux_distribution", content="User prefers Fedora."), db_path=tmp_db)
-        save_memory(_mem(topic="editor", content="User uses neovim."), db_path=tmp_db)
-        results = get_relevant_memories("which linux distro", db_path=tmp_db)
+    def test_returns_relevant_memories(self, tmp_db, uid):
+        save_memory(_mem(topic="linux_distribution", content="User prefers Fedora."), uid, db_path=tmp_db)
+        save_memory(_mem(topic="editor", content="User uses neovim."), uid, db_path=tmp_db)
+        results = get_relevant_memories("which linux distro", uid, db_path=tmp_db)
         assert any("Fedora" in m.content for m in results)
 
-    def test_empty_message_returns_empty(self, tmp_db):
-        save_memory(_mem(), db_path=tmp_db)
-        assert get_relevant_memories("", db_path=tmp_db) == []
+    def test_empty_message_returns_empty(self, tmp_db, uid):
+        save_memory(_mem(), uid, db_path=tmp_db)
+        assert get_relevant_memories("", uid, db_path=tmp_db) == []
 
-    def test_respects_limit(self, tmp_db):
+    def test_respects_limit(self, tmp_db, uid):
         for i in range(20):
-            save_memory(_mem(topic="python", content=f"User likes python {i}"), db_path=tmp_db)
-        results = get_relevant_memories("python", limit=5, db_path=tmp_db)
+            save_memory(_mem(topic="python", content=f"User likes python {i}"), uid, db_path=tmp_db)
+        results = get_relevant_memories("python", uid, limit=5, db_path=tmp_db)
         assert len(results) <= 5
 
 
@@ -288,26 +303,26 @@ class TestFormatForPrompt:
 # ── forget command ─────────────────────────────────────────────────────────────
 
 class TestForgetCommand:
-    def test_forget_deletes_matching(self, tmp_db):
-        save_memory(_mem(topic="fedora", content="User prefers Fedora KDE."), db_path=tmp_db)
-        save_memory(_mem(topic="neovim", content="User uses neovim."), db_path=tmp_db)
-        count = delete_memories_matching("fedora", db_path=tmp_db)
+    def test_forget_deletes_matching(self, tmp_db, uid):
+        save_memory(_mem(topic="fedora", content="User prefers Fedora KDE."), uid, db_path=tmp_db)
+        save_memory(_mem(topic="neovim", content="User uses neovim."), uid, db_path=tmp_db)
+        count = delete_memories_matching("fedora", uid, db_path=tmp_db)
         assert count == 1
-        remaining = list_memories(db_path=tmp_db)
+        remaining = list_memories(uid, db_path=tmp_db)
         assert all("Fedora" not in m.content for m in remaining)
 
-    def test_forget_all_about_topic(self, tmp_db):
-        save_memory(_mem(topic="ubuntu", content="User tried Ubuntu once."), db_path=tmp_db)
-        save_memory(_mem(topic="ubuntu2", content="User disliked Ubuntu."), db_path=tmp_db)
-        save_memory(_mem(topic="fedora", content="User prefers Fedora."), db_path=tmp_db)
-        count = delete_memories_matching("ubuntu", db_path=tmp_db)
+    def test_forget_all_about_topic(self, tmp_db, uid):
+        save_memory(_mem(topic="ubuntu", content="User tried Ubuntu once."), uid, db_path=tmp_db)
+        save_memory(_mem(topic="ubuntu2", content="User disliked Ubuntu."), uid, db_path=tmp_db)
+        save_memory(_mem(topic="fedora", content="User prefers Fedora."), uid, db_path=tmp_db)
+        count = delete_memories_matching("ubuntu", uid, db_path=tmp_db)
         assert count == 2
-        remaining = list_memories(db_path=tmp_db)
+        remaining = list_memories(uid, db_path=tmp_db)
         assert len(remaining) == 1
         assert "Fedora" in remaining[0].content
 
-    def test_forget_nonexistent_returns_zero(self, tmp_db):
-        count = delete_memories_matching("kubernetes", db_path=tmp_db)
+    def test_forget_nonexistent_returns_zero(self, tmp_db, uid):
+        count = delete_memories_matching("kubernetes", uid, db_path=tmp_db)
         assert count == 0
 
 
@@ -341,15 +356,15 @@ class TestEmbeddings:
 # ── v2: schema migration ───────────────────────────────────────────────────────
 
 class TestSchemaMigration:
-    def test_embedding_column_created_on_init(self, tmp_db):
-        mems = list_memories(db_path=tmp_db)
+    def test_embedding_column_created_on_init(self, tmp_db, uid):
+        mems = list_memories(uid, db_path=tmp_db)
         assert isinstance(mems, list)
 
-    def test_init_is_idempotent_with_embedding_column(self, tmp_db):
+    def test_init_is_idempotent_with_embedding_column(self, tmp_db, uid):
         # Calling initialize twice must not raise even if column already exists.
         initialize_memory_database(tmp_db)
         initialize_memory_database(tmp_db)
-        assert list_memories(db_path=tmp_db) == []
+        assert list_memories(uid, db_path=tmp_db) == []
 
 
 # ── v2: embedding storage and retrieval ───────────────────────────────────────
@@ -359,16 +374,16 @@ class TestEmbeddingStorage:
     def no_ollama(self, monkeypatch):
         monkeypatch.setattr("memory.store.generate_embedding", lambda _: None)
 
-    def test_embedding_persisted_and_loaded(self, tmp_db):
+    def test_embedding_persisted_and_loaded(self, tmp_db, uid):
         m = _mem()
         m.embedding = [0.1, 0.2, 0.3]
-        save_memory(m, db_path=tmp_db)
-        loaded = list_memories(db_path=tmp_db)
+        save_memory(m, uid, db_path=tmp_db)
+        loaded = list_memories(uid, db_path=tmp_db)
         assert loaded[0].embedding == pytest.approx([0.1, 0.2, 0.3])
 
-    def test_null_embedding_round_trips_as_none(self, tmp_db):
-        save_memory(_mem(), db_path=tmp_db)
-        loaded = list_memories(db_path=tmp_db)
+    def test_null_embedding_round_trips_as_none(self, tmp_db, uid):
+        save_memory(_mem(), uid, db_path=tmp_db)
+        loaded = list_memories(uid, db_path=tmp_db)
         assert loaded[0].embedding is None
 
 
@@ -380,74 +395,74 @@ class TestDeduplication:
         # Tests set embeddings directly; prevent accidental Ollama calls.
         monkeypatch.setattr("memory.store.generate_embedding", lambda _: None)
 
-    def test_high_cosine_similarity_updates_existing(self, tmp_db):
+    def test_high_cosine_similarity_updates_existing(self, tmp_db, uid):
         m1 = _mem(kind="preference", topic="editor", content="User prefers neovim.")
         m1.embedding = [1.0, 0.0, 0.0]
-        save_memory(m1, db_path=tmp_db)
+        save_memory(m1, uid, db_path=tmp_db)
 
         m2 = _mem(kind="preference", topic="editor", content="User prefers VS Code.")
         m2.embedding = [0.98, 0.1, 0.0]  # cosine similarity ≈ 0.995 → above threshold
-        save_memory(m2, db_path=tmp_db)
+        save_memory(m2, uid, db_path=tmp_db)
 
-        mems = list_memories(db_path=tmp_db)
+        mems = list_memories(uid, db_path=tmp_db)
         assert len(mems) == 1
         assert "VS Code" in mems[0].content
 
-    def test_low_cosine_similarity_inserts_new(self, tmp_db):
+    def test_low_cosine_similarity_inserts_new(self, tmp_db, uid):
         m1 = _mem(kind="hardware", topic="hardware", content="User has 32GB RAM.")
         m1.embedding = [1.0, 0.0, 0.0]
-        save_memory(m1, db_path=tmp_db)
+        save_memory(m1, uid, db_path=tmp_db)
 
         m2 = _mem(kind="hardware", topic="hardware", content="User has an Nvidia RTX 3090.")
         m2.embedding = [0.0, 1.0, 0.0]  # orthogonal → below threshold
-        save_memory(m2, db_path=tmp_db)
+        save_memory(m2, uid, db_path=tmp_db)
 
-        assert len(list_memories(db_path=tmp_db)) == 2
+        assert len(list_memories(uid, db_path=tmp_db)) == 2
 
-    def test_dedup_preserves_original_created_at(self, tmp_db):
+    def test_dedup_preserves_original_created_at(self, tmp_db, uid):
         m1 = _mem(kind="preference", topic="editor", content="User prefers neovim.",
                   created_at="2024-01-01T00:00:00")
         m1.embedding = [1.0, 0.0]
-        save_memory(m1, db_path=tmp_db)
+        save_memory(m1, uid, db_path=tmp_db)
 
         m2 = _mem(kind="preference", topic="editor", content="User prefers VS Code.")
         m2.embedding = [0.97, 0.1]
-        save_memory(m2, db_path=tmp_db)
+        save_memory(m2, uid, db_path=tmp_db)
 
-        mems = list_memories(db_path=tmp_db)
+        mems = list_memories(uid, db_path=tmp_db)
         assert mems[0].created_at == "2024-01-01T00:00:00"
 
-    def test_different_topic_always_inserts_new(self, tmp_db):
+    def test_different_topic_always_inserts_new(self, tmp_db, uid):
         m1 = _mem(kind="preference", topic="editor", content="User prefers neovim.")
         m1.embedding = [1.0, 0.0]
-        save_memory(m1, db_path=tmp_db)
+        save_memory(m1, uid, db_path=tmp_db)
 
         m2 = _mem(kind="preference", topic="terminal", content="User prefers alacritty.")
         m2.embedding = [1.0, 0.0]  # same embedding but different topic
-        save_memory(m2, db_path=tmp_db)
+        save_memory(m2, uid, db_path=tmp_db)
 
-        assert len(list_memories(db_path=tmp_db)) == 2
+        assert len(list_memories(uid, db_path=tmp_db)) == 2
 
-    def test_keyword_dedup_identical_content(self, tmp_db):
+    def test_keyword_dedup_identical_content(self, tmp_db, uid):
         # No embeddings — Jaccard similarity of identical content = 1.0 → update.
         m1 = _mem(kind="preference", topic="editor", content="User prefers neovim for coding.")
-        save_memory(m1, db_path=tmp_db)
+        save_memory(m1, uid, db_path=tmp_db)
 
         m2 = _mem(kind="preference", topic="editor", content="User prefers neovim for coding.")
-        save_memory(m2, db_path=tmp_db)
+        save_memory(m2, uid, db_path=tmp_db)
 
-        assert len(list_memories(db_path=tmp_db)) == 1
+        assert len(list_memories(uid, db_path=tmp_db)) == 1
 
-    def test_keyword_dedup_similar_preference(self, tmp_db):
+    def test_keyword_dedup_similar_preference(self, tmp_db, uid):
         # "User prefers neovim" vs "User prefers VS Code" share enough tokens
         # (user, prefers) for Jaccard ≥ 0.50 → update.
         m1 = _mem(kind="preference", topic="editor", content="User prefers neovim.")
-        save_memory(m1, db_path=tmp_db)
+        save_memory(m1, uid, db_path=tmp_db)
 
         m2 = _mem(kind="preference", topic="editor", content="User prefers VS Code.")
-        save_memory(m2, db_path=tmp_db)
+        save_memory(m2, uid, db_path=tmp_db)
 
-        mems = list_memories(db_path=tmp_db)
+        mems = list_memories(uid, db_path=tmp_db)
         assert len(mems) == 1
         assert "VS Code" in mems[0].content
 
@@ -455,46 +470,46 @@ class TestDeduplication:
 # ── v2: cosine retrieval ───────────────────────────────────────────────────────
 
 class TestRetrieverV2:
-    def test_cosine_search_returns_relevant(self, tmp_db):
+    def test_cosine_search_returns_relevant(self, tmp_db, uid):
         m = _mem(kind="preference", topic="editor", content="User prefers neovim.")
         m.embedding = [1.0, 0.0, 0.0]
         with patch("memory.store.generate_embedding", return_value=None):
-            save_memory(m, db_path=tmp_db)
+            save_memory(m, uid, db_path=tmp_db)
 
         with patch("memory.retriever.generate_embedding", return_value=[0.99, 0.1, 0.0]):
-            results = get_relevant_memories("which editor", db_path=tmp_db)
+            results = get_relevant_memories("which editor", uid, db_path=tmp_db)
 
         assert len(results) == 1
         assert results[0].topic == "editor"
 
-    def test_cosine_search_filters_irrelevant(self, tmp_db):
+    def test_cosine_search_filters_irrelevant(self, tmp_db, uid):
         m = _mem(kind="preference", topic="editor", content="User prefers neovim.")
         m.embedding = [1.0, 0.0, 0.0]
         with patch("memory.store.generate_embedding", return_value=None):
-            save_memory(m, db_path=tmp_db)
+            save_memory(m, uid, db_path=tmp_db)
 
         # Query embedding is orthogonal to memory embedding → score = 0 < threshold.
         with patch("memory.retriever.generate_embedding", return_value=[0.0, 0.0, 1.0]):
-            results = get_relevant_memories("something unrelated", db_path=tmp_db)
+            results = get_relevant_memories("something unrelated", uid, db_path=tmp_db)
 
         assert results == []
 
-    def test_falls_back_to_keyword_when_ollama_unavailable(self, tmp_db):
+    def test_falls_back_to_keyword_when_ollama_unavailable(self, tmp_db, uid):
         with patch("memory.store.generate_embedding", return_value=None):
-            save_memory(_mem(topic="fedora", content="User prefers Fedora."), db_path=tmp_db)
+            save_memory(_mem(topic="fedora", content="User prefers Fedora."), uid, db_path=tmp_db)
 
         with patch("memory.retriever.generate_embedding", return_value=None):
-            results = get_relevant_memories("fedora linux", db_path=tmp_db)
+            results = get_relevant_memories("fedora linux", uid, db_path=tmp_db)
 
         assert any("Fedora" in m.content for m in results)
 
-    def test_legacy_memories_included_via_keyword_fallback(self, tmp_db):
+    def test_legacy_memories_included_via_keyword_fallback(self, tmp_db, uid):
         # A memory with no embedding (legacy v1 row) is served via keyword
         # search even when a query embedding is available.
         with patch("memory.store.generate_embedding", return_value=None):
-            save_memory(_mem(topic="fedora", content="User prefers Fedora."), db_path=tmp_db)
+            save_memory(_mem(topic="fedora", content="User prefers Fedora."), uid, db_path=tmp_db)
 
         with patch("memory.retriever.generate_embedding", return_value=[0.5, 0.5]):
-            results = get_relevant_memories("fedora linux", db_path=tmp_db)
+            results = get_relevant_memories("fedora linux", uid, db_path=tmp_db)
 
         assert any("Fedora" in m.content for m in results)

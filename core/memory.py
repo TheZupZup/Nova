@@ -86,25 +86,28 @@ def initialize_db():
                 FOREIGN KEY (conversation_id) REFERENCES conversations(id)
             )
         """)
-    _init_natural_memory(DB_PATH)
     _users.migrate(DB_PATH)
     _migrate_conversation_ownership(DB_PATH)
+    _migrate_memories_ownership(DB_PATH)
+    _init_natural_memory(DB_PATH)
 
 
-def save_memory(category: str, content: str):
-    """Sauvegarde un nouveau souvenir dans la base."""
+def save_memory(category: str, content: str, user_id: int):
+    """Sauvegarde un nouveau souvenir attribué à `user_id`."""
     backup_db()
     with _get_connection() as conn:
         conn.execute(
-            "INSERT INTO memories (category, content, created) VALUES (?, ?, ?)",
-            (category, content, datetime.now().isoformat())
+            "INSERT INTO memories (category, content, created, user_id) "
+            "VALUES (?, ?, ?, ?)",
+            (category, content, datetime.now().isoformat(), user_id)
         )
 
 
-def parse_and_save(result: str) -> bool:
+def parse_and_save(result: str, user_id: int) -> bool:
     """
     Parse un résultat de l'LLM et sauvegarde la mémoire si le format est valide.
     Retourne True si une mémoire a été sauvegardée, False sinon.
+    Le souvenir est attribué à `user_id`.
     """
     if not result or not isinstance(result, str):
         return False
@@ -123,15 +126,17 @@ def parse_and_save(result: str) -> bool:
     if not category or not content:
         return False
 
-    save_memory(category, content)
+    save_memory(category, content, user_id)
     return True
 
 
-def load_memories() -> list[dict]:
-    """Charge tous les souvenirs existants."""
+def load_memories(user_id: int) -> list[dict]:
+    """Charge les souvenirs appartenant à `user_id`."""
     with _get_connection() as conn:
         rows = conn.execute(
-            "SELECT category, content FROM memories ORDER BY created ASC"
+            "SELECT category, content FROM memories "
+            "WHERE user_id = ? ORDER BY created ASC",
+            (user_id,)
         ).fetchall()
     return [{"category": row["category"], "content": row["content"]} for row in rows]
 
@@ -144,6 +149,54 @@ def format_memories_for_prompt(memories: list[dict]) -> str:
     for m in memories:
         lines.append(f"- [{m['category']}] {m['content']}")
     return "\n".join(lines)
+
+
+def _migrate_memories_ownership(db_path: str) -> None:
+    """
+    Add a user_id column to the memories table and backfill existing rows
+    to the legacy admin (issue #106).
+
+    Idempotent: returns immediately if the column is already present (after
+    ensuring the index exists).
+
+    The column is nullable for the migration itself, mirroring the
+    conversations migration; all application paths set user_id explicitly
+    via save_memory().
+    """
+    with sqlite3.connect(db_path) as conn:
+        cols = {
+            row[1]
+            for row in conn.execute("PRAGMA table_info(memories)").fetchall()
+        }
+        if "user_id" in cols:
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_memories_user_id "
+                "ON memories(user_id)"
+            )
+            return
+
+        row = conn.execute(
+            "SELECT id FROM users ORDER BY id ASC LIMIT 1"
+        ).fetchone()
+        if row is None:
+            raise RuntimeError(
+                "cannot scope memories: users table is empty; "
+                "users.migrate() must run first"
+            )
+        legacy_owner_id = row[0]
+
+        conn.execute(
+            "ALTER TABLE memories "
+            "ADD COLUMN user_id INTEGER REFERENCES users(id)"
+        )
+        conn.execute(
+            "UPDATE memories SET user_id = ? WHERE user_id IS NULL",
+            (legacy_owner_id,),
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_memories_user_id "
+            "ON memories(user_id)"
+        )
 
 
 def _migrate_conversation_ownership(db_path: str) -> None:
@@ -294,43 +347,57 @@ def delete_conversation(conversation_id: int, user_id: int) -> bool:
     return True
 
 
-def list_memories() -> list[dict]:
-    """Charge tous les souvenirs avec id et created — pour l'interface web (pas pour les prompts)."""
+def list_memories(user_id: int) -> list[dict]:
+    """Liste les souvenirs de `user_id` avec id et created — pour l'interface web."""
     with _get_connection() as conn:
         rows = conn.execute(
-            "SELECT id, category, content, created FROM memories ORDER BY created DESC"
+            "SELECT id, category, content, created FROM memories "
+            "WHERE user_id = ? ORDER BY created DESC",
+            (user_id,)
         ).fetchall()
     return [{"id": r["id"], "category": r["category"], "content": r["content"], "created": r["created"]} for r in rows]
 
 
-def update_memory(memory_id: int, category: str, content: str):
-    """Met à jour la catégorie et le contenu d'un souvenir."""
+def update_memory(memory_id: int, category: str, content: str, user_id: int) -> bool:
+    """
+    Met à jour un souvenir s'il appartient à `user_id`.
+    Retourne True si une ligne a été modifiée, False sinon.
+    """
     backup_db()
     with _get_connection() as conn:
-        conn.execute(
-            "UPDATE memories SET category = ?, content = ? WHERE id = ?",
-            (category, content, memory_id)
+        cursor = conn.execute(
+            "UPDATE memories SET category = ?, content = ? "
+            "WHERE id = ? AND user_id = ?",
+            (category, content, memory_id, user_id)
         )
+    return cursor.rowcount > 0
 
 
-def delete_memory(memory_id: int):
-    """Supprime un souvenir par son id."""
+def delete_memory(memory_id: int, user_id: int) -> bool:
+    """
+    Supprime un souvenir s'il appartient à `user_id`.
+    Retourne True si une ligne a été supprimée, False sinon.
+    """
     backup_db()
     with _get_connection() as conn:
-        conn.execute("DELETE FROM memories WHERE id = ?", (memory_id,))
+        cursor = conn.execute(
+            "DELETE FROM memories WHERE id = ? AND user_id = ?",
+            (memory_id, user_id)
+        )
+    return cursor.rowcount > 0
 
 
-def cleanup_old_knowledge(max_count: int = 500):
-    """Garde seulement les max_count dernières mémoires de type knowledge."""
+def cleanup_old_knowledge(user_id: int, max_count: int = 500):
+    """Garde seulement les max_count dernières mémoires de type knowledge pour `user_id`."""
     backup_db()
     with _get_connection() as conn:
         conn.execute("""
             DELETE FROM memories
-            WHERE category = 'knowledge'
+            WHERE category = 'knowledge' AND user_id = ?
             AND id NOT IN (
                 SELECT id FROM memories
-                WHERE category = 'knowledge'
+                WHERE category = 'knowledge' AND user_id = ?
                 ORDER BY created DESC
                 LIMIT ?
             )
-        """, (max_count,))
+        """, (user_id, user_id, max_count))

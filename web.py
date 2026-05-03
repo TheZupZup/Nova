@@ -330,9 +330,9 @@ def remove_conversation(
 
 @app.post("/chat")
 def chat_endpoint(request: ChatRequest, user: CurrentUser = Depends(get_current_user)):
-    memories = load_memories()
+    memories = load_memories(user.id)
 
-    reply = handle_manual_memory_command(request.message)
+    reply = handle_manual_memory_command(request.message, user.id)
     if reply is not None:
         return {"response": reply, "model": "system", "conversation_id": request.conversation_id}
 
@@ -340,13 +340,13 @@ def chat_endpoint(request: ChatRequest, user: CurrentUser = Depends(get_current_
 
     if msg_lower.startswith("forget that ") or msg_lower.startswith("oublie que "):
         query = request.message.split(" ", 2)[2].strip()
-        count = delete_memories_matching(query)
+        count = delete_memories_matching(query, user.id)
         reply = f"Done. Removed {count} memory(ies) matching '{query}'." if count else "No matching memories found."
         return {"response": reply, "model": "system", "conversation_id": request.conversation_id}
 
     if msg_lower.startswith("forget everything about ") or msg_lower.startswith("oublie tout sur "):
         query = request.message.split(" ", 3)[-1].strip()
-        count = delete_memories_matching(query)
+        count = delete_memories_matching(query, user.id)
         reply = f"Done. Removed {count} memory(ies) about '{query}'." if count else "No matching memories found."
         return {"response": reply, "model": "system", "conversation_id": request.conversation_id}
 
@@ -355,7 +355,7 @@ def chat_endpoint(request: ChatRequest, user: CurrentUser = Depends(get_current_
         "what do you know about me?", "que sais-tu de moi ?", "que sais-tu de moi?",
         "montre mes souvenirs", "montre-moi mes souvenirs",
     ):
-        mems = list_natural_memories()
+        mems = list_natural_memories(user.id)
         if not mems:
             return {"response": "I don't have any natural memories stored yet.", "model": "system", "conversation_id": request.conversation_id}
         lines = ["Here's what I remember about you:\n"]
@@ -380,7 +380,7 @@ def chat_endpoint(request: ChatRequest, user: CurrentUser = Depends(get_current_
         forced_model = get_setting("nova_model_name", NOVA_MODEL_DEFAULT_NAME)
     else:
         forced_model = MODE_MAP.get(request.mode)
-    response, model_used = chat(history, request.message, memories, forced_model=forced_model, force_search=request.search, image=request.image)
+    response, model_used = chat(history, request.message, memories, user.id, forced_model=forced_model, force_search=request.search, image=request.image)
 
     save_message(conversation_id, "user", request.message)
     save_message(conversation_id, "assistant", response, model_used)
@@ -398,25 +398,38 @@ def chat_endpoint(request: ChatRequest, user: CurrentUser = Depends(get_current_
 # ── MEMORY ENDPOINTS ──
 
 @app.get("/memories")
-def get_memories(_: bool = Depends(get_current_user)):
-    return list_memories()
+def get_memories(user: CurrentUser = Depends(get_current_user)):
+    return list_memories(user.id)
 
 
 @app.put("/memories/{memory_id}")
-def update_memory_endpoint(memory_id: int, request: MemoryUpdateRequest, _: bool = Depends(get_current_user)):
-    update_memory(memory_id, request.category, request.content)
+def update_memory_endpoint(
+    memory_id: int,
+    request: MemoryUpdateRequest,
+    user: CurrentUser = Depends(get_current_user),
+):
+    if not update_memory(memory_id, request.category, request.content, user.id):
+        # 404 (not 403) so cross-user access cannot probe for existence.
+        raise HTTPException(status_code=404, detail="Mémoire introuvable.")
     return {"ok": True}
 
 
 @app.delete("/memories/{memory_id}")
-def delete_memory_endpoint(memory_id: int, _: bool = Depends(get_current_user)):
-    delete_memory(memory_id)
+def delete_memory_endpoint(
+    memory_id: int,
+    user: CurrentUser = Depends(get_current_user),
+):
+    if not delete_memory(memory_id, user.id):
+        raise HTTPException(status_code=404, detail="Mémoire introuvable.")
     return {"ok": True}
 
 
 @app.post("/memories")
-def add_memory(request: MemoryAddRequest, _: bool = Depends(get_current_user)):
-    save_memory(request.category, request.content)
+def add_memory(
+    request: MemoryAddRequest,
+    user: CurrentUser = Depends(get_current_user),
+):
+    save_memory(request.category, request.content, user.id)
     return {"ok": True}
 
 

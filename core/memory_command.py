@@ -7,12 +7,13 @@ _MANUAL_PREFIXES = (
 )
 
 
-def handle_manual_memory_command(message: str) -> str | None:
+def handle_manual_memory_command(message: str, user_id: int) -> str | None:
     """
-    Detects explicit manual memory commands and saves their content.
+    Detects explicit manual memory commands and saves their content for `user_id`.
 
     Matches "Retiens ça:", "Souviens-toi de ça:", or "Souviens-toi:" (case-insensitive).
-    Saves everything after the first colon as-is under the "manual" category.
+    Saves everything after the first colon as-is under the "manual" category,
+    attributed to `user_id`.
     Returns a confirmation string if matched, None if the message is not a memory command.
     """
     stripped = message.lstrip()
@@ -22,6 +23,6 @@ def handle_manual_memory_command(message: str) -> str | None:
             content = stripped[len(prefix):].strip()
             if not content:
                 return "Rien à sauvegarder : le contenu est vide."
-            save_memory("manual", content)
+            save_memory("manual", content, user_id)
             return f"Souvenir sauvegardé : {content}"
     return None

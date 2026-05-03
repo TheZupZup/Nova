@@ -47,18 +47,18 @@ Données météo:
 {weather_data}"""
 
 
-def _extract_and_save_natural_memories(user_message: str):
-    """Runs the rule-based extractor on the user message and persists allowed memories."""
+def _extract_and_save_natural_memories(user_message: str, user_id: int):
+    """Runs the rule-based extractor on the user message and persists allowed memories under `user_id`."""
     try:
         for mem in extract_memories(user_message):
             if is_memory_allowed(mem):
-                save_natural_memory(mem)
+                save_natural_memory(mem, user_id)
     except Exception:
         pass  # never let memory extraction break the chat flow
 
 
-def extract_and_save_memory(user_message: str, assistant_response: str):
-    """Extrait automatiquement les infos importantes et les sauvegarde."""
+def extract_and_save_memory(user_message: str, assistant_response: str, user_id: int):
+    """Extrait automatiquement les infos importantes et les sauvegarde sous `user_id`."""
     prompt = MEMORY_EXTRACTION_PROMPT.format(
         user_message=user_message,
         assistant_response=assistant_response
@@ -71,7 +71,7 @@ def extract_and_save_memory(user_message: str, assistant_response: str):
     except (ollama.ResponseError, ConnectionError, httpx.HTTPError):
         return
     result = response["message"]["content"].strip()
-    parse_and_save(result)
+    parse_and_save(result, user_id)
 
 
 def build_messages(history: list[dict], user_input: str, memories: list[dict], extra_context: str = None, context_type: str = None, natural_memories=None) -> list[dict]:
@@ -101,8 +101,14 @@ def build_image_messages(user_input: str, image: str) -> list[dict]:
     }]
 
 
-def chat(history: list[dict], user_input: str, memories: list[dict], forced_model: str = None, force_search: bool = False, image: str = None) -> tuple[str, str]:
-    """Envoie un message à Nova et retourne sa réponse et le modèle utilisé."""
+def chat(history: list[dict], user_input: str, memories: list[dict], user_id: int, forced_model: str = None, force_search: bool = False, image: str = None) -> tuple[str, str]:
+    """
+    Envoie un message à Nova et retourne sa réponse et le modèle utilisé.
+
+    Toutes les opérations mémoire (récupération, extraction, sauvegarde)
+    sont scopées à `user_id` — un utilisateur ne voit jamais les souvenirs
+    d'un autre.
+    """
     try:
         # Image → vision model, no routing
         if image:
@@ -110,12 +116,12 @@ def chat(history: list[dict], user_input: str, memories: list[dict], forced_mode
             messages = build_image_messages(user_input, image)
             response = client.chat(model=MODELS["default"], messages=messages)
             reply = response["message"]["content"]
-            extract_and_save_memory(user_input or "image", reply)
+            extract_and_save_memory(user_input or "image", reply, user_id)
             return reply, MODELS["default"]
 
         model = forced_model if forced_model else route(user_input)
 
-        natural_mems = get_relevant_memories(user_input)
+        natural_mems = get_relevant_memories(user_input, user_id)
 
         # Météo en temps réel
         weather_result = detect_weather_city(user_input)
@@ -162,8 +168,8 @@ def chat(history: list[dict], user_input: str, memories: list[dict], forced_mode
                 response = client.chat(model=model, messages=messages)
                 reply = response["message"]["content"]
 
-        extract_and_save_memory(user_input, reply)
-        _extract_and_save_natural_memories(user_input)
+        extract_and_save_memory(user_input, reply, user_id)
+        _extract_and_save_natural_memories(user_input, user_id)
         return reply, model
 
     except (ollama.ResponseError, ConnectionError, httpx.HTTPError) as e:

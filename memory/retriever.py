@@ -1,14 +1,18 @@
 from memory.embeddings import generate_embedding, cosine_similarity
-from memory.store import search_memories, list_memories, DB_PATH
+from memory import store as _store
+from memory.store import search_memories, list_memories
 from memory.schema import Memory
 
 # Memories with a cosine score below this threshold are considered irrelevant.
 _COSINE_THRESHOLD = 0.40
 
 
-def get_relevant_memories(message: str, limit: int = 8, db_path: str = DB_PATH) -> list[Memory]:
+def get_relevant_memories(message: str, user_id: int, limit: int = 8, db_path: str | None = None) -> list[Memory]:
     """
-    Returns up to `limit` memories relevant to `message`.
+    Returns up to `limit` memories owned by `user_id` and relevant to `message`.
+
+    Cross-user retrieval is impossible by construction — every read goes
+    through the user-scoped store layer.
 
     Strategy:
     - If Ollama is reachable, use cosine similarity for memories that have
@@ -16,11 +20,13 @@ def get_relevant_memories(message: str, limit: int = 8, db_path: str = DB_PATH) 
     - If Ollama is unreachable (generate_embedding returns None), fall back
       entirely to keyword search (v1 behaviour).
     """
+    if db_path is None:
+        db_path = _store.DB_PATH
     query_emb = generate_embedding(message)
     if query_emb is None:
-        return search_memories(message, limit=limit, db_path=db_path)
+        return search_memories(message, user_id, limit=limit, db_path=db_path)
 
-    all_mems = list_memories(db_path=db_path)
+    all_mems = list_memories(user_id, db_path=db_path)
 
     scored: list[tuple[float, Memory]] = []
     without_embedding: list[Memory] = []
@@ -36,7 +42,7 @@ def get_relevant_memories(message: str, limit: int = 8, db_path: str = DB_PATH) 
 
     # Fill remaining slots with keyword matches for legacy memories (no embedding).
     if without_embedding and len(results) < limit:
-        kw = search_memories(message, limit=limit - len(results), db_path=db_path)
+        kw = search_memories(message, user_id, limit=limit - len(results), db_path=db_path)
         seen = {m.id for m in results}
         results += [m for m in kw if m.id not in seen]
 
