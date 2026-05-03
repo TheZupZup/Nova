@@ -209,7 +209,7 @@ Check the [open issues](https://github.com/TheZupZup/Nova/issues) on GitHub, par
 The following are areas of active interest, not commitments:
 
 - Hardening the natural language memory pipeline for production use
-- Multi-user support (currently single-user via one set of credentials)
+- Multi-user support (currently single-user via one set of credentials) — see the design plan in [docs/multi-user-architecture.md](docs/multi-user-architecture.md)
 - Improved model fallback and error reporting in the web UI
 - Docker Compose setup for simpler deployment
 - Broader test coverage
