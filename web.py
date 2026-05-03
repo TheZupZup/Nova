@@ -8,7 +8,12 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field, field_validator
 
-from core.auth import verify_credentials, create_token, verify_token
+from core.auth import (
+    CurrentUser,
+    authenticate,
+    create_token,
+    load_current_user,
+)
 from core.rate_limiter import check_login_rate_limit
 from apscheduler.schedulers.background import BackgroundScheduler
 from core.learner import learn_from_feeds
@@ -269,17 +274,21 @@ class SettingsUpdateRequest(BaseModel):
         return v
 
 
-def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    if not verify_token(credentials.credentials):
+def get_current_user(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+) -> CurrentUser:
+    user = load_current_user(credentials.credentials)
+    if user is None:
         raise HTTPException(status_code=401, detail="Token invalide ou expiré.")
-    return True
+    return user
 
 
 @app.post("/login")
 def login(request: LoginRequest, _: None = Depends(check_login_rate_limit)):
-    if not verify_credentials(request.username, request.password):
+    user = authenticate(request.username, request.password)
+    if user is None:
         raise HTTPException(status_code=401, detail="Identifiants incorrects.")
-    return {"token": create_token()}
+    return {"token": create_token(user)}
 
 
 @app.get("/conversations")

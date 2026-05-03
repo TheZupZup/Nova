@@ -207,7 +207,8 @@ def _post_login(client, username="nova", password="nova", ip="1.2.3.4"):
 
 class TestLoginRateLimiting:
     def test_successful_login_within_limit(self, client):
-        with patch("web.verify_credentials", return_value=True), \
+        fake_user = MagicMock()
+        with patch("web.authenticate", return_value=fake_user), \
              patch("web.create_token", return_value="tok"), \
              patch("core.rate_limiter._login_limiter.is_allowed", return_value=(True, 0)):
             resp = _post_login(client, ip="10.0.0.1")
@@ -245,7 +246,7 @@ class TestLoginRateLimiting:
         # collapse onto the single key "testclient".
         with patch("core.rate_limiter._login_limiter.is_allowed", side_effect=side_effect), \
              patch("core.rate_limiter._TRUSTED_PROXIES", frozenset({"testclient"})), \
-             patch("web.verify_credentials", return_value=False):
+             patch("web.authenticate", return_value=None):
             # Exhaust IP A
             _post_login(client, ip="192.168.0.1")
             _post_login(client, ip="192.168.0.1")
