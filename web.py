@@ -29,6 +29,9 @@ from core.memory import (
     get_setting, save_setting,
     list_memories, update_memory, delete_memory,
 )
+from core.settings import (
+    get_user_setting, save_user_setting,
+)
 from memory.store import (
     list_memories as list_natural_memories,
     delete_memories_matching,
@@ -375,9 +378,11 @@ def chat_endpoint(request: ChatRequest, user: CurrentUser = Depends(get_current_
         for m in load_conversation_messages(conversation_id, user.id) or []
     ]
 
-    nova_enabled = get_setting("nova_model_enabled", "false") == "true"
+    nova_enabled = get_user_setting(user.id, "nova_model_enabled", "false") == "true"
     if nova_enabled:
-        forced_model = get_setting("nova_model_name", NOVA_MODEL_DEFAULT_NAME)
+        forced_model = get_user_setting(
+            user.id, "nova_model_name", NOVA_MODEL_DEFAULT_NAME
+        )
     else:
         forced_model = MODE_MAP.get(request.mode)
     response, model_used = chat(history, request.message, memories, user.id, forced_model=forced_model, force_search=request.search, image=request.image)
@@ -434,13 +439,19 @@ def add_memory(
 
 
 @app.get("/settings")
-def get_settings(_: bool = Depends(get_current_user)):
+def get_settings(user: CurrentUser = Depends(get_current_user)):
+    # System-scoped values are global; user-scoped values are read for the
+    # caller, so two users see two different `nova_model_*` payloads.
     return {
         "ram_budget": get_setting("ram_budget", "2048"),
         "last_model_update": get_setting("last_model_update", "Never"),
         "last_updated_models": get_setting("last_updated_models", ""),
-        "nova_model_enabled": get_setting("nova_model_enabled", "false") == "true",
-        "nova_model_name": get_setting("nova_model_name", NOVA_MODEL_DEFAULT_NAME),
+        "nova_model_enabled": (
+            get_user_setting(user.id, "nova_model_enabled", "false") == "true"
+        ),
+        "nova_model_name": get_user_setting(
+            user.id, "nova_model_name", NOVA_MODEL_DEFAULT_NAME
+        ),
     }
 
 
@@ -455,13 +466,28 @@ def trigger_model_update(_: bool = Depends(get_current_user)):
 
 
 @app.post("/settings")
-def update_settings(data: SettingsUpdateRequest, _: bool = Depends(get_current_user)):
+def update_settings(
+    data: SettingsUpdateRequest,
+    user: CurrentUser = Depends(get_current_user),
+):
+    # System-level settings can only be changed by admins; per-user
+    # preferences are written under the caller's id and never affect
+    # anyone else.
     if data.ram_budget is not None:
+        if user.role != "admin":
+            raise HTTPException(
+                status_code=403,
+                detail="Only admins can change system settings.",
+            )
         save_setting("ram_budget", str(data.ram_budget))
     if data.nova_model_enabled is not None:
-        save_setting("nova_model_enabled", "true" if data.nova_model_enabled else "false")
+        save_user_setting(
+            user.id,
+            "nova_model_enabled",
+            "true" if data.nova_model_enabled else "false",
+        )
     if data.nova_model_name is not None:
-        save_setting("nova_model_name", data.nova_model_name)
+        save_user_setting(user.id, "nova_model_name", data.nova_model_name)
     return {"ok": True}
 
 
