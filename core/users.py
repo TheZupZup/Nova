@@ -140,6 +140,142 @@ def create_user(
     return cur.lastrowid
 
 
+def list_users(conn: sqlite3.Connection) -> list[dict]:
+    """
+    Return all users as plain dicts, ordered by id.
+
+    The password_hash column is intentionally omitted — admin-facing
+    callers must never see it.
+    """
+    prev_factory = conn.row_factory
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(
+            "SELECT id, username, role, is_restricted, token_version, "
+            "created_at, disabled_at FROM users ORDER BY id ASC"
+        ).fetchall()
+    finally:
+        conn.row_factory = prev_factory
+    return [
+        {
+            "id": int(r["id"]),
+            "username": r["username"],
+            "role": r["role"],
+            "is_restricted": bool(r["is_restricted"]),
+            "token_version": int(r["token_version"]),
+            "created_at": r["created_at"],
+            "disabled_at": r["disabled_at"],
+        }
+        for r in rows
+    ]
+
+
+def get_user_by_id(
+    conn: sqlite3.Connection, user_id: int
+) -> Optional[sqlite3.Row]:
+    prev_factory = conn.row_factory
+    conn.row_factory = sqlite3.Row
+    try:
+        return conn.execute(
+            "SELECT * FROM users WHERE id = ?", (user_id,)
+        ).fetchone()
+    finally:
+        conn.row_factory = prev_factory
+
+
+def count_active_admins(conn: sqlite3.Connection) -> int:
+    """Return the count of admin rows whose `disabled_at` is NULL."""
+    return conn.execute(
+        "SELECT COUNT(*) FROM users "
+        "WHERE role = ? AND disabled_at IS NULL",
+        (ROLE_ADMIN,),
+    ).fetchone()[0]
+
+
+def set_disabled(
+    conn: sqlite3.Connection, user_id: int, disabled: bool
+) -> bool:
+    """
+    Disable or re-enable `user_id`. Bumps token_version when disabling so
+    any previously-issued JWT for that user immediately stops working.
+
+    Returns True if a row was updated, False if the user does not exist.
+    """
+    row = get_user_by_id(conn, user_id)
+    if row is None:
+        return False
+    if disabled:
+        if row["disabled_at"] is not None:
+            return True
+        conn.execute(
+            "UPDATE users SET disabled_at = ?, "
+            "token_version = token_version + 1 WHERE id = ?",
+            (_now_iso(), user_id),
+        )
+    else:
+        if row["disabled_at"] is None:
+            return True
+        conn.execute(
+            "UPDATE users SET disabled_at = NULL WHERE id = ?",
+            (user_id,),
+        )
+    return True
+
+
+def set_role(
+    conn: sqlite3.Connection,
+    user_id: int,
+    role: str,
+    is_restricted: bool,
+) -> bool:
+    """
+    Update role + is_restricted on `user_id`. Bumps token_version when the
+    role or restriction flag actually changes, so old JWTs cannot keep
+    using stale privileges.
+
+    Returns True if the row exists, False otherwise.
+    """
+    if role not in (ROLE_ADMIN, ROLE_USER):
+        raise ValueError(f"invalid role: {role!r}")
+    if role == ROLE_ADMIN and is_restricted:
+        raise ValueError("admin cannot be restricted")
+    row = get_user_by_id(conn, user_id)
+    if row is None:
+        return False
+    same = (
+        row["role"] == role
+        and bool(row["is_restricted"]) == bool(is_restricted)
+    )
+    if same:
+        return True
+    conn.execute(
+        "UPDATE users SET role = ?, is_restricted = ?, "
+        "token_version = token_version + 1 WHERE id = ?",
+        (role, 1 if is_restricted else 0, user_id),
+    )
+    return True
+
+
+def reset_password(
+    conn: sqlite3.Connection, user_id: int, new_password: str
+) -> bool:
+    """
+    Replace the stored bcrypt hash for `user_id` and bump token_version so
+    every existing token for this user becomes invalid immediately.
+    """
+    if not new_password:
+        raise ValueError("password must be non-empty")
+    row = get_user_by_id(conn, user_id)
+    if row is None:
+        return False
+    conn.execute(
+        "UPDATE users SET password_hash = ?, "
+        "token_version = token_version + 1 WHERE id = ?",
+        (_hash_password(new_password), user_id),
+    )
+    return True
+
+
 def get_legacy_admin_id(db_path: str) -> Optional[int]:
     """
     Return the user_id of the first user in the table — the seeded admin.

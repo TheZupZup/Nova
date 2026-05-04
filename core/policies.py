@@ -221,6 +221,35 @@ def get_policy(user, db_path: Optional[str] = None) -> Policy:
     return _policy_from_row(row)
 
 
+def get_family_controls_dict(
+    user_id: int, db_path: Optional[str] = None
+) -> Optional[dict]:
+    """
+    Return the family_controls row for `user_id` as a plain dict, or None
+    if no row exists. Caller-friendly view used by the admin endpoints.
+    """
+    try:
+        with _open(db_path) as conn:
+            row = _read_family_controls(conn, user_id)
+    except sqlite3.DatabaseError:
+        return None
+    if row is None:
+        return None
+    return {
+        "allowed_modes": sorted(_csv_to_modes(row["allowed_modes"])),
+        "web_search_enabled": bool(row["web_search_enabled"]),
+        "weather_enabled": bool(row["weather_enabled"]),
+        "memory_save_enabled": bool(row["memory_save_enabled"]),
+        "memory_import_enabled": bool(row["memory_import_enabled"]),
+        "max_prompt_chars": int(row["max_prompt_chars"]),
+        "daily_message_limit": (
+            int(row["daily_message_limit"])
+            if row["daily_message_limit"] is not None
+            else None
+        ),
+    }
+
+
 def set_family_controls(
     user_id: int,
     *,

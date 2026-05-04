@@ -33,11 +33,16 @@ from core.settings import (
     get_user_setting, save_user_setting,
 )
 from core.policies import (
+    KNOWN_MODES,
     PolicyDenial,
     check_chat_request,
     enforce_daily_limit,
+    get_family_controls_dict,
     get_policy,
+    set_family_controls,
 )
+import sqlite3 as _sqlite3
+from core import users as _users_mod
 from memory.store import (
     list_memories as list_natural_memories,
     delete_memories_matching,
@@ -533,6 +538,265 @@ def update_settings(
     if data.nova_model_name is not None:
         save_user_setting(user.id, "nova_model_name", data.nova_model_name)
     return {"ok": True}
+
+
+# ── ADMIN: USER MANAGEMENT ──────────────────────────────────────────
+
+class AdminCreateUserRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    username: str = Field(min_length=1, max_length=64)
+    password: str = Field(min_length=1, max_length=256)
+    role: str = "user"
+    is_restricted: bool = False
+
+    @field_validator("role")
+    @classmethod
+    def _role(cls, v):
+        if v not in ("admin", "user"):
+            raise ValueError("role must be 'admin' or 'user'")
+        return v
+
+    @field_validator("username")
+    @classmethod
+    def _username(cls, v):
+        v = v.strip()
+        if not v:
+            raise ValueError("username must be non-empty")
+        return v
+
+
+class AdminSetRoleRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    role: str
+    is_restricted: bool = False
+
+    @field_validator("role")
+    @classmethod
+    def _role(cls, v):
+        if v not in ("admin", "user"):
+            raise ValueError("role must be 'admin' or 'user'")
+        return v
+
+
+class AdminDisableRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    disabled: bool
+
+
+class AdminResetPasswordRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    password: str = Field(min_length=1, max_length=256)
+
+
+class AdminFamilyControlsRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    allowed_modes: list[str] | None = None
+    web_search_enabled: bool | None = None
+    weather_enabled: bool | None = None
+    memory_save_enabled: bool | None = None
+    memory_import_enabled: bool | None = None
+    max_prompt_chars: int | None = Field(default=None, ge=0, le=100_000)
+    daily_message_limit: int | None = Field(default=None, ge=0, le=1_000_000)
+
+    @field_validator("allowed_modes")
+    @classmethod
+    def _modes(cls, v):
+        if v is None:
+            return v
+        cleaned = [m for m in v if m in KNOWN_MODES]
+        if not cleaned:
+            raise ValueError("allowed_modes must contain at least one known mode")
+        return cleaned
+
+
+def require_admin(user: CurrentUser = Depends(get_current_user)) -> CurrentUser:
+    if user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin only.")
+    return user
+
+
+def _admin_db():
+    from core.memory import DB_PATH
+    return _sqlite3.connect(DB_PATH)
+
+
+def _user_to_dict(row: dict) -> dict:
+    out = dict(row)
+    out["disabled"] = row.get("disabled_at") is not None
+    out.pop("token_version", None)
+    return out
+
+
+@app.get("/me")
+def whoami(user: CurrentUser = Depends(get_current_user)):
+    return {
+        "id": user.id,
+        "username": user.username,
+        "role": user.role,
+        "is_restricted": user.is_restricted,
+    }
+
+
+@app.get("/admin/users")
+def admin_list_users(_: CurrentUser = Depends(require_admin)):
+    with _admin_db() as conn:
+        users = _users_mod.list_users(conn)
+    out = []
+    for u in users:
+        entry = _user_to_dict(u)
+        if u["is_restricted"]:
+            entry["family_controls"] = get_family_controls_dict(u["id"])
+        else:
+            entry["family_controls"] = None
+        out.append(entry)
+    return out
+
+
+@app.post("/admin/users", status_code=201)
+def admin_create_user(
+    req: AdminCreateUserRequest,
+    _: CurrentUser = Depends(require_admin),
+):
+    if req.role == "admin" and req.is_restricted:
+        raise HTTPException(
+            status_code=400, detail="Admin cannot be restricted."
+        )
+    try:
+        with _admin_db() as conn:
+            try:
+                uid = _users_mod.create_user(
+                    conn,
+                    req.username,
+                    req.password,
+                    role=req.role,
+                    is_restricted=req.is_restricted,
+                )
+            except _sqlite3.IntegrityError:
+                raise HTTPException(
+                    status_code=409, detail="Username already exists."
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc))
+            row = _users_mod.get_user_by_id(conn, uid)
+    finally:
+        pass
+    return _user_to_dict({
+        "id": int(row["id"]),
+        "username": row["username"],
+        "role": row["role"],
+        "is_restricted": bool(row["is_restricted"]),
+        "created_at": row["created_at"],
+        "disabled_at": row["disabled_at"],
+    })
+
+
+@app.post("/admin/users/{user_id}/disable")
+def admin_set_disabled(
+    user_id: int,
+    req: AdminDisableRequest,
+    actor: CurrentUser = Depends(require_admin),
+):
+    with _admin_db() as conn:
+        target = _users_mod.get_user_by_id(conn, user_id)
+        if target is None:
+            raise HTTPException(status_code=404, detail="User not found.")
+
+        if req.disabled:
+            # Block disabling the last active admin or self-lockout.
+            if target["role"] == "admin" and target["disabled_at"] is None:
+                active = _users_mod.count_active_admins(conn)
+                if active <= 1:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Cannot disable the only active admin.",
+                    )
+            if int(target["id"]) == int(actor.id):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Admin cannot disable their own account.",
+                )
+
+        _users_mod.set_disabled(conn, user_id, req.disabled)
+    return {"ok": True}
+
+
+@app.post("/admin/users/{user_id}/role")
+def admin_set_role(
+    user_id: int,
+    req: AdminSetRoleRequest,
+    actor: CurrentUser = Depends(require_admin),
+):
+    if req.role == "admin" and req.is_restricted:
+        raise HTTPException(
+            status_code=400, detail="Admin cannot be restricted."
+        )
+    with _admin_db() as conn:
+        target = _users_mod.get_user_by_id(conn, user_id)
+        if target is None:
+            raise HTTPException(status_code=404, detail="User not found.")
+        # Demoting the last admin would lock out admin access entirely.
+        if (
+            target["role"] == "admin"
+            and req.role != "admin"
+            and target["disabled_at"] is None
+        ):
+            active = _users_mod.count_active_admins(conn)
+            if active <= 1:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Cannot demote the only active admin.",
+                )
+        try:
+            _users_mod.set_role(
+                conn, user_id, req.role, req.is_restricted
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+    return {"ok": True}
+
+
+@app.post("/admin/users/{user_id}/password")
+def admin_reset_password(
+    user_id: int,
+    req: AdminResetPasswordRequest,
+    _: CurrentUser = Depends(require_admin),
+):
+    with _admin_db() as conn:
+        ok = _users_mod.reset_password(conn, user_id, req.password)
+    if not ok:
+        raise HTTPException(status_code=404, detail="User not found.")
+    return {"ok": True}
+
+
+@app.put("/admin/users/{user_id}/family-controls")
+def admin_set_family_controls(
+    user_id: int,
+    req: AdminFamilyControlsRequest,
+    _: CurrentUser = Depends(require_admin),
+):
+    with _admin_db() as conn:
+        target = _users_mod.get_user_by_id(conn, user_id)
+        if target is None:
+            raise HTTPException(status_code=404, detail="User not found.")
+        if not bool(target["is_restricted"]):
+            raise HTTPException(
+                status_code=400,
+                detail="Family controls only apply to restricted users.",
+            )
+    set_family_controls(
+        user_id,
+        allowed_modes=req.allowed_modes,
+        web_search_enabled=req.web_search_enabled,
+        weather_enabled=req.weather_enabled,
+        memory_save_enabled=req.memory_save_enabled,
+        memory_import_enabled=req.memory_import_enabled,
+        max_prompt_chars=req.max_prompt_chars,
+        daily_message_limit=req.daily_message_limit,
+    )
+    return {
+        "ok": True,
+        "family_controls": get_family_controls_dict(user_id),
+    }
 
 
 @app.get("/channel")
