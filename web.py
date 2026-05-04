@@ -41,6 +41,10 @@ from core.policies import (
     get_policy,
     set_family_controls,
 )
+from core.model_registry import (
+    list_registered as list_registered_models,
+    reconcile_installed as reconcile_installed_models,
+)
 import sqlite3 as _sqlite3
 from core import users as _users_mod
 from memory.store import (
@@ -797,6 +801,22 @@ def admin_set_family_controls(
         "ok": True,
         "family_controls": get_family_controls_dict(user_id),
     }
+
+
+# ── ADMIN: MODEL REGISTRY ───────────────────────────────────────────
+# Read-only view of the local-Ollama model registry seeded at startup
+# from config.MODELS. Raw model names are admin-only; non-admin /
+# restricted callers are blocked by `require_admin`. Pulling models
+# (#111) and per-user model access (#112) are intentionally not wired
+# in this endpoint.
+
+@app.get("/admin/models")
+def admin_list_models(_: CurrentUser = Depends(require_admin)):
+    # Best-effort install-flag refresh; if Ollama is down the persisted
+    # flags are returned as-is. This call is read-only — `client.list()` —
+    # and never triggers a pull.
+    reconcile_installed_models()
+    return list_registered_models()
 
 
 @app.get("/channel")
