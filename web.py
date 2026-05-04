@@ -32,6 +32,12 @@ from core.memory import (
 from core.settings import (
     get_user_setting, save_user_setting,
 )
+from core.policies import (
+    PolicyDenial,
+    check_chat_request,
+    enforce_daily_limit,
+    get_policy,
+)
 from memory.store import (
     list_memories as list_natural_memories,
     delete_memories_matching,
@@ -287,6 +293,14 @@ def get_current_user(
     return user
 
 
+def _raise_policy_denial(denial: PolicyDenial) -> None:
+    raise HTTPException(
+        status_code=denial.status_code,
+        detail=denial.detail,
+        headers=denial.headers or None,
+    )
+
+
 @app.post("/login")
 def login(request: LoginRequest, _: None = Depends(check_login_rate_limit)):
     user = authenticate(request.username, request.password)
@@ -333,13 +347,37 @@ def remove_conversation(
 
 @app.post("/chat")
 def chat_endpoint(request: ChatRequest, user: CurrentUser = Depends(get_current_user)):
+    policy = get_policy(user)
+
+    denial = check_chat_request(
+        policy,
+        mode=request.mode,
+        message=request.message,
+        requested_search=request.search,
+    )
+    if denial is not None:
+        _raise_policy_denial(denial)
+
+    denial = enforce_daily_limit(policy, user.id)
+    if denial is not None:
+        _raise_policy_denial(denial)
+
     memories = load_memories(user.id)
+
+    msg_lower = request.message.lower().strip()
+    is_manual_memory_command = any(
+        msg_lower.startswith(p)
+        for p in ("retiens ça:", "souviens-toi de ça:", "souviens-toi:")
+    )
+    if is_manual_memory_command and not policy.memory_save_enabled:
+        raise HTTPException(
+            status_code=403,
+            detail="Memory saving is disabled for this account.",
+        )
 
     reply = handle_manual_memory_command(request.message, user.id)
     if reply is not None:
         return {"response": reply, "model": "system", "conversation_id": request.conversation_id}
-
-    msg_lower = request.message.lower().strip()
 
     if msg_lower.startswith("forget that ") or msg_lower.startswith("oublie que "):
         query = request.message.split(" ", 2)[2].strip()
@@ -385,7 +423,7 @@ def chat_endpoint(request: ChatRequest, user: CurrentUser = Depends(get_current_
         )
     else:
         forced_model = MODE_MAP.get(request.mode)
-    response, model_used = chat(history, request.message, memories, user.id, forced_model=forced_model, force_search=request.search, image=request.image)
+    response, model_used = chat(history, request.message, memories, user.id, forced_model=forced_model, force_search=request.search, image=request.image, policy=policy)
 
     save_message(conversation_id, "user", request.message)
     save_message(conversation_id, "assistant", response, model_used)
@@ -434,6 +472,12 @@ def add_memory(
     request: MemoryAddRequest,
     user: CurrentUser = Depends(get_current_user),
 ):
+    policy = get_policy(user)
+    if not policy.memory_save_enabled:
+        raise HTTPException(
+            status_code=403,
+            detail="Memory saving is disabled for this account.",
+        )
     save_memory(request.category, request.content, user.id)
     return {"ok": True}
 

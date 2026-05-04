@@ -6,6 +6,7 @@ from typing import Optional
 from memory.store import initialize_memory_database as _init_natural_memory
 from core import users as _users
 from core.settings import migrate_user_settings as _migrate_user_settings
+from core.policies import migrate_family_controls as _migrate_family_controls
 
 DB_PATH = "nova.db"
 
@@ -91,6 +92,7 @@ def initialize_db():
     _migrate_conversation_ownership(DB_PATH)
     _migrate_memories_ownership(DB_PATH)
     _migrate_user_settings(DB_PATH)
+    _migrate_family_controls(DB_PATH)
     _init_natural_memory(DB_PATH)
 
 

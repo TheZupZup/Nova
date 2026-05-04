@@ -5,6 +5,7 @@ from config import NOVA_SYSTEM_PROMPT, CHAT_HISTORY_LIMIT, MODELS
 from core.ollama_client import client
 from core.memory import format_memories_for_prompt, parse_and_save
 from core.identity import IDENTITY_CONTRACT
+from core.policies import ADMIN_POLICY, Policy
 from core.router import route
 from core.search import web_search, should_search
 from core.weather import detect_weather_city, get_weather
@@ -101,14 +102,20 @@ def build_image_messages(user_input: str, image: str) -> list[dict]:
     }]
 
 
-def chat(history: list[dict], user_input: str, memories: list[dict], user_id: int, forced_model: str = None, force_search: bool = False, image: str = None) -> tuple[str, str]:
+def chat(history: list[dict], user_input: str, memories: list[dict], user_id: int, forced_model: str = None, force_search: bool = False, image: str = None, policy: Policy | None = None) -> tuple[str, str]:  # noqa: E501
     """
     Envoie un message à Nova et retourne sa réponse et le modèle utilisé.
 
     Toutes les opérations mémoire (récupération, extraction, sauvegarde)
     sont scopées à `user_id` — un utilisateur ne voit jamais les souvenirs
     d'un autre.
+
+    `policy` gates the dual-use side effects (weather lookup, web search,
+    memory extraction). It defaults to the admin policy so non-HTTP
+    callers (CLI, learner) keep their pre-#108 behaviour.
     """
+    if policy is None:
+        policy = ADMIN_POLICY
     try:
         # Image → vision model, no routing
         if image:
@@ -116,31 +123,35 @@ def chat(history: list[dict], user_input: str, memories: list[dict], user_id: in
             messages = build_image_messages(user_input, image)
             response = client.chat(model=MODELS["default"], messages=messages)
             reply = response["message"]["content"]
-            extract_and_save_memory(user_input or "image", reply, user_id)
+            if policy.memory_save_enabled:
+                extract_and_save_memory(user_input or "image", reply, user_id)
             return reply, MODELS["default"]
 
         model = forced_model if forced_model else route(user_input)
 
         natural_mems = get_relevant_memories(user_input, user_id)
 
-        # Météo en temps réel
-        weather_result = detect_weather_city(user_input)
-        if isinstance(weather_result, tuple):
-            lat, lon, city = weather_result
-            weather_data = get_weather(lat, lon, city)
-            messages = build_messages(history, user_input, memories, weather_data, "weather")
-            response = client.chat(model=model, messages=messages)
-            reply = response["message"]["content"]
-            return reply, model
+        # Weather is gated; restricted users with weather disabled fall
+        # straight through to the regular chat branch.
+        if policy.weather_enabled:
+            weather_result = detect_weather_city(user_input)
+            if isinstance(weather_result, tuple):
+                lat, lon, city = weather_result
+                weather_data = get_weather(lat, lon, city)
+                messages = build_messages(history, user_input, memories, weather_data, "weather")
+                response = client.chat(model=model, messages=messages)
+                reply = response["message"]["content"]
+                return reply, model
 
-        if weather_result in ("no_city", "multiple"):
-            return "Quelle ville ?", model
+            if weather_result in ("no_city", "multiple"):
+                return "Quelle ville ?", model
 
-        if weather_result == "unknown_city":
-            return "Je n'ai pas accès à la météo pour cette ville.", model
+            if weather_result == "unknown_city":
+                return "Je n'ai pas accès à la météo pour cette ville.", model
 
-        # Web search
-        if force_search or should_search(user_input):
+        # Web search — both the explicit `force_search` flag and the
+        # auto-detected `should_search` path require web_search_enabled.
+        if policy.web_search_enabled and (force_search or should_search(user_input)):
             search_results = web_search(user_input)
             messages = build_messages(history, user_input, memories, search_results, "search")
             response = client.chat(model=model, messages=messages)
@@ -161,15 +172,16 @@ def chat(history: list[dict], user_input: str, memories: list[dict], user_id: in
             "je ne suis pas sûr", "je ne suis pas certain",
         ]
 
-        if any(t in reply.lower() for t in uncertainty_triggers):
+        if policy.web_search_enabled and any(t in reply.lower() for t in uncertainty_triggers):
             search_results = web_search(user_input)
             if search_results and "Aucun résultat" not in search_results:
                 messages = build_messages(history, user_input, memories, search_results, "search")
                 response = client.chat(model=model, messages=messages)
                 reply = response["message"]["content"]
 
-        extract_and_save_memory(user_input, reply, user_id)
-        _extract_and_save_natural_memories(user_input, user_id)
+        if policy.memory_save_enabled:
+            extract_and_save_memory(user_input, reply, user_id)
+            _extract_and_save_natural_memories(user_input, user_id)
         return reply, model
 
     except (ollama.ResponseError, ConnectionError, httpx.HTTPError) as e:
