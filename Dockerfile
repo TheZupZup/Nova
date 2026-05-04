@@ -47,5 +47,5 @@ EXPOSE 8080
 
 VOLUME ["/data"]
 
-ENTRYPOINT ["/usr/sbin/tini", "--", "/usr/local/bin/nova-entrypoint"]
+ENTRYPOINT ["tini", "--", "/usr/local/bin/nova-entrypoint"]
 CMD ["uvicorn", "web:app", "--host", "0.0.0.0", "--port", "8080"]
