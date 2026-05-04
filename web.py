@@ -45,6 +45,7 @@ from core.model_registry import (
     list_registered as list_registered_models,
     reconcile_installed as reconcile_installed_models,
 )
+from core import model_pulls as _model_pulls
 import sqlite3 as _sqlite3
 from core import users as _users_mod
 from memory.store import (
@@ -817,6 +818,63 @@ def admin_list_models(_: CurrentUser = Depends(require_admin)):
     # and never triggers a pull.
     reconcile_installed_models()
     return list_registered_models()
+
+
+# ── ADMIN: MODEL PULL ───────────────────────────────────────────────
+# Admin-only Ollama pull flow (#111). The pull itself runs on a daemon
+# thread so /chat is never blocked. Model names are validated against a
+# strict allowlist before any Ollama call. Per-user / per-role model
+# access (#112), pull cancellation, and model deletion are intentionally
+# not part of this endpoint.
+
+class AdminPullModelRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    model: str = Field(min_length=1, max_length=200)
+
+
+@app.post("/admin/models/pull", status_code=202)
+def admin_pull_model(
+    req: AdminPullModelRequest,
+    _: CurrentUser = Depends(require_admin),
+):
+    try:
+        job = _model_pulls.request_pull(req.model)
+    except _model_pulls.InvalidModelName as exc:
+        # Surface a generic message; the regex specifics are not useful
+        # to the client and could be probed for behaviour.
+        raise HTTPException(status_code=400, detail=str(exc))
+    except _model_pulls.ModelAlreadyInstalled:
+        # 200 + a clear status so the admin UI can show "already installed"
+        # without retrying. We do not start a new job.
+        return JSONResponse(
+            status_code=200,
+            content={"status": "already_installed", "model": req.model},
+        )
+    except _model_pulls.PullAlreadyInProgress as exc:
+        # 200 with the existing job — the caller polls the same id.
+        return JSONResponse(status_code=200, content=exc.job)
+    except _model_pulls.TooManyPullsInProgress as exc:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Too many pulls in progress (cap={exc.cap}).",
+        )
+    return job
+
+
+@app.get("/admin/models/pulls")
+def admin_list_pulls(_: CurrentUser = Depends(require_admin)):
+    return _model_pulls.list_pulls()
+
+
+@app.get("/admin/models/pulls/{pull_id}")
+def admin_get_pull(
+    pull_id: int,
+    _: CurrentUser = Depends(require_admin),
+):
+    job = _model_pulls.get_pull(pull_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Pull job not found.")
+    return job
 
 
 @app.get("/channel")
