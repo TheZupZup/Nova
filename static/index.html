@@ -814,9 +814,9 @@
             background: var(--bg2);
             border: 1px solid var(--border);
             border-radius: 12px;
-            width: 90%;
-            max-width: 560px;
-            max-height: 80dvh;
+            width: 92%;
+            max-width: 760px;
+            max-height: 82dvh;
             display: flex;
             flex-direction: column;
             overflow: hidden;
@@ -849,19 +849,161 @@
 
         #settings-body {
             flex: 1;
+            display: flex;
+            min-height: 0;
+            overflow: hidden;
+        }
+
+        #settings-nav {
+            flex: none;
+            width: 180px;
+            border-right: 1px solid var(--border);
+            padding: 12px 8px;
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+            overflow-y: auto;
+            background: var(--bg);
+        }
+
+        .settings-nav-btn {
+            text-align: left;
+            padding: 8px 12px;
+            background: transparent;
+            border: 1px solid transparent;
+            border-radius: 6px;
+            color: var(--text-dim);
+            font-family: monospace;
+            font-size: 0.85rem;
+            cursor: pointer;
+            transition: color 0.15s, background 0.15s, border-color 0.15s;
+        }
+
+        .settings-nav-btn:hover { color: var(--cyan); }
+
+        .settings-nav-btn.active {
+            color: var(--cyan);
+            background: var(--bg2);
+            border-color: var(--border);
+        }
+
+        .settings-nav-divider {
+            height: 1px;
+            background: var(--border);
+            margin: 6px 4px;
+        }
+
+        #settings-content {
+            flex: 1;
             overflow-y: auto;
             padding: 16px 20px;
             display: flex;
             flex-direction: column;
             gap: 12px;
+            min-width: 0;
         }
 
-        #settings-section-title {
+        .settings-pane { display: none; flex-direction: column; gap: 12px; }
+        .settings-pane.active { display: flex; }
+
+        #settings-section-title,
+        .settings-section-title {
             font-size: 0.75rem;
             color: var(--text-dim);
             text-transform: uppercase;
             letter-spacing: 1px;
             margin-bottom: 4px;
+        }
+
+        .settings-row {
+            background: var(--bg3);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 10px 14px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .settings-row-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+        }
+
+        .settings-row-label {
+            display: flex;
+            flex-direction: column;
+            gap: 3px;
+            min-width: 0;
+        }
+
+        .settings-row-title { font-size: 0.85rem; color: var(--text); }
+        .settings-row-hint { font-size: 0.72rem; color: var(--text-dim); }
+
+        .settings-coming-soon {
+            font-size: 0.68rem;
+            color: var(--text-dim);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            padding: 1px 6px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            white-space: nowrap;
+        }
+
+        .pers-select, .pers-textarea {
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            color: var(--text);
+            font-family: monospace;
+            font-size: 0.8rem;
+            padding: 6px 10px;
+            outline: none;
+        }
+        .pers-select { cursor: pointer; }
+        .pers-textarea { width: 100%; box-sizing: border-box; resize: vertical; min-height: 70px; }
+        .pers-select:disabled, .pers-textarea:disabled {
+            opacity: 0.55;
+            cursor: not-allowed;
+        }
+
+        #mem-search {
+            width: 100%;
+            box-sizing: border-box;
+            padding: 7px 10px;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            color: var(--text);
+            font-family: monospace;
+            font-size: 0.85rem;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+        #mem-search:focus { border-color: var(--cyan); }
+
+        @media (max-width: 640px) {
+            #settings-panel {
+                width: 96%;
+                max-height: 90dvh;
+            }
+            #settings-body { flex-direction: column; }
+            #settings-nav {
+                width: auto;
+                flex-direction: row;
+                overflow-x: auto;
+                overflow-y: hidden;
+                border-right: none;
+                border-bottom: 1px solid var(--border);
+                padding: 8px;
+                gap: 4px;
+            }
+            .settings-nav-btn { white-space: nowrap; padding: 6px 10px; }
+            .settings-nav-divider { display: none; }
+            #settings-content { padding: 14px 16px; }
         }
 
         .memory-item {
@@ -1510,73 +1652,221 @@
 <div id="settings-overlay" onclick="handleSettingsOverlayClick(event)">
     <div id="settings-panel">
         <div id="settings-header">
-            <h2>⚙ SETTINGS</h2>
+            <h2 id="settings-title">⚙ SETTINGS</h2>
             <button id="settings-close" onclick="closeSettings()">✕</button>
         </div>
         <div id="settings-body">
-            <div id="settings-section-title">System</div>
-            <div class="memory-item" style="flex-direction:column;gap:10px;">
-                <div style="display:flex;align-items:center;justify-content:space-between;">
-                    <span style="font-size:0.85rem;">RAM Budget</span>
-                    <select id="ram-budget-select" onchange="saveRamBudget()" style="background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:monospace;font-size:0.8rem;padding:4px 8px;cursor:pointer;">
-                        <option value="512">512 MB — Minimal</option>
-                        <option value="1024">1 GB — Light</option>
-                        <option value="2048" selected>2 GB — Default</option>
-                        <option value="4096">4 GB — Comfortable</option>
-                        <option value="8192">8 GB — Heavy</option>
-                        <option value="16384">16 GB — Power user</option>
-                        <option value="32768">32 GB — Beast mode 🔥</option>
-                        <option value="custom">Custom...</option>
-                    </select>
-                <div id="custom-ram-div" style="display:none;margin-top:8px;">
-                    <input id="custom-ram-input" type="number" min="512" max="999999" 
-                        placeholder="MB (ex: 131072 = 128GB)"
-                        style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:monospace;font-size:0.8rem;padding:6px 10px;outline:none;"
-                        onchange="saveCustomRam()" />
-                    <div style="font-size:0.7rem;color:var(--text-dim);margin-top:4px;">Enter value in MB — 128GB = 131072 MB</div>
-                </div>
-                </div>
-                <div style="font-size:0.72rem;color:var(--text-dim);">Controls conversation history size and memory limits</div>
-            </div>
-            <div id="settings-section-title" style="margin-top:12px;">Models</div>
-            <div class="memory-item" style="flex-direction:column;gap:10px;">
-                <div style="display:flex;align-items:center;justify-content:space-between;">
-                    <div style="display:flex;flex-direction:column;gap:3px;">
-                        <span style="font-size:0.85rem;">Auto-update models</span>
-                        <span id="last-update-text" style="font-size:0.72rem;color:var(--text-dim);">Last update: checking...</span>
+            <nav id="settings-nav">
+                <button class="settings-nav-btn active" data-pane="general" onclick="switchSettingsPane('general')" id="settings-nav-general">General</button>
+                <button class="settings-nav-btn" data-pane="personalization" onclick="switchSettingsPane('personalization')" id="settings-nav-personalization">Personalization</button>
+                <button class="settings-nav-btn" data-pane="memory" onclick="switchSettingsPane('memory')" id="settings-nav-memory">Memory</button>
+                <button class="settings-nav-btn" data-pane="models" onclick="switchSettingsPane('models')" id="settings-nav-models">Models</button>
+                <button class="settings-nav-btn" data-pane="admin" onclick="switchSettingsPane('admin')" id="settings-nav-admin" style="display:none;">Admin</button>
+                <div class="settings-nav-divider"></div>
+                <button class="settings-nav-btn" data-pane="account" onclick="switchSettingsPane('account')" id="settings-nav-account">Account</button>
+            </nav>
+            <div id="settings-content">
+                <!-- GENERAL -->
+                <section class="settings-pane active" id="settings-pane-general">
+                    <div class="settings-section-title" id="settings-general-title">General</div>
+                    <div class="settings-row">
+                        <div class="settings-row-head">
+                            <div class="settings-row-label">
+                                <span class="settings-row-title" id="settings-ram-title">RAM Budget</span>
+                                <span class="settings-row-hint" id="settings-ram-hint">Controls conversation history size and memory limits</span>
+                            </div>
+                            <select id="ram-budget-select" class="pers-select" onchange="saveRamBudget()">
+                                <option value="512">512 MB — Minimal</option>
+                                <option value="1024">1 GB — Light</option>
+                                <option value="2048" selected>2 GB — Default</option>
+                                <option value="4096">4 GB — Comfortable</option>
+                                <option value="8192">8 GB — Heavy</option>
+                                <option value="16384">16 GB — Power user</option>
+                                <option value="32768">32 GB — Beast mode 🔥</option>
+                                <option value="custom">Custom...</option>
+                            </select>
+                        </div>
+                        <div id="custom-ram-div" style="display:none;">
+                            <input id="custom-ram-input" type="number" min="512" max="999999"
+                                placeholder="MB (ex: 131072 = 128GB)"
+                                style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:monospace;font-size:0.8rem;padding:6px 10px;outline:none;box-sizing:border-box;"
+                                onchange="saveCustomRam()" />
+                            <div style="font-size:0.7rem;color:var(--text-dim);margin-top:4px;">Enter value in MB — 128GB = 131072 MB</div>
+                        </div>
                     </div>
-                    <button onclick="triggerModelUpdate()" id="update-models-btn" class="memory-btn" style="white-space:nowrap;">
-                        Check now
-                    </button>
-                </div>
-            </div>
-            <div id="settings-section-title" style="margin-top:12px;">Nova Model</div>
-            <div class="memory-item" style="flex-direction:column;gap:10px;">
-                <div style="display:flex;align-items:center;justify-content:space-between;">
-                    <div style="display:flex;flex-direction:column;gap:3px;">
-                        <span style="font-size:0.85rem;">Use Nova model</span>
-                        <span style="font-size:0.72rem;color:var(--text-dim);">Override all routing with a single model</span>
+                    <div class="settings-row">
+                        <div class="settings-row-head">
+                            <div class="settings-row-label">
+                                <span class="settings-row-title" id="settings-update-title">Auto-update models</span>
+                                <span id="last-update-text" class="settings-row-hint">Last update: checking...</span>
+                            </div>
+                            <button onclick="triggerModelUpdate()" id="update-models-btn" class="memory-btn" style="white-space:nowrap;">
+                                Check now
+                            </button>
+                        </div>
                     </div>
-                    <button id="nova-model-toggle-btn" onclick="toggleNovaModel()"
-                        style="font-family:monospace;font-size:0.75rem;padding:4px 12px;border-radius:6px;cursor:pointer;border:1px solid var(--border);background:var(--bg);color:var(--text-dim);min-width:52px;">
-                        OFF
-                    </button>
-                </div>
-                <div id="nova-model-name-div" style="display:none;flex-direction:column;gap:4px;">
-                    <input id="nova-model-name-input" type="text" placeholder="nova-assistant"
-                        style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:monospace;font-size:0.8rem;padding:6px 10px;outline:none;box-sizing:border-box;"
-                        onblur="saveNovaModelName()" onkeydown="if(event.key==='Enter')saveNovaModelName()" />
-                    <div style="font-size:0.7rem;color:var(--text-dim);">Ollama model name (e.g. nova-assistant, llama3:8b)</div>
-                </div>
-            </div>
-            <div id="settings-section-title" style="margin-top:12px;">Memories</div>
-            <div id="memories-list"></div>
-            <div id="add-memory-form">
-                <div class="add-memory-row">
-                    <input class="memory-input category" id="new-mem-category" placeholder="category" />
-                    <input class="memory-input" id="new-mem-content" placeholder="content..." />
-                </div>
-                <button id="add-memory-btn" onclick="addMemory()">+ Add memory</button>
+                </section>
+
+                <!-- PERSONALIZATION -->
+                <section class="settings-pane" id="settings-pane-personalization">
+                    <div class="settings-section-title" id="settings-personalization-title">Personalization</div>
+                    <div class="settings-row-hint" id="settings-personalization-note">
+                        These preferences will shape Nova's tone in your conversations. Saved per-user; visible only to you.
+                    </div>
+
+                    <div class="settings-row">
+                        <div class="settings-row-head">
+                            <div class="settings-row-label">
+                                <span class="settings-row-title" id="pers-style-title">Response style</span>
+                                <span class="settings-row-hint" id="pers-style-hint">How detailed Nova's answers should be.</span>
+                            </div>
+                            <span class="settings-coming-soon" id="pers-coming-soon-1">coming soon</span>
+                        </div>
+                        <select id="pers-response-style" class="pers-select" disabled>
+                            <option value="default">Default</option>
+                            <option value="concise">Concise</option>
+                            <option value="detailed">Detailed</option>
+                            <option value="technical">Technical</option>
+                        </select>
+                    </div>
+
+                    <div class="settings-row">
+                        <div class="settings-row-head">
+                            <div class="settings-row-label">
+                                <span class="settings-row-title" id="pers-warmth-title">Warmth</span>
+                                <span class="settings-row-hint" id="pers-warmth-hint">How warm or neutral Nova should sound.</span>
+                            </div>
+                            <span class="settings-coming-soon" id="pers-coming-soon-2">coming soon</span>
+                        </div>
+                        <select id="pers-warmth" class="pers-select" disabled>
+                            <option value="low">Low</option>
+                            <option value="normal" selected>Normal</option>
+                            <option value="high">High</option>
+                        </select>
+                    </div>
+
+                    <div class="settings-row">
+                        <div class="settings-row-head">
+                            <div class="settings-row-label">
+                                <span class="settings-row-title" id="pers-enth-title">Enthusiasm</span>
+                                <span class="settings-row-hint" id="pers-enth-hint">How energetic Nova's replies should feel.</span>
+                            </div>
+                            <span class="settings-coming-soon" id="pers-coming-soon-3">coming soon</span>
+                        </div>
+                        <select id="pers-enthusiasm" class="pers-select" disabled>
+                            <option value="low">Low</option>
+                            <option value="normal" selected>Normal</option>
+                            <option value="high">High</option>
+                        </select>
+                    </div>
+
+                    <div class="settings-row">
+                        <div class="settings-row-head">
+                            <div class="settings-row-label">
+                                <span class="settings-row-title" id="pers-emoji-title">Emoji level</span>
+                                <span class="settings-row-hint" id="pers-emoji-hint">How often Nova may use emoji.</span>
+                            </div>
+                            <span class="settings-coming-soon" id="pers-coming-soon-4">coming soon</span>
+                        </div>
+                        <select id="pers-emoji" class="pers-select" disabled>
+                            <option value="none">None</option>
+                            <option value="low" selected>Low</option>
+                            <option value="medium">Medium</option>
+                        </select>
+                    </div>
+
+                    <div class="settings-row">
+                        <div class="settings-row-head">
+                            <div class="settings-row-label">
+                                <span class="settings-row-title" id="pers-instr-title">Custom instructions</span>
+                                <span class="settings-row-hint" id="pers-instr-hint">A short note Nova should keep in mind for your messages.</span>
+                            </div>
+                            <span class="settings-coming-soon" id="pers-coming-soon-5">coming soon</span>
+                        </div>
+                        <textarea id="pers-custom-instructions" class="pers-textarea" maxlength="1000" disabled
+                            placeholder="e.g. Prefer short answers. Avoid headings unless asked."></textarea>
+                    </div>
+                </section>
+
+                <!-- MEMORY -->
+                <section class="settings-pane" id="settings-pane-memory">
+                    <div class="settings-section-title" id="settings-memory-title">Memory</div>
+                    <div class="settings-row-hint" id="settings-memory-note">
+                        Nova remembers facts you've shared. These memories are private to your account.
+                    </div>
+                    <input type="text" id="mem-search" placeholder="Search memories..." oninput="filterMemories(this.value)" />
+                    <div id="memories-list"></div>
+                    <div id="add-memory-form">
+                        <div class="add-memory-row">
+                            <input class="memory-input category" id="new-mem-category" placeholder="category" />
+                            <input class="memory-input" id="new-mem-content" placeholder="content..." />
+                        </div>
+                        <button id="add-memory-btn" onclick="addMemory()">+ Add memory</button>
+                    </div>
+                </section>
+
+                <!-- MODELS -->
+                <section class="settings-pane" id="settings-pane-models">
+                    <div class="settings-section-title" id="settings-models-title">Models</div>
+                    <div class="settings-row">
+                        <div class="settings-row-head">
+                            <div class="settings-row-label">
+                                <span class="settings-row-title" id="settings-novamodel-title">Use Nova model</span>
+                                <span class="settings-row-hint" id="settings-novamodel-hint">Override all routing with a single model.</span>
+                            </div>
+                            <button id="nova-model-toggle-btn" onclick="toggleNovaModel()"
+                                style="font-family:monospace;font-size:0.75rem;padding:4px 12px;border-radius:6px;cursor:pointer;border:1px solid var(--border);background:var(--bg);color:var(--text-dim);min-width:52px;">
+                                OFF
+                            </button>
+                        </div>
+                        <div id="nova-model-name-div" style="display:none;flex-direction:column;gap:4px;">
+                            <input id="nova-model-name-input" type="text" placeholder="nova-assistant"
+                                style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:monospace;font-size:0.8rem;padding:6px 10px;outline:none;box-sizing:border-box;"
+                                onblur="saveNovaModelName()" onkeydown="if(event.key==='Enter')saveNovaModelName()" />
+                            <div style="font-size:0.7rem;color:var(--text-dim);" id="settings-novamodel-help">Ollama model name (e.g. nova-assistant, llama3:8b)</div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- ADMIN (admin-only) -->
+                <section class="settings-pane" id="settings-pane-admin">
+                    <div class="settings-section-title" id="settings-admin-title">Admin</div>
+                    <div class="settings-row-hint" id="settings-admin-note">
+                        Host-wide controls. Visible only to administrators.
+                    </div>
+                    <div class="settings-row">
+                        <div class="settings-row-head">
+                            <div class="settings-row-label">
+                                <span class="settings-row-title" id="settings-admin-console-title">User and model management</span>
+                                <span class="settings-row-hint" id="settings-admin-console-hint">Manage users, family controls, and model registry.</span>
+                            </div>
+                            <button class="memory-btn" id="settings-open-admin-btn" onclick="openAdminFromSettings()">Open</button>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- ACCOUNT -->
+                <section class="settings-pane" id="settings-pane-account">
+                    <div class="settings-section-title" id="settings-account-title">Account</div>
+                    <div class="settings-row">
+                        <div class="settings-row-head">
+                            <div class="settings-row-label">
+                                <span class="settings-row-title" id="settings-account-user-label">Signed in as</span>
+                                <span class="settings-row-hint" id="settings-account-username">—</span>
+                            </div>
+                            <span id="settings-account-role" class="user-role-tag">user</span>
+                        </div>
+                    </div>
+                    <div class="settings-row">
+                        <div class="settings-row-head">
+                            <div class="settings-row-label">
+                                <span class="settings-row-title" id="settings-account-logout-title">Sign out</span>
+                                <span class="settings-row-hint" id="settings-account-logout-hint">End the current session on this device.</span>
+                            </div>
+                            <button class="memory-btn delete" onclick="logout()" id="settings-account-logout-btn">Logout</button>
+                        </div>
+                    </div>
+                </section>
             </div>
         </div>
     </div>
@@ -1630,6 +1920,46 @@
             role_admin: "admin",
             role_restricted: "restreint",
             role_user: "utilisateur",
+            settings_title: "⚙ PARAMÈTRES",
+            nav_general: "Général",
+            nav_personalization: "Personnalisation",
+            nav_memory: "Mémoire",
+            nav_models: "Modèles",
+            nav_admin: "Admin",
+            nav_account: "Compte",
+            section_general: "Général",
+            section_personalization: "Personnalisation",
+            section_memory: "Mémoire",
+            section_models: "Modèles",
+            section_admin: "Admin",
+            section_account: "Compte",
+            ram_title: "Budget RAM",
+            ram_hint: "Contrôle la taille de l'historique et des mémoires",
+            update_title: "Mise à jour automatique des modèles",
+            personalization_note: "Ces préférences ajusteront le ton de Nova dans tes conversations. Stockées par utilisateur, visibles uniquement par toi.",
+            pers_style_title: "Style de réponse",
+            pers_style_hint: "Niveau de détail des réponses de Nova.",
+            pers_warmth_title: "Chaleur",
+            pers_warmth_hint: "Ton chaleureux ou neutre.",
+            pers_enth_title: "Enthousiasme",
+            pers_enth_hint: "Énergie des réponses.",
+            pers_emoji_title: "Niveau d'emoji",
+            pers_emoji_hint: "Fréquence des emoji.",
+            pers_instr_title: "Instructions personnalisées",
+            pers_instr_hint: "Une note courte que Nova garde en tête pour tes messages.",
+            coming_soon: "bientôt",
+            memory_note: "Nova retient les faits que tu as partagés. Ces mémoires sont privées à ton compte.",
+            mem_search_placeholder: "Rechercher dans les mémoires...",
+            novamodel_title: "Utiliser le modèle Nova",
+            novamodel_hint: "Remplace tout le routage par un seul modèle.",
+            novamodel_help: "Nom du modèle Ollama (ex. nova-assistant, llama3:8b)",
+            admin_note: "Contrôles à l'échelle de l'hôte. Visibles uniquement par les administrateurs.",
+            admin_console_title: "Gestion des utilisateurs et modèles",
+            admin_console_hint: "Gérer les utilisateurs, les contrôles familiaux et le registre des modèles.",
+            admin_open: "Ouvrir",
+            account_user_label: "Connecté en tant que",
+            account_logout_title: "Se déconnecter",
+            account_logout_hint: "Met fin à la session sur cet appareil.",
         },
         en: {
             never_checked: "Never checked",
@@ -1677,6 +2007,46 @@
             role_admin: "admin",
             role_restricted: "restricted",
             role_user: "user",
+            settings_title: "⚙ SETTINGS",
+            nav_general: "General",
+            nav_personalization: "Personalization",
+            nav_memory: "Memory",
+            nav_models: "Models",
+            nav_admin: "Admin",
+            nav_account: "Account",
+            section_general: "General",
+            section_personalization: "Personalization",
+            section_memory: "Memory",
+            section_models: "Models",
+            section_admin: "Admin",
+            section_account: "Account",
+            ram_title: "RAM Budget",
+            ram_hint: "Controls conversation history size and memory limits",
+            update_title: "Auto-update models",
+            personalization_note: "These preferences will shape Nova's tone in your conversations. Saved per-user; visible only to you.",
+            pers_style_title: "Response style",
+            pers_style_hint: "How detailed Nova's answers should be.",
+            pers_warmth_title: "Warmth",
+            pers_warmth_hint: "How warm or neutral Nova should sound.",
+            pers_enth_title: "Enthusiasm",
+            pers_enth_hint: "How energetic Nova's replies should feel.",
+            pers_emoji_title: "Emoji level",
+            pers_emoji_hint: "How often Nova may use emoji.",
+            pers_instr_title: "Custom instructions",
+            pers_instr_hint: "A short note Nova should keep in mind for your messages.",
+            coming_soon: "coming soon",
+            memory_note: "Nova remembers facts you've shared. These memories are private to your account.",
+            mem_search_placeholder: "Search memories...",
+            novamodel_title: "Use Nova model",
+            novamodel_hint: "Override all routing with a single model.",
+            novamodel_help: "Ollama model name (e.g. nova-assistant, llama3:8b)",
+            admin_note: "Host-wide controls. Visible only to administrators.",
+            admin_console_title: "User and model management",
+            admin_console_hint: "Manage users, family controls, and model registry.",
+            admin_open: "Open",
+            account_user_label: "Signed in as",
+            account_logout_title: "Sign out",
+            account_logout_hint: "End the current session on this device.",
         }
     };
 
@@ -1744,9 +2114,69 @@
         // Re-render the user card so the role label tracks the language.
         applyUserCard();
 
+        // Settings panel labels
+        applySettingsLang();
+
         // Re-render the conversation list so group headers and empty
         // labels pick up the new language.
         if (typeof renderConversations === "function") renderConversations();
+    }
+
+    function _setText(id, value) {
+        const el = document.getElementById(id);
+        if (el) el.textContent = value;
+    }
+
+    function applySettingsLang() {
+        _setText("settings-title", t("settings_title"));
+        _setText("settings-nav-general", t("nav_general"));
+        _setText("settings-nav-personalization", t("nav_personalization"));
+        _setText("settings-nav-memory", t("nav_memory"));
+        _setText("settings-nav-models", t("nav_models"));
+        _setText("settings-nav-admin", t("nav_admin"));
+        _setText("settings-nav-account", t("nav_account"));
+
+        _setText("settings-general-title", t("section_general"));
+        _setText("settings-personalization-title", t("section_personalization"));
+        _setText("settings-memory-title", t("section_memory"));
+        _setText("settings-models-title", t("section_models"));
+        _setText("settings-admin-title", t("section_admin"));
+        _setText("settings-account-title", t("section_account"));
+
+        _setText("settings-ram-title", t("ram_title"));
+        _setText("settings-ram-hint", t("ram_hint"));
+        _setText("settings-update-title", t("update_title"));
+
+        _setText("settings-personalization-note", t("personalization_note"));
+        _setText("pers-style-title", t("pers_style_title"));
+        _setText("pers-style-hint", t("pers_style_hint"));
+        _setText("pers-warmth-title", t("pers_warmth_title"));
+        _setText("pers-warmth-hint", t("pers_warmth_hint"));
+        _setText("pers-enth-title", t("pers_enth_title"));
+        _setText("pers-enth-hint", t("pers_enth_hint"));
+        _setText("pers-emoji-title", t("pers_emoji_title"));
+        _setText("pers-emoji-hint", t("pers_emoji_hint"));
+        _setText("pers-instr-title", t("pers_instr_title"));
+        _setText("pers-instr-hint", t("pers_instr_hint"));
+        for (let i = 1; i <= 5; i++) _setText("pers-coming-soon-" + i, t("coming_soon"));
+
+        _setText("settings-memory-note", t("memory_note"));
+        const memSearch = document.getElementById("mem-search");
+        if (memSearch) memSearch.placeholder = t("mem_search_placeholder");
+
+        _setText("settings-novamodel-title", t("novamodel_title"));
+        _setText("settings-novamodel-hint", t("novamodel_hint"));
+        _setText("settings-novamodel-help", t("novamodel_help"));
+
+        _setText("settings-admin-note", t("admin_note"));
+        _setText("settings-admin-console-title", t("admin_console_title"));
+        _setText("settings-admin-console-hint", t("admin_console_hint"));
+        _setText("settings-open-admin-btn", t("admin_open"));
+
+        _setText("settings-account-user-label", t("account_user_label"));
+        _setText("settings-account-logout-title", t("account_logout_title"));
+        _setText("settings-account-logout-hint", t("account_logout_hint"));
+        _setText("settings-account-logout-btn", t("logout"));
     }
 
     function toggleLang() {
@@ -1973,6 +2403,8 @@
                     adminBtn.style.display = currentUser.role === "admin" ? "block" : "none";
                 }
                 applyUserCard();
+                applySettingsAdminVisibility();
+                applySettingsAccount();
             }
         } catch (e) {}
     }
@@ -2492,9 +2924,15 @@
         });
     }
 
+    let settingsCurrentPane = "general";
+    let allMemoriesCache = [];
+
     async function openSettings() {
         document.getElementById("settings-overlay").classList.add("open");
         closeSidebar();
+        applySettingsAdminVisibility();
+        applySettingsAccount();
+        switchSettingsPane(settingsCurrentPane || "general");
         await loadSystemSettings();
         await loadMemories();
     }
@@ -2507,12 +2945,77 @@
         if (e.target === document.getElementById("settings-overlay")) closeSettings();
     }
 
+    function switchSettingsPane(pane) {
+        if (pane === "admin" && (!currentUser || currentUser.role !== "admin")) {
+            // Defensive: never reveal the admin pane to a non-admin even
+            // if a stale handler tries to switch to it.
+            pane = "general";
+        }
+        settingsCurrentPane = pane;
+        document.querySelectorAll(".settings-nav-btn").forEach(b => {
+            b.classList.toggle("active", b.dataset.pane === pane);
+        });
+        document.querySelectorAll(".settings-pane").forEach(p => {
+            p.classList.toggle("active", p.id === "settings-pane-" + pane);
+        });
+    }
+
+    function applySettingsAdminVisibility() {
+        const navAdmin = document.getElementById("settings-nav-admin");
+        if (!navAdmin) return;
+        const isAdmin = !!(currentUser && currentUser.role === "admin");
+        navAdmin.style.display = isAdmin ? "" : "none";
+        if (!isAdmin && settingsCurrentPane === "admin") {
+            settingsCurrentPane = "general";
+        }
+    }
+
+    function applySettingsAccount() {
+        if (!currentUser) return;
+        const nameEl = document.getElementById("settings-account-username");
+        if (nameEl) nameEl.textContent = currentUser.username || "—";
+        const tagEl = document.getElementById("settings-account-role");
+        if (tagEl) {
+            const r = currentUser.role === "admin"
+                ? "admin"
+                : (currentUser.is_restricted ? "restricted" : "user");
+            tagEl.textContent = t("role_" + r);
+            tagEl.className = "user-role-tag role-" + r;
+        }
+    }
+
+    function openAdminFromSettings() {
+        if (!currentUser || currentUser.role !== "admin") return;
+        closeSettings();
+        openAdmin();
+    }
+
+    function filterMemories(query) {
+        const q = (query || "").trim().toLowerCase();
+        if (!q) {
+            renderMemories(allMemoriesCache);
+            return;
+        }
+        const filtered = allMemoriesCache.filter(m =>
+            (m.category || "").toLowerCase().includes(q) ||
+            (m.content || "").toLowerCase().includes(q)
+        );
+        renderMemories(filtered);
+    }
+
     async function loadMemories() {
         const res = await fetch("/memories", {
             headers: { "Authorization": `Bearer ${token}` }
         });
         const memories = await res.json();
-        renderMemories(memories);
+        allMemoriesCache = Array.isArray(memories) ? memories : [];
+        const search = document.getElementById("mem-search");
+        const q = search ? search.value : "";
+        if (q && q.trim()) {
+            filterMemories(q);
+        } else {
+            renderMemories(allMemoriesCache);
+        }
     }
 
     function renderMemories(memories) {
