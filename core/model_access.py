@@ -41,7 +41,7 @@ from dataclasses import dataclass, field
 from typing import Iterable, Optional
 
 from core.policies import KNOWN_MODES, get_policy
-from core.users import ROLE_ADMIN, ROLE_USER  # noqa: F401
+from core.users import ROLE_USER
 
 
 # ── Friendly mode labels (non-admin /me) ────────────────────────────────────
