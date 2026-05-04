@@ -261,7 +261,7 @@ def _h(token):
 class TestSettingsEndpoint:
     def test_get_returns_user_specific_nova_model_values(self, db_path, web_client):
         a = _make_user(db_path, "alice")
-        b = _make_user(db_path, "bob")
+        _make_user(db_path, "bob")
         core_settings.save_user_setting(a, "nova_model_enabled", "true")
         core_settings.save_user_setting(a, "nova_model_name", "alice-nova")
         # Bob has nothing set; he should see the defaults.
