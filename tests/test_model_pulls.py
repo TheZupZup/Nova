@@ -740,26 +740,9 @@ class TestChatRoutingPreserved:
 
 
 class TestNoPerUserModelAccess:
-    def test_no_model_access_table_introduced(self, db_path):
-        # #112 will introduce some form of user_model_access / allowlist
-        # table. #111 must not. Fail loudly if a future commit slips one
-        # in under this PR's scope.
-        with sqlite3.connect(db_path) as conn:
-            tables = {
-                row[0]
-                for row in conn.execute(
-                    "SELECT name FROM sqlite_master WHERE type='table'"
-                ).fetchall()
-            }
-        for forbidden in (
-            "user_model_access",
-            "model_access",
-            "user_models",
-            "user_allowed_models",
-        ):
-            assert forbidden not in tables, (
-                f"#111 should not introduce table {forbidden!r}; that is #112"
-            )
+    # The per-user / per-role access tables (`user_model_access`,
+    # `role_model_access`) are owned by #112. #111 must not consult them
+    # for pull authorisation — admin gating is the only check here.
 
     def test_admin_pull_endpoint_does_not_consult_per_user_acl(
         self, db_path, web_client, admin_token

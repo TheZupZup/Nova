@@ -590,17 +590,14 @@ class TestExistingBehaviourUnchanged:
             assert forbidden not in public
 
     def test_no_new_tables_introduced(self, db_path):
-        # #126 must stay on the warning side — no schema changes.
+        # #126 must stay on the warning side — no schema changes of its
+        # own. (Per-user model access tables `user_model_access` /
+        # `role_model_access` are introduced by #112, not #126.)
         with sqlite3.connect(db_path) as conn:
             tables = {
                 row[0] for row in conn.execute(
                     "SELECT name FROM sqlite_master WHERE type='table'"
                 ).fetchall()
             }
-        for forbidden in (
-            "model_warnings",
-            "model_size_limits",
-            "user_model_access",  # #112
-            "model_access",       # #112
-        ):
+        for forbidden in ("model_warnings", "model_size_limits"):
             assert forbidden not in tables

@@ -46,6 +46,7 @@ from core.model_registry import (
     reconcile_installed as reconcile_installed_models,
 )
 from core import model_pulls as _model_pulls
+from core import model_access as _model_access
 import sqlite3 as _sqlite3
 from core import users as _users_mod
 from memory.store import (
@@ -368,6 +369,17 @@ def chat_endpoint(request: ChatRequest, user: CurrentUser = Depends(get_current_
     if denial is not None:
         _raise_policy_denial(denial)
 
+    # Per-user / per-role mode access (#112). Layered on top of the base
+    # policy so a crafted request for a mode the admin has scoped away
+    # from this account is refused even if the family-controls row would
+    # otherwise allow it.
+    access_denial = _model_access.check_mode_access(user, request.mode)
+    if access_denial is not None:
+        raise HTTPException(
+            status_code=access_denial.status_code,
+            detail=access_denial.detail,
+        )
+
     denial = enforce_daily_limit(policy, user.id)
     if denial is not None:
         _raise_policy_denial(denial)
@@ -433,6 +445,19 @@ def chat_endpoint(request: ChatRequest, user: CurrentUser = Depends(get_current_
         )
     else:
         forced_model = MODE_MAP.get(request.mode)
+
+    # Per-user / per-role model access (#112). Only validated when a
+    # concrete forced_model is resolved (mode=auto leaves it None and
+    # delegates to the router, which already picks from configured
+    # models). The mode check above is the primary control for auto.
+    if forced_model is not None:
+        model_denial = _model_access.check_model_access(user, forced_model)
+        if model_denial is not None:
+            raise HTTPException(
+                status_code=model_denial.status_code,
+                detail=model_denial.detail,
+            )
+
     response, model_used = chat(history, request.message, memories, user.id, forced_model=forced_model, force_search=request.search, image=request.image, policy=policy)
 
     save_message(conversation_id, "user", request.message)
@@ -634,11 +659,15 @@ def _user_to_dict(row: dict) -> dict:
 
 @app.get("/me")
 def whoami(user: CurrentUser = Depends(get_current_user)):
+    # `available_modes` is the friendly-label view for the client. Raw
+    # model names stay admin-only — they are reachable through
+    # /admin/models, not /me.
     return {
         "id": user.id,
         "username": user.username,
         "role": user.role,
         "is_restricted": user.is_restricted,
+        "available_modes": _model_access.available_modes_for(user),
     }
 
 

@@ -12,6 +12,7 @@ from core.model_registry import (
     seed_from_config as _seed_model_registry,
 )
 from core.model_pulls import migrate as _migrate_model_pulls
+from core.model_access import migrate as _migrate_model_access
 
 DB_PATH = "nova.db"
 
@@ -101,6 +102,7 @@ def initialize_db():
     _migrate_model_registry(DB_PATH)
     _seed_model_registry(DB_PATH)
     _migrate_model_pulls(DB_PATH)
+    _migrate_model_access(DB_PATH)
     _init_natural_memory(DB_PATH)
 
 
