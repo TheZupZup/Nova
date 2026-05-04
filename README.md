@@ -183,7 +183,11 @@ pytest tests/test_router.py -v
 
 The test suite covers model routing, memory storage and parsing, manual memory commands, rate limiting, the identity contract, and weather integration.
 
-A `Dockerfile` is included in the repository for containerised setups. It is not the primary supported deployment method at this stage.
+## Docker deployment
+
+A `Dockerfile` and `docker-compose.yml` are included for self-hosted container deployments. The compose stack persists `nova.db` in a Docker volume, keeps Ollama external (reachable via `OLLAMA_HOST`), and supports clean updates via `docker compose pull`.
+
+See [docs/docker.md](docs/docker.md) for the full guide: first run, updates, where data is stored, how to point Nova at an Ollama on the host or another machine, and backup notes.
 
 ## Contributing
 
@@ -211,7 +215,6 @@ The following are areas of active interest, not commitments:
 - Hardening the natural language memory pipeline for production use
 - Multi-user support (currently single-user via one set of credentials) — see the design plan in [docs/multi-user-architecture.md](docs/multi-user-architecture.md)
 - Improved model fallback and error reporting in the web UI
-- Docker Compose setup for simpler deployment
 - Broader test coverage
 
 ## License

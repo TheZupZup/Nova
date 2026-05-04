@@ -1,0 +1,62 @@
+# Nova — Docker Compose deployment
+#
+# Usage:
+#   1. Copy .env.example to .env and set NOVA_USERNAME / NOVA_PASSWORD /
+#      NOVA_SECRET_KEY before the first start.
+#   2. Make sure Ollama is running and reachable via OLLAMA_HOST below.
+#   3. docker compose up -d
+#
+# Updates:
+#   docker compose pull && docker compose up -d
+#
+# Data location:
+#   The named volume `nova-data` holds nova.db. List with `docker volume ls`,
+#   inspect with `docker volume inspect nova-data`. See docs/docker.md for
+#   backup guidance.
+#
+# This is a LOCAL / SELF-HOSTED deployment. There is no cloud component.
+
+services:
+  nova:
+    # Use the prebuilt image from GHCR for `docker compose pull`-based updates,
+    # or comment `image:` and uncomment `build:` to build from this checkout.
+    image: ghcr.io/thezupzup/nova:latest
+    # build: .
+    container_name: nova
+    restart: unless-stopped
+    ports:
+      # Host:Container — change the host side if 8080 is already in use.
+      - "8080:8080"
+    environment:
+      # ── Credentials (REQUIRED) ─────────────────────────────────────
+      # Set these in .env. Defaults in .env.example are intentionally weak
+      # and must be overridden before the first start.
+      NOVA_USERNAME: ${NOVA_USERNAME:?set NOVA_USERNAME in .env}
+      NOVA_PASSWORD: ${NOVA_PASSWORD:?set NOVA_PASSWORD in .env}
+      NOVA_SECRET_KEY: ${NOVA_SECRET_KEY:?set NOVA_SECRET_KEY in .env}
+
+      # ── Ollama endpoint ────────────────────────────────────────────
+      # Default points at the host machine. On Linux, host.docker.internal
+      # only resolves thanks to the extra_hosts entry below. If Ollama runs
+      # on a different machine, set OLLAMA_HOST=http://<lan-ip>:11434.
+      OLLAMA_HOST: ${OLLAMA_HOST:-http://host.docker.internal:11434}
+
+      # ── Release channel (optional) ─────────────────────────────────
+      NOVA_CHANNEL: ${NOVA_CHANNEL:-stable}
+
+      # ── Other optional toggles, forwarded only if set in .env ──────
+      NOVA_BRANCH: ${NOVA_BRANCH:-main}
+      NOVA_ADMIN_UI: ${NOVA_ADMIN_UI:-false}
+      NOVA_AUTO_WEB_LEARNING: ${NOVA_AUTO_WEB_LEARNING:-false}
+    volumes:
+      # Persistent storage for nova.db. Survives `docker compose down` and
+      # `docker compose pull`. Removed only by `docker volume rm nova-data`
+      # or `docker compose down -v` (destructive).
+      - nova-data:/data
+    extra_hosts:
+      # Lets the container reach an Ollama running on the Docker host on
+      # Linux, matching the Mac/Windows behaviour. Harmless on other OSes.
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  nova-data:

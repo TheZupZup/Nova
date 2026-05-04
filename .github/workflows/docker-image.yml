@@ -1,0 +1,75 @@
+name: Docker image
+
+# Build the Nova container image. On pushes to main, also publish to GHCR
+# as ghcr.io/thezupzup/nova:latest (plus a short commit SHA tag).
+#
+# Pull requests build the image but do NOT publish — keeps the workflow safe
+# to run on contributor forks without leaking credentials.
+#
+# This workflow does not deploy anywhere. Updating a server is a manual
+# `docker compose pull && docker compose up -d` step on that server.
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - "Dockerfile"
+      - ".dockerignore"
+      - "docker/**"
+      - "docker-compose.yml"
+      - "requirements.txt"
+      - "**/*.py"
+      - "static/**"
+      - ".github/workflows/docker-image.yml"
+  pull_request:
+    paths:
+      - "Dockerfile"
+      - ".dockerignore"
+      - "docker/**"
+      - "docker-compose.yml"
+      - ".github/workflows/docker-image.yml"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # `packages: write` is only used on push-to-main below.
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        # Only authenticate when we'll actually push, i.e. on main of this repo.
+        # The built-in GITHUB_TOKEN is scoped to this repository's packages.
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute image tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/thezupzup/nova
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,format=short
+
+      - name: Build (and push on main)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

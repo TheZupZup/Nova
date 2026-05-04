@@ -1,5 +1,41 @@
+# VCS
+.git
+.gitignore
+.gitattributes
+
+# Python
 .venv/
-nova.db
+venv/
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+
+# Local secrets and runtime data — MUST NOT be baked into the image
 .env
+.env.*
+!.env.example
+*.db
+*.db.*
+*.backup
+*.save
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# CI / docs that aren't needed at runtime
+.github/
+tests/
+docs/
+
+# Docker meta
+Dockerfile
+docker-compose.yml
+.dockerignore
