@@ -37,7 +37,7 @@ import ollama
 import pytest
 from fastapi.testclient import TestClient
 
-from core import memory as core_memory, model_pulls, model_registry, users
+from core import memory as core_memory, model_pulls, users
 from memory import store as natural_store
 
 
@@ -696,7 +696,6 @@ class TestAdminEndpoints:
 class TestNonBlocking:
     def test_request_pull_returns_before_worker_finishes(self, db_path):
         _seed_registry(db_path, "slowmodel:1b")
-        gate = threading.Event()
         released = threading.Event()
 
         def slow_stream(name, **kwargs):
