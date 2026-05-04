@@ -1010,99 +1010,6 @@
         ::-webkit-scrollbar-track { background: transparent; }
         ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
 
-        /* ── CHANNEL BADGE ── */
-        #channel-wrapper {
-            position: relative;
-            flex-shrink: 0;
-        }
-
-        #channel-btn {
-            background: transparent;
-            border: none;
-            cursor: pointer;
-            padding: 0;
-            display: flex;
-            align-items: center;
-        }
-
-        .channel-badge {
-            font-size: 0.65rem;
-            font-family: monospace;
-            font-weight: bold;
-            letter-spacing: 1px;
-            padding: 3px 8px;
-            border-radius: 10px;
-            border: 1px solid;
-            text-transform: uppercase;
-            transition: opacity 0.2s;
-        }
-
-        .channel-badge:hover { opacity: 0.8; }
-
-        .channel-stable { color: var(--cyan); border-color: var(--cyan); background: rgba(0,188,212,0.08); }
-        .channel-beta   { color: #ffb74d;    border-color: #ffb74d;    background: rgba(255,183,77,0.08); }
-        .channel-alpha  { color: #ce93d8;    border-color: #ce93d8;    background: rgba(206,147,216,0.08); }
-
-        #channel-dropdown {
-            display: none;
-            position: absolute;
-            top: calc(100% + 8px);
-            right: 0;
-            background: var(--bg2);
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            min-width: 210px;
-            z-index: 100;
-            overflow: hidden;
-            box-shadow: 0 4px 16px rgba(0,0,0,0.5);
-        }
-
-        #channel-dropdown.open { display: block; }
-
-        .channel-option a {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            padding: 10px 14px;
-            text-decoration: none;
-            color: var(--text);
-            font-size: 0.85rem;
-            font-family: monospace;
-            transition: background 0.15s;
-        }
-
-        .channel-option a:hover { background: var(--bg3); }
-        .channel-option.active a { background: var(--bg3); color: var(--cyan); }
-
-        .channel-dot {
-            width: 7px;
-            height: 7px;
-            border-radius: 50%;
-            flex-shrink: 0;
-        }
-
-        .channel-dot.stable { background: var(--cyan); }
-        .channel-dot.beta   { background: #ffb74d; }
-        .channel-dot.alpha  { background: #ce93d8; }
-
-        .channel-opt-url {
-            margin-left: auto;
-            font-size: 0.7rem;
-            color: var(--text-dim);
-        }
-
-        .channel-option.active .channel-opt-url { color: var(--cyan-dim); }
-
-        #channel-branch-row {
-            display: none;
-            padding: 7px 14px 9px;
-            border-top: 1px solid var(--border);
-            font-size: 0.7rem;
-            color: var(--text-dim);
-            font-family: monospace;
-        }
-
-        #channel-branch-row.show { display: block; }
     </style>
 </head>
 <body>
@@ -1149,29 +1056,6 @@
             <div id="chat-header">
                 <button id="menu-toggle" onclick="toggleSidebar()">☰</button>
                 <span id="chat-title">Discute avec Nova</span>
-                <div id="channel-wrapper">
-                    <button id="channel-btn" onclick="toggleChannelDropdown()" title="Release channel">
-                        <span id="channel-badge" class="channel-badge channel-stable">STABLE</span>
-                    </button>
-                    <div id="channel-dropdown">
-                        <div class="channel-option" data-channel="stable">
-                            <a href="https://nova.borealnode.ca">
-                                <span class="channel-dot stable"></span>
-                                Stable
-                                <span class="channel-opt-url">nova.borealnode.ca</span>
-                            </a>
-                        </div>
-                        <div class="channel-option" data-channel="beta">
-                            <a href="https://beta.nova.borealnode.ca">
-                                <span class="channel-dot beta"></span>
-                                Beta
-                                <span class="channel-opt-url">beta.nova.borealnode.ca</span>
-                            </a>
-                        </div>
-
-                        <div id="channel-branch-row"></div>
-                    </div>
-                </div>
                 <span id="model-badge">—</span>
             </div>
 
@@ -1577,47 +1461,6 @@
         location.reload();
     }
 
-    // ── CHANNEL ──
-    async function loadChannelInfo() {
-        try {
-            const res = await fetch("/channel");
-            if (res.ok) {
-                const data = await res.json();
-                const channel = (data.channel || "stable").toLowerCase();
-                const badge = document.getElementById("channel-badge");
-                if (badge) {
-                    badge.textContent = channel.toUpperCase();
-                    badge.className = "channel-badge channel-" + channel;
-                }
-
-                document.querySelectorAll(".channel-option").forEach(opt => {
-                    opt.classList.toggle("active", opt.dataset.channel === channel);
-                });
-
-                const branchRow = document.getElementById("channel-branch-row");
-                if (branchRow) {
-                    if (channel === "alpha" && data.branch) {
-                        branchRow.textContent = "branch: " + data.branch;
-                        branchRow.classList.add("show");
-                    } else {
-                        branchRow.classList.remove("show");
-                    }
-                }
-            }
-        } catch (e) {}
-    }
-
-    function toggleChannelDropdown() {
-        document.getElementById("channel-dropdown").classList.toggle("open");
-    }
-
-    document.addEventListener("click", function(e) {
-        const wrapper = document.getElementById("channel-wrapper");
-        if (wrapper && !wrapper.contains(e.target)) {
-            document.getElementById("channel-dropdown").classList.remove("open");
-        }
-    });
-
     // ── INIT ──
     let currentUser = null;
 
@@ -1643,7 +1486,6 @@
         setMode(currentMode);
         loadCurrentUser();
         loadConversations();
-        loadChannelInfo();
     }
 
     // ── SIDEBAR ──
