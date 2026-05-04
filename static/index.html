@@ -1005,6 +1005,165 @@
         #admin-create-btn:hover { background: var(--cyan-dim); }
         #admin-error { color: var(--danger); font-size: 0.8rem; min-height: 16px; }
 
+        /* ── ADMIN TABS ── */
+        #admin-tabs {
+            display: flex;
+            gap: 4px;
+        }
+        .admin-tab-btn {
+            background: transparent;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 6px 12px;
+            color: var(--text-dim);
+            font-family: monospace;
+            font-size: 0.8rem;
+            letter-spacing: 1px;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        .admin-tab-btn:hover { color: var(--cyan); border-color: var(--cyan); }
+        .admin-tab-btn.active {
+            color: var(--cyan);
+            border-color: var(--cyan);
+            background: rgba(0, 200, 255, 0.06);
+        }
+        .admin-tab-pane { display: none; flex-direction: column; gap: 16px; }
+        .admin-tab-pane.active { display: flex; }
+
+        /* ── ADMIN MODELS ── */
+        #admin-pull-form {
+            background: var(--bg3);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        #admin-pull-form .row {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+        #admin-pull-input {
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            color: var(--text);
+            font-family: monospace;
+            font-size: 0.85rem;
+            padding: 6px 10px;
+            outline: none;
+            flex: 1;
+            min-width: 160px;
+        }
+        .admin-btn.primary {
+            background: var(--cyan);
+            border-color: var(--cyan);
+            color: #000;
+            font-weight: bold;
+        }
+        .admin-btn.primary:hover { background: var(--cyan-dim); color: #000; }
+        #admin-pull-error { color: var(--danger); font-size: 0.8rem; min-height: 0; }
+        #admin-pull-error:not(:empty) { min-height: 16px; }
+        #admin-pull-warnings { display: none; flex-direction: column; gap: 6px; }
+        #admin-pull-warnings.show { display: flex; }
+        .admin-warning {
+            display: flex;
+            gap: 8px;
+            padding: 8px 10px;
+            border-radius: 6px;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            font-size: 0.78rem;
+            line-height: 1.4;
+        }
+        .admin-warning.warning { border-color: #d4a017; }
+        .admin-warning.warning .admin-warning-level { color: #d4a017; }
+        .admin-warning.info .admin-warning-level { color: var(--text-dim); }
+        .admin-warning-level {
+            font-weight: bold;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            font-size: 0.7rem;
+            min-width: 60px;
+        }
+        .admin-warning-msg { color: var(--text); }
+        .admin-warning-summary {
+            font-size: 0.78rem;
+            color: var(--text-dim);
+            padding: 4px 10px 8px;
+        }
+
+        .admin-model-row, .admin-pull-row {
+            background: var(--bg3);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 10px 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+        .admin-model-head, .admin-pull-head {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        .admin-model-display {
+            font-size: 0.9rem;
+            color: var(--text);
+            font-weight: bold;
+            flex: 1;
+            min-width: 100px;
+        }
+        .admin-model-name {
+            font-size: 0.78rem;
+            color: var(--text-dim);
+            font-family: monospace;
+            word-break: break-all;
+        }
+        .admin-tag.installed { color: var(--cyan); border-color: var(--cyan); }
+        .admin-tag.missing { color: var(--text-dim); border-color: var(--border); }
+        .admin-tag.pulling { color: #d4a017; border-color: #d4a017; }
+        .admin-tag.error { color: var(--danger); border-color: var(--danger); }
+        .admin-tag.queued { color: var(--text-dim); border-color: var(--border); }
+        .admin-tag.done { color: var(--cyan); border-color: var(--cyan); }
+        .admin-progress {
+            width: 100%;
+            height: 6px;
+            background: var(--bg);
+            border-radius: 3px;
+            overflow: hidden;
+        }
+        .admin-progress-bar {
+            height: 100%;
+            background: var(--cyan);
+            transition: width 0.25s;
+        }
+        .admin-progress-bar.pulling {
+            background: linear-gradient(90deg, var(--cyan), var(--cyan-dim));
+        }
+        .admin-progress-meta {
+            font-size: 0.72rem;
+            color: var(--text-dim);
+            font-family: monospace;
+        }
+        .admin-pull-error-msg {
+            color: var(--danger);
+            font-size: 0.78rem;
+            font-family: monospace;
+            word-break: break-word;
+        }
+        .admin-empty {
+            color: var(--text-dim);
+            font-size: 0.82rem;
+            font-style: italic;
+            padding: 4px 2px;
+        }
+
         /* ── SCROLLBAR ── */
         ::-webkit-scrollbar { width: 4px; }
         ::-webkit-scrollbar-track { background: transparent; }
@@ -1118,28 +1277,60 @@
 <div id="admin-overlay" onclick="handleAdminOverlayClick(event)">
     <div id="admin-panel">
         <div id="admin-header">
-            <h2>⚑ ADMIN — USERS</h2>
+            <div id="admin-tabs">
+                <button class="admin-tab-btn active" data-tab="users" onclick="switchAdminTab('users')">⚑ Users</button>
+                <button class="admin-tab-btn" data-tab="models" onclick="switchAdminTab('models')">⬢ Models</button>
+            </div>
             <button id="admin-close" onclick="closeAdmin()">✕</button>
         </div>
         <div id="admin-body">
-            <div class="admin-section-title">Create user</div>
-            <div id="admin-create-form">
-                <div class="row">
-                    <input id="admin-new-username" type="text" placeholder="username" autocomplete="off" />
-                    <input id="admin-new-password" type="password" placeholder="password" autocomplete="new-password" />
+            <!-- USERS TAB -->
+            <div id="admin-tab-users" class="admin-tab-pane active">
+                <div class="admin-section-title">Create user</div>
+                <div id="admin-create-form">
+                    <div class="row">
+                        <input id="admin-new-username" type="text" placeholder="username" autocomplete="off" />
+                        <input id="admin-new-password" type="password" placeholder="password" autocomplete="new-password" />
+                    </div>
+                    <div class="row">
+                        <select id="admin-new-role">
+                            <option value="user">user</option>
+                            <option value="admin">admin</option>
+                            <option value="restricted">restricted (child)</option>
+                        </select>
+                        <button id="admin-create-btn" onclick="adminCreateUser()">+ Create user</button>
+                    </div>
+                    <div id="admin-error"></div>
                 </div>
-                <div class="row">
-                    <select id="admin-new-role">
-                        <option value="user">user</option>
-                        <option value="admin">admin</option>
-                        <option value="restricted">restricted (child)</option>
-                    </select>
-                    <button id="admin-create-btn" onclick="adminCreateUser()">+ Create user</button>
-                </div>
-                <div id="admin-error"></div>
+                <div class="admin-section-title">Users</div>
+                <div id="admin-users-list"></div>
             </div>
-            <div class="admin-section-title">Users</div>
-            <div id="admin-users-list"></div>
+
+            <!-- MODELS TAB -->
+            <div id="admin-tab-models" class="admin-tab-pane">
+                <div class="admin-section-title">Pull a model</div>
+                <div id="admin-pull-form">
+                    <div class="row">
+                        <input id="admin-pull-input" type="text" placeholder="e.g. llama3.1:8b" autocomplete="off" spellcheck="false" />
+                        <button class="admin-btn" onclick="adminPreviewPull()">Preview warnings</button>
+                        <button class="admin-btn primary" onclick="adminStartPull()">Start pull</button>
+                    </div>
+                    <div id="admin-pull-error"></div>
+                    <div id="admin-pull-warnings"></div>
+                </div>
+
+                <div class="admin-section-title" style="display:flex;align-items:center;justify-content:space-between;">
+                    <span>Registered models</span>
+                    <button class="admin-btn" onclick="loadAdminModels()">refresh</button>
+                </div>
+                <div id="admin-models-list"></div>
+
+                <div class="admin-section-title" style="display:flex;align-items:center;justify-content:space-between;">
+                    <span>Pull jobs</span>
+                    <button class="admin-btn" onclick="loadAdminPulls()">refresh</button>
+                </div>
+                <div id="admin-pulls-list"></div>
+            </div>
         </div>
     </div>
 </div>
@@ -1981,20 +2172,42 @@
     });
 
     // ── ADMIN ──
+    let adminCurrentTab = "users";
+    let adminPullsPollTimer = null;
+
     async function openAdmin() {
         if (!currentUser || currentUser.role !== "admin") return;
         document.getElementById("admin-overlay").classList.add("open");
         closeSidebar();
-        await loadAdminUsers();
+        switchAdminTab(adminCurrentTab || "users");
     }
 
     function closeAdmin() {
         document.getElementById("admin-overlay").classList.remove("open");
         document.getElementById("admin-error").textContent = "";
+        stopAdminPullsPolling();
     }
 
     function handleAdminOverlayClick(e) {
         if (e.target === document.getElementById("admin-overlay")) closeAdmin();
+    }
+
+    function switchAdminTab(tab) {
+        adminCurrentTab = tab;
+        document.querySelectorAll(".admin-tab-btn").forEach(b => {
+            b.classList.toggle("active", b.dataset.tab === tab);
+        });
+        document.querySelectorAll(".admin-tab-pane").forEach(p => {
+            p.classList.toggle("active", p.id === "admin-tab-" + tab);
+        });
+        if (tab === "users") {
+            stopAdminPullsPolling();
+            loadAdminUsers();
+        } else if (tab === "models") {
+            loadAdminModels();
+            loadAdminPulls();
+            startAdminPullsPolling();
+        }
     }
 
     async function loadAdminUsers() {
@@ -2207,6 +2420,318 @@
         } else {
             btn.textContent = "saved!";
             setTimeout(() => { btn.textContent = "save limits"; }, 1500);
+        }
+    }
+
+    // ── ADMIN: MODELS ──
+    async function loadAdminModels() {
+        const list = document.getElementById("admin-models-list");
+        if (!list) return;
+        try {
+            const res = await fetch("/admin/models", {
+                headers: { "Authorization": `Bearer ${token}` }
+            });
+            if (res.status === 401) { logout(); return; }
+            if (res.status === 403) {
+                list.innerHTML = '<div class="admin-empty" style="color:var(--danger);">Access denied.</div>';
+                return;
+            }
+            if (!res.ok) {
+                list.innerHTML = '<div class="admin-empty">Failed to load models.</div>';
+                return;
+            }
+            const models = await res.json();
+            renderAdminModels(models);
+        } catch (e) {
+            list.innerHTML = '<div class="admin-empty">Failed to load models.</div>';
+        }
+    }
+
+    function renderAdminModels(models) {
+        const list = document.getElementById("admin-models-list");
+        list.innerHTML = "";
+        if (!models || models.length === 0) {
+            list.innerHTML = '<div class="admin-empty">No models registered.</div>';
+            return;
+        }
+        for (const m of models) {
+            const row = document.createElement("div");
+            row.className = "admin-model-row";
+
+            const head = document.createElement("div");
+            head.className = "admin-model-head";
+
+            const display = document.createElement("span");
+            display.className = "admin-model-display";
+            display.textContent = m.display_name || m.purpose || "model";
+            head.appendChild(display);
+
+            const purposeTag = document.createElement("span");
+            purposeTag.className = "admin-tag";
+            purposeTag.textContent = m.purpose || "—";
+            head.appendChild(purposeTag);
+
+            const statusTag = document.createElement("span");
+            if (m.installed) {
+                statusTag.className = "admin-tag installed";
+                statusTag.textContent = "installed";
+            } else {
+                statusTag.className = "admin-tag missing";
+                statusTag.textContent = "missing";
+            }
+            head.appendChild(statusTag);
+
+            row.appendChild(head);
+
+            const name = document.createElement("div");
+            name.className = "admin-model-name";
+            name.textContent = m.model_name;
+            row.appendChild(name);
+
+            if (!m.installed) {
+                const actions = document.createElement("div");
+                actions.className = "admin-actions";
+                const pullBtn = document.createElement("button");
+                pullBtn.className = "admin-btn";
+                pullBtn.textContent = "pull";
+                pullBtn.onclick = () => {
+                    document.getElementById("admin-pull-input").value = m.model_name;
+                    adminPreviewPull();
+                };
+                actions.appendChild(pullBtn);
+                row.appendChild(actions);
+            }
+
+            list.appendChild(row);
+        }
+    }
+
+    function clearAdminPullState() {
+        document.getElementById("admin-pull-error").textContent = "";
+        const w = document.getElementById("admin-pull-warnings");
+        w.classList.remove("show");
+        w.innerHTML = "";
+    }
+
+    function renderPullWarnings(payload) {
+        const container = document.getElementById("admin-pull-warnings");
+        container.innerHTML = "";
+        const summary = document.createElement("div");
+        summary.className = "admin-warning-summary";
+        let sizeStr = "unknown size";
+        if (payload.estimated_size_bytes) {
+            sizeStr = (payload.estimated_size_bytes / (1024 ** 3)).toFixed(1) + " GiB";
+        }
+        const flags = [];
+        if (payload.is_large) flags.push("large");
+        if (payload.unknown_size) flags.push("unknown size");
+        summary.textContent = "Model: " + payload.model + " · estimated " + sizeStr +
+            (flags.length ? " · " + flags.join(", ") : "");
+        container.appendChild(summary);
+
+        const warnings = payload.warnings || [];
+        for (const w of warnings) {
+            const row = document.createElement("div");
+            row.className = "admin-warning " + (w.level === "warning" ? "warning" : "info");
+            const lvl = document.createElement("span");
+            lvl.className = "admin-warning-level";
+            lvl.textContent = w.level || "info";
+            const msg = document.createElement("span");
+            msg.className = "admin-warning-msg";
+            msg.textContent = w.message || "";
+            row.appendChild(lvl);
+            row.appendChild(msg);
+            container.appendChild(row);
+        }
+        container.classList.add("show");
+    }
+
+    async function adminPreviewPull() {
+        const model = document.getElementById("admin-pull-input").value.trim();
+        const errEl = document.getElementById("admin-pull-error");
+        clearAdminPullState();
+        if (!model) {
+            errEl.textContent = "Enter a model name to preview.";
+            return;
+        }
+        try {
+            const res = await fetch("/admin/models/pull/preview", {
+                method: "POST",
+                headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
+                body: JSON.stringify({ model })
+            });
+            if (res.status === 401) { logout(); return; }
+            if (res.status === 403) {
+                errEl.textContent = "Access denied.";
+                return;
+            }
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) {
+                errEl.textContent = data.detail || "Preview failed.";
+                return;
+            }
+            renderPullWarnings(data);
+        } catch (e) {
+            errEl.textContent = "Preview failed.";
+        }
+    }
+
+    async function adminStartPull() {
+        const model = document.getElementById("admin-pull-input").value.trim();
+        const errEl = document.getElementById("admin-pull-error");
+        errEl.textContent = "";
+        if (!model) {
+            errEl.textContent = "Enter a model name to pull.";
+            return;
+        }
+        try {
+            const res = await fetch("/admin/models/pull", {
+                method: "POST",
+                headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
+                body: JSON.stringify({ model })
+            });
+            if (res.status === 401) { logout(); return; }
+            if (res.status === 403) {
+                errEl.textContent = "Access denied.";
+                return;
+            }
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) {
+                errEl.textContent = data.detail || "Pull failed.";
+                return;
+            }
+            if (data.status === "already_installed") {
+                errEl.style.color = "var(--text-dim)";
+                errEl.textContent = "Model already installed.";
+            } else {
+                errEl.style.color = "var(--text-dim)";
+                errEl.textContent = "Pull started (job #" + (data.id ?? "?") + ").";
+            }
+            // Restore danger color after a moment so the next error reads correctly.
+            setTimeout(() => { errEl.style.color = ""; }, 2500);
+            await loadAdminPulls();
+            await loadAdminModels();
+            startAdminPullsPolling();
+        } catch (e) {
+            errEl.textContent = "Pull failed.";
+        }
+    }
+
+    async function loadAdminPulls() {
+        const list = document.getElementById("admin-pulls-list");
+        if (!list) return;
+        try {
+            const res = await fetch("/admin/models/pulls", {
+                headers: { "Authorization": `Bearer ${token}` }
+            });
+            if (res.status === 401) { logout(); return; }
+            if (res.status === 403) {
+                list.innerHTML = '<div class="admin-empty" style="color:var(--danger);">Access denied.</div>';
+                return;
+            }
+            if (!res.ok) {
+                list.innerHTML = '<div class="admin-empty">Failed to load pull jobs.</div>';
+                return;
+            }
+            const pulls = await res.json();
+            renderAdminPulls(pulls);
+        } catch (e) {
+            list.innerHTML = '<div class="admin-empty">Failed to load pull jobs.</div>';
+        }
+    }
+
+    function formatBytes(n) {
+        if (n == null) return "—";
+        if (n < 1024) return n + " B";
+        if (n < 1024 ** 2) return (n / 1024).toFixed(1) + " KiB";
+        if (n < 1024 ** 3) return (n / (1024 ** 2)).toFixed(1) + " MiB";
+        return (n / (1024 ** 3)).toFixed(2) + " GiB";
+    }
+
+    function renderAdminPulls(pulls) {
+        const list = document.getElementById("admin-pulls-list");
+        list.innerHTML = "";
+        if (!pulls || pulls.length === 0) {
+            list.innerHTML = '<div class="admin-empty">No pull jobs yet.</div>';
+            return;
+        }
+        for (const p of pulls) {
+            const row = document.createElement("div");
+            row.className = "admin-pull-row";
+
+            const head = document.createElement("div");
+            head.className = "admin-pull-head";
+
+            const name = document.createElement("span");
+            name.className = "admin-model-display";
+            name.textContent = "#" + p.id + " " + p.model_name;
+            head.appendChild(name);
+
+            const statusTag = document.createElement("span");
+            statusTag.className = "admin-tag " + (p.status || "queued");
+            statusTag.textContent = p.status || "queued";
+            head.appendChild(statusTag);
+
+            row.appendChild(head);
+
+            if (p.status === "pulling" || p.status === "queued" || p.status === "done") {
+                const pct = (p.progress != null) ? Math.round(p.progress * 100) : null;
+                const bar = document.createElement("div");
+                bar.className = "admin-progress";
+                const inner = document.createElement("div");
+                inner.className = "admin-progress-bar" + (p.status === "pulling" ? " pulling" : "");
+                inner.style.width = (pct != null ? pct : (p.status === "done" ? 100 : 0)) + "%";
+                bar.appendChild(inner);
+                row.appendChild(bar);
+
+                const meta = document.createElement("div");
+                meta.className = "admin-progress-meta";
+                const completed = formatBytes(p.completed_bytes);
+                const total = formatBytes(p.total_bytes);
+                const pctStr = pct != null ? (pct + "%") : "—";
+                meta.textContent = pctStr + " · " + completed + " / " + total;
+                row.appendChild(meta);
+            }
+
+            if (p.status === "error" && p.error_message) {
+                const err = document.createElement("div");
+                err.className = "admin-pull-error-msg";
+                err.textContent = p.error_message;
+                row.appendChild(err);
+            }
+
+            list.appendChild(row);
+        }
+    }
+
+    function adminHasActivePulls() {
+        const list = document.getElementById("admin-pulls-list");
+        if (!list) return false;
+        return !!list.querySelector(".admin-tag.pulling, .admin-tag.queued");
+    }
+
+    function startAdminPullsPolling() {
+        stopAdminPullsPolling();
+        adminPullsPollTimer = setInterval(async () => {
+            const overlay = document.getElementById("admin-overlay");
+            if (!overlay.classList.contains("open") || adminCurrentTab !== "models") {
+                stopAdminPullsPolling();
+                return;
+            }
+            await loadAdminPulls();
+            // Refresh the registry view occasionally so installed flags
+            // flip from missing to installed once a pull completes.
+            if (!adminHasActivePulls()) {
+                stopAdminPullsPolling();
+                await loadAdminModels();
+            }
+        }, 2500);
+    }
+
+    function stopAdminPullsPolling() {
+        if (adminPullsPollTimer) {
+            clearInterval(adminPullsPollTimer);
+            adminPullsPollTimer = null;
         }
     }
 
