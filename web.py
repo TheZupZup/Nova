@@ -861,6 +861,24 @@ def admin_pull_model(
     return job
 
 
+@app.post("/admin/models/pull/preview")
+def admin_preview_pull(
+    req: AdminPullModelRequest,
+    _: CurrentUser = Depends(require_admin),
+):
+    """
+    Return resource warnings for a model name without starting a pull (#126).
+
+    Lets the admin client surface disk / RAM / slowdown guidance ahead of
+    triggering the actual download. Warnings are informational only — no
+    pull is initiated and no row is inserted.
+    """
+    try:
+        return _model_pulls.preview_pull(req.model)
+    except _model_pulls.InvalidModelName as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
 @app.get("/admin/models/pulls")
 def admin_list_pulls(_: CurrentUser = Depends(require_admin)):
     return _model_pulls.list_pulls()

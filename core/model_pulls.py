@@ -65,6 +65,18 @@ _TERMINAL_STATUSES = (STATUS_DONE, STATUS_ERROR)
 _MAX_CONCURRENT_PULLS = 2
 
 
+# ── Resource-warning thresholds (issue #126) ────────────────────────────────
+#
+# These thresholds drive *informational* warnings only — they never block a
+# pull. The admin remains in charge of the decision; we just surface the
+# resource impact so they can make it with eyes open.
+#
+# `_LARGE_MODEL_BYTES` is the soft "this is a big download" line. It is
+# deliberately conservative so a routine 7B model doesn't trigger it but a
+# 27B / 70B does.
+_LARGE_MODEL_BYTES = 8 * 1024 ** 3  # 8 GiB
+
+
 # ── Validation ──────────────────────────────────────────────────────────────
 
 # Ollama model names look like `[host/][namespace/]name[:tag]`. A safe
@@ -145,6 +157,181 @@ def validate_model_name(name: object) -> str:
     if not _MODEL_NAME_RE.match(stripped):
         raise InvalidModelName("model name contains disallowed characters")
     return stripped
+
+
+# ── Resource warnings (issue #126) ──────────────────────────────────────────
+#
+# Warnings are informational metadata returned alongside a pull request so
+# the admin sees disk / RAM / slowdown impact before (or with) the pull
+# response. Nothing here blocks a pull — large and unknown-size models are
+# both allowed. The model-size estimate is best-effort: if Ollama can give
+# us a number we surface it; otherwise we mark the pull as "unknown size"
+# and the admin proceeds anyway.
+#
+# Warning shape:
+#   {"code": "<stable id>", "level": "info"|"warning", "message": "..."}
+#
+# Codes are stable so the UI (or a future CLI) can localise / restyle.
+WARNING_DISK_USAGE = "disk_usage"
+WARNING_RAM_VRAM_IMPACT = "ram_vram_impact"
+WARNING_POSSIBLE_SLOWDOWN = "possible_slowdown"
+WARNING_UNKNOWN_SIZE = "unknown_size"
+WARNING_LARGE_MODEL = "large_model"
+
+
+def _coerce_size(value: object) -> Optional[int]:
+    """Return value as a positive int, or None if it is not a usable size."""
+    if isinstance(value, bool):
+        return None
+    if not isinstance(value, (int, float)):
+        return None
+    n = int(value)
+    return n if n > 0 else None
+
+
+def estimate_model_size(model_name: str) -> Optional[int]:
+    """
+    Best-effort pre-pull size estimate, in bytes.
+
+    Uses `client.show()` to read whatever size metadata Ollama exposes for
+    the model. Most uninstalled models will return *no* size info — the
+    Ollama API does not publish a manifest size for un-pulled tags — and
+    in that case this function returns None and the caller falls back to
+    the "unknown size" warning. A None return is the expected common case
+    and never an error.
+
+    The function never raises: any Ollama / network failure becomes None.
+    """
+    try:
+        payload = client.show(model_name)
+    except (ollama.ResponseError, httpx.HTTPError, ConnectionError, OSError):
+        return None
+    except Exception:  # noqa: BLE001 — third-party clients vary; never let this raise
+        logger.debug("estimate_model_size: unexpected error for %s", model_name, exc_info=True)
+        return None
+
+    if payload is None:
+        return None
+    # Normalise the payload — the ollama python client may return either a
+    # dict (older builds) or a typed object with `.model_dump()` (newer).
+    if hasattr(payload, "model_dump"):
+        try:
+            payload = payload.model_dump()
+        except Exception:  # noqa: BLE001
+            payload = None
+    if not isinstance(payload, dict):
+        return None
+
+    # Try the most likely shapes first. Different Ollama versions surface
+    # the figure in different places; check them all and take the first
+    # positive integer.
+    for key in ("size", "total_size"):
+        size = _coerce_size(payload.get(key))
+        if size is not None:
+            return size
+    details = payload.get("details")
+    if isinstance(details, dict):
+        for key in ("size", "parameter_size_bytes"):
+            size = _coerce_size(details.get(key))
+            if size is not None:
+                return size
+    return None
+
+
+def _format_gib(num_bytes: int) -> str:
+    return f"{num_bytes / (1024 ** 3):.1f} GiB"
+
+
+def build_pull_warnings(
+    model_name: str,
+    estimated_bytes: Optional[int] = None,
+) -> dict:
+    """
+    Build the resource-warning payload for `model_name`.
+
+    The output is informational metadata only — see module docstring. The
+    caller may pass an explicit `estimated_bytes` (e.g. from a previous
+    `estimate_model_size` call) to avoid re-querying Ollama.
+
+    Returns:
+        {
+          "model": <name>,
+          "estimated_size_bytes": int | None,
+          "unknown_size": bool,
+          "is_large": bool,
+          "warnings": [ {"code": str, "level": str, "message": str}, ... ],
+        }
+    """
+    size = _coerce_size(estimated_bytes)
+    unknown = size is None
+    is_large = size is not None and size >= _LARGE_MODEL_BYTES
+
+    warnings: list[dict] = []
+    if unknown:
+        warnings.append({
+            "code": WARNING_UNKNOWN_SIZE,
+            "level": "warning",
+            "message": (
+                "Ollama did not report a size for this model. The download "
+                "may be larger than expected — proceed only if you have "
+                "ample free disk space."
+            ),
+        })
+    if is_large:
+        warnings.append({
+            "code": WARNING_LARGE_MODEL,
+            "level": "warning",
+            "message": (
+                f"Estimated download size is {_format_gib(size)}. Large "
+                "models take significantly longer to pull and consume more "
+                "disk space."
+            ),
+        })
+    warnings.append({
+        "code": WARNING_DISK_USAGE,
+        "level": "info",
+        "message": (
+            "Pulled models are stored on disk under the Ollama data "
+            "directory. Make sure you have enough free space before "
+            "starting the pull."
+        ),
+    })
+    warnings.append({
+        "code": WARNING_RAM_VRAM_IMPACT,
+        "level": "info",
+        "message": (
+            "Running this model will load weights into RAM (and VRAM if a "
+            "GPU is used). Larger models may exceed the resources "
+            "available on this host."
+        ),
+    })
+    warnings.append({
+        "code": WARNING_POSSIBLE_SLOWDOWN,
+        "level": "info",
+        "message": (
+            "While the pull is running other Nova requests may slow down "
+            "due to network and disk contention."
+        ),
+    })
+
+    return {
+        "model": model_name,
+        "estimated_size_bytes": size,
+        "unknown_size": unknown,
+        "is_large": is_large,
+        "warnings": warnings,
+    }
+
+
+def preview_pull(model_name: str) -> dict:
+    """
+    Validate `model_name` and return the resource-warning payload only.
+
+    Lets an admin client fetch warnings ahead of (or independently from)
+    triggering a pull. Never starts a download; never inserts a row.
+    """
+    canonical = validate_model_name(model_name)
+    return build_pull_warnings(canonical, estimate_model_size(canonical))
 
 
 # ── Schema ──────────────────────────────────────────────────────────────────
@@ -376,6 +563,16 @@ def request_pull(
         _release(canonical)
         _mark_error(db_path, pull_id, "failed to start pull worker")
         raise
+
+    # Attach #126 resource warnings to the returned job so the admin
+    # client receives disk/RAM/slowdown guidance with the pull response.
+    # The warnings are not persisted — they are derived metadata and the
+    # `model_pulls` row stays unchanged.
+    warnings = build_pull_warnings(canonical, estimate_model_size(canonical))
+    job["warnings"] = warnings["warnings"]
+    job["estimated_size_bytes"] = warnings["estimated_size_bytes"]
+    job["unknown_size"] = warnings["unknown_size"]
+    job["is_large"] = warnings["is_large"]
 
     return job  # type: ignore[return-value]
 
