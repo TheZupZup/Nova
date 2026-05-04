@@ -203,6 +203,41 @@
         .conv-item:hover .conv-delete { opacity: 1; }
         .conv-delete:hover { color: var(--danger); }
 
+        #conv-search-wrap {
+            padding: 8px 8px 4px 8px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        #conv-search {
+            width: 100%;
+            padding: 7px 10px;
+            background: var(--bg3);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            color: var(--text);
+            font-family: monospace;
+            font-size: 0.8rem;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+
+        #conv-search:focus { border-color: var(--cyan); }
+        #conv-search::placeholder { color: var(--text-dim); }
+
+        .conv-group-header {
+            font-size: 0.7rem;
+            color: var(--text-dim);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            padding: 10px 12px 4px 12px;
+        }
+
+        .conv-empty-msg {
+            padding: 12px 16px;
+            color: var(--text-dim);
+            font-size: 0.8rem;
+        }
+
         #sidebar-footer {
             padding: 12px 16px;
             border-top: 1px solid var(--border);
@@ -1202,6 +1237,9 @@
                     <button id="new-conv-btn" onclick="newConversation()">+ Nouveau</button>
                 </div>
             </div>
+            <div id="conv-search-wrap">
+                <input type="text" id="conv-search" placeholder="Rechercher..." autocomplete="off" oninput="onConvSearchInput(this.value)" />
+            </div>
             <div id="conversations-list"></div>
             <div id="sidebar-footer">
                 <button id="settings-btn" onclick="openSettings()">⚙ Settings</button>
@@ -1426,6 +1464,12 @@
             new_conv: "+ Nouveau",
             logout: "Déconnexion",
             no_conv: "Aucune conversation",
+            no_match: "Aucun résultat",
+            search_placeholder: "Rechercher...",
+            group_today: "AUJOURD'HUI",
+            group_yesterday: "HIER",
+            group_week: "7 DERNIERS JOURS",
+            group_older: "PLUS ANCIEN",
             select_conv: "Discute avec Nova",
             new_conv_title: "Nouvelle conversation",
             empty_state: "Discute avec Nova",
@@ -1454,6 +1498,12 @@
             new_conv: "+ New",
             logout: "Logout",
             no_conv: "No conversations",
+            no_match: "No matches",
+            search_placeholder: "Search...",
+            group_today: "TODAY",
+            group_yesterday: "YESTERDAY",
+            group_week: "PREVIOUS 7 DAYS",
+            group_older: "OLDER",
             select_conv: "Start chatting with Nova",
             new_conv_title: "New conversation",
             empty_state: "Start chatting with Nova",
@@ -1522,11 +1572,13 @@
         const langBtn = document.getElementById("lang-btn");
         if (langBtn) langBtn.textContent = lang === "fr" ? "FR" : "EN";
 
-        // Conversations list empty label
-        const noConv = document.querySelector("#conversations-list div");
-        if (noConv && !noConv.classList.contains("conv-item")) {
-            noConv.textContent = t("no_conv");
-        }
+        // Conversation search placeholder
+        const convSearch = document.getElementById("conv-search");
+        if (convSearch) convSearch.placeholder = t("search_placeholder");
+
+        // Re-render the conversation list so group headers and empty
+        // labels pick up the new language.
+        if (typeof renderConversations === "function") renderConversations();
     }
 
     function toggleLang() {
@@ -1543,6 +1595,8 @@
     let currentImage = null;
     let activeChatController = null;
     let activeThinkingRow = null;
+    let allConversations = [];
+    let convSearchQuery = "";
 
     function setSendButtonToSend() {
         const btn = document.getElementById("send-btn");
@@ -1719,34 +1773,86 @@
         });
         if (res.status === 401) { logout(); return; }
         const convs = await res.json();
-        renderConversations(convs);
+        allConversations = Array.isArray(convs) ? convs : [];
+        renderConversations();
 
-        if (currentConvId === null && convs.length > 0) {
-            const sorted = [...convs].sort((a, b) => b.id - a.id);
+        if (currentConvId === null && allConversations.length > 0) {
+            const sorted = [...allConversations].sort((a, b) => b.id - a.id);
             openConversation(sorted[0].id, sorted[0].title);
         }
     }
 
-    function renderConversations(convs) {
+    function onConvSearchInput(value) {
+        convSearchQuery = value || "";
+        renderConversations();
+    }
+
+    function bucketFor(updated) {
+        const d = updated ? new Date(updated) : null;
+        if (!d || isNaN(d.getTime())) return "older";
+        const now = new Date();
+        const startToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        const startYesterday = new Date(startToday);
+        startYesterday.setDate(startToday.getDate() - 1);
+        const startWeek = new Date(startToday);
+        startWeek.setDate(startToday.getDate() - 7);
+        if (d >= startToday) return "today";
+        if (d >= startYesterday) return "yesterday";
+        if (d >= startWeek) return "week";
+        return "older";
+    }
+
+    function renderConversations() {
         const list = document.getElementById("conversations-list");
         list.innerHTML = "";
 
-        if (convs.length === 0) {
-            list.innerHTML = '<div style="padding:12px 16px;color:var(--text-dim);font-size:0.8rem;">Aucune conversation</div>';
+        if (allConversations.length === 0) {
+            const empty = document.createElement("div");
+            empty.className = "conv-empty-msg";
+            empty.textContent = t("no_conv");
+            list.appendChild(empty);
             return;
         }
 
-        const sorted = [...convs].sort((a, b) => b.id - a.id).slice(0, 15);
-        for (const conv of sorted) {
-            const div = document.createElement("div");
-            div.className = "conv-item" + (conv.id === currentConvId ? " active" : "");
-            div.dataset.id = conv.id;
-            div.innerHTML = `
-                <span class="conv-title">${escapeHtml(conv.title)}</span>
-                <button class="conv-delete" onclick="deleteConversation(event, ${conv.id})">✕</button>
-            `;
-            div.addEventListener("click", () => openConversation(conv.id, conv.title));
-            list.appendChild(div);
+        const q = (convSearchQuery || "").trim().toLowerCase();
+        const filtered = q
+            ? allConversations.filter(c => (c.title || "").toLowerCase().includes(q))
+            : allConversations;
+
+        if (filtered.length === 0) {
+            const empty = document.createElement("div");
+            empty.className = "conv-empty-msg";
+            empty.textContent = t("no_match");
+            list.appendChild(empty);
+            return;
+        }
+
+        // Server returns conversations sorted by `updated` DESC, so iteration
+        // order naturally yields most-recent-first within each bucket.
+        const groups = { today: [], yesterday: [], week: [], older: [] };
+        for (const c of filtered) groups[bucketFor(c.updated)].push(c);
+
+        const order = ["today", "yesterday", "week", "older"];
+        for (const key of order) {
+            const items = groups[key];
+            if (items.length === 0) continue;
+
+            const header = document.createElement("div");
+            header.className = "conv-group-header";
+            header.textContent = t("group_" + key);
+            list.appendChild(header);
+
+            for (const conv of items) {
+                const div = document.createElement("div");
+                div.className = "conv-item" + (conv.id === currentConvId ? " active" : "");
+                div.dataset.id = conv.id;
+                div.innerHTML = `
+                    <span class="conv-title">${escapeHtml(conv.title)}</span>
+                    <button class="conv-delete" onclick="deleteConversation(event, ${conv.id})">✕</button>
+                `;
+                div.addEventListener("click", () => openConversation(conv.id, conv.title));
+                list.appendChild(div);
+            }
         }
     }
 
