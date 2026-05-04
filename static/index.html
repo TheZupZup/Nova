@@ -243,6 +243,40 @@
             border-top: 1px solid var(--border);
         }
 
+        #current-user-card {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 10px;
+            background: var(--bg3);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            margin-bottom: 8px;
+            font-size: 0.78rem;
+        }
+
+        #current-user-name {
+            flex: 1;
+            color: var(--text);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .user-role-tag {
+            font-size: 0.65rem;
+            padding: 2px 6px;
+            border-radius: 4px;
+            border: 1px solid var(--border);
+            color: var(--text-dim);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            white-space: nowrap;
+        }
+
+        .user-role-tag.role-admin { color: var(--cyan); border-color: var(--cyan); }
+        .user-role-tag.role-restricted { color: #ce93d8; border-color: #ce93d8; }
+
         #logout-btn {
             width: 100%;
             padding: 8px;
@@ -257,6 +291,52 @@
         }
 
         #logout-btn:hover { border-color: var(--danger); color: var(--danger); }
+
+        /* Delete confirmation inline state */
+        .conv-item.confirming {
+            background: rgba(244, 67, 54, 0.08);
+            border-color: var(--danger);
+        }
+
+        .conv-confirm {
+            display: none;
+            gap: 4px;
+            flex-shrink: 0;
+        }
+
+        .conv-item.confirming .conv-confirm { display: flex; }
+        .conv-item.confirming .conv-delete { display: none; }
+        .conv-item.confirming .conv-confirm-text {
+            font-size: 0.7rem;
+            color: var(--danger);
+            white-space: nowrap;
+            align-self: center;
+        }
+
+        .conv-confirm-btn {
+            background: transparent;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            color: var(--text-dim);
+            font-family: monospace;
+            font-size: 0.75rem;
+            padding: 2px 6px;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+
+        .conv-confirm-btn.yes:hover { border-color: var(--danger); color: var(--danger); }
+        .conv-confirm-btn.no:hover { border-color: var(--cyan); color: var(--cyan); }
+
+        /* Stop / interruption notice */
+        .message.stopped {
+            background: transparent;
+            border: 1px dashed var(--border);
+            color: var(--text-dim);
+            font-style: italic;
+            font-size: 0.85rem;
+            padding: 6px 12px;
+        }
 
         /* ── MAIN ── */
         #main {
@@ -376,13 +456,54 @@
             align-items: center;
             justify-content: center;
             color: var(--text-dim);
-            gap: 8px;
+            gap: 12px;
+            padding: 20px;
         }
 
         #empty-state h2 {
             color: var(--cyan);
             font-size: 1.5rem;
             letter-spacing: 3px;
+        }
+
+        #empty-state-hint {
+            font-size: 0.8rem;
+            color: var(--text-dim);
+            text-align: center;
+        }
+
+        #suggestion-chips {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 8px;
+            margin-top: 8px;
+            width: 100%;
+            max-width: 560px;
+        }
+
+        .suggest-chip {
+            background: var(--bg3);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 10px 14px;
+            color: var(--text);
+            font-family: monospace;
+            font-size: 0.85rem;
+            text-align: left;
+            cursor: pointer;
+            transition: all 0.15s;
+            line-height: 1.4;
+        }
+
+        .suggest-chip:hover {
+            border-color: var(--cyan);
+            color: var(--cyan);
+            background: rgba(0, 188, 212, 0.06);
+        }
+
+        .suggest-chip:focus {
+            outline: none;
+            border-color: var(--cyan);
         }
 
         /* ── MODE SELECTOR ── */
@@ -481,20 +602,26 @@
 
         #user-input {
             flex: 1;
-            padding: 10px 14px;
+            padding: 11px 14px;
             background: var(--bg3);
             border: 1px solid var(--border);
             border-radius: 8px;
             color: var(--text);
             font-family: monospace;
             font-size: 0.95rem;
-            height: 44px;
+            line-height: 1.4;
+            min-height: 44px;
+            max-height: 220px;
             outline: none;
+            resize: none;
+            overflow-y: auto;
             transition: border-color 0.2s;
             min-width: 0;
+            width: 100%;
         }
 
         #user-input:focus { border-color: var(--cyan); }
+        #user-input::placeholder { color: var(--text-dim); }
 
         #send-btn {
             padding: 10px 18px;
@@ -1242,6 +1369,10 @@
             </div>
             <div id="conversations-list"></div>
             <div id="sidebar-footer">
+                <div id="current-user-card" style="display:none;">
+                    <span id="current-user-name">—</span>
+                    <span id="current-user-role" class="user-role-tag">user</span>
+                </div>
                 <button id="settings-btn" onclick="openSettings()">⚙ Settings</button>
                 <button id="admin-btn" onclick="openAdmin()" style="display:none;width:100%;padding:8px;background:transparent;border:1px solid var(--border);border-radius:5px;color:var(--text-dim);font-family:monospace;font-size:0.8rem;cursor:pointer;transition:all 0.2s;margin-top:6px;">⚑ Admin</button>
                 <button id="logout-btn" onclick="logout()">Déconnexion</button>
@@ -1259,7 +1390,9 @@
             <div id="messages">
                 <div id="empty-state">
                     <h2>⬡ NOVA</h2>
-                    <span>Commence une nouvelle conversation</span>
+                    <span id="empty-state-title">Commence une nouvelle conversation</span>
+                    <span id="empty-state-hint">Choisis une suggestion ou écris ta question</span>
+                    <div id="suggestion-chips"></div>
                 </div>
             </div>
 
@@ -1301,7 +1434,7 @@
             <!-- INPUT -->
             <input type="file" id="image-input" accept="image/*" style="display:none" onchange="handleImageSelect(event)" />
             <div id="input-area">
-                <input type="text" id="user-input" placeholder="Parle à Nova..." inputmode="text" enterkeyhint="send" autocomplete="off" />
+                <textarea id="user-input" rows="1" placeholder="Parle à Nova..." inputmode="text" enterkeyhint="send" autocomplete="off" spellcheck="false"></textarea>
                 <button id="image-btn" onclick="document.getElementById('image-input').click()" title="Envoyer une image">📷</button>
                 <button id="search-btn" onclick="toggleSearch()" title="Recherche web">🔍</button>
                 <button id="send-btn" onclick="sendMessage()">Envoyer</button>
@@ -1473,8 +1606,11 @@
             select_conv: "Discute avec Nova",
             new_conv_title: "Nouvelle conversation",
             empty_state: "Discute avec Nova",
-            placeholder: "Parle à Nova...",
+            empty_state_hint: "Choisis une suggestion ou écris ta question",
+            placeholder: "Parle à Nova... (Maj+Entrée pour aller à la ligne)",
             send: "Envoyer",
+            stop: "Stop",
+            stopped_notice: "⏹ Réponse interrompue",
             thinking: "réfléchit...",
             you: "Toi",
             copy: "copier",
@@ -1484,6 +1620,16 @@
             mode_chat_desc: "Conversation et questions du jour",
             mode_code_desc: "Code, refactor et débogage",
             mode_deep_desc: "Réflexion approfondie et longue",
+            suggest_brainstorm: "💡 Aide-moi à trouver des idées sur…",
+            suggest_explain: "📚 Explique-moi simplement…",
+            suggest_code: "🛠️ Aide-moi avec un bout de code",
+            suggest_plan: "🗓️ Planifie ma journée",
+            confirm_delete: "Supprimer cette conversation ?",
+            confirm_yes: "✓",
+            confirm_no: "✕",
+            role_admin: "admin",
+            role_restricted: "restreint",
+            role_user: "utilisateur",
         },
         en: {
             never_checked: "Never checked",
@@ -1507,8 +1653,11 @@
             select_conv: "Start chatting with Nova",
             new_conv_title: "New conversation",
             empty_state: "Start chatting with Nova",
-            placeholder: "Talk to Nova...",
+            empty_state_hint: "Pick a suggestion or type your question",
+            placeholder: "Talk to Nova... (Shift+Enter for newline)",
             send: "Send",
+            stop: "Stop",
+            stopped_notice: "⏹ Response stopped",
             thinking: "thinking...",
             you: "You",
             copy: "copy",
@@ -1518,6 +1667,16 @@
             mode_chat_desc: "Everyday chat and questions",
             mode_code_desc: "Code, refactoring, debugging",
             mode_deep_desc: "Long, careful reasoning",
+            suggest_brainstorm: "💡 Help me brainstorm ideas about…",
+            suggest_explain: "📚 Explain something to me simply…",
+            suggest_code: "🛠️ Help me with some code",
+            suggest_plan: "🗓️ Plan my day",
+            confirm_delete: "Delete this conversation?",
+            confirm_yes: "✓",
+            confirm_no: "✕",
+            role_admin: "admin",
+            role_restricted: "restricted",
+            role_user: "user",
         }
     };
 
@@ -1540,7 +1699,10 @@
 
         // Input
         document.getElementById("user-input").placeholder = t("placeholder");
-        document.getElementById("send-btn").textContent = t("send");
+        const sendBtn = document.getElementById("send-btn");
+        if (sendBtn) {
+            sendBtn.textContent = isThinking ? t("stop") : t("send");
+        }
 
         // Mode bar
         const modeLabel = document.getElementById("mode-label-text");
@@ -1565,8 +1727,11 @@
         }
 
         // Empty state
-        const emptySpan = document.querySelector("#empty-state span");
-        if (emptySpan) emptySpan.textContent = t("empty_state");
+        const emptyTitle = document.getElementById("empty-state-title");
+        if (emptyTitle) emptyTitle.textContent = t("empty_state");
+        const emptyHint = document.getElementById("empty-state-hint");
+        if (emptyHint) emptyHint.textContent = t("empty_state_hint");
+        renderSuggestionChips();
 
         // Lang button
         const langBtn = document.getElementById("lang-btn");
@@ -1575,6 +1740,9 @@
         // Conversation search placeholder
         const convSearch = document.getElementById("conv-search");
         if (convSearch) convSearch.placeholder = t("search_placeholder");
+
+        // Re-render the user card so the role label tracks the language.
+        applyUserCard();
 
         // Re-render the conversation list so group headers and empty
         // labels pick up the new language.
@@ -1595,8 +1763,51 @@
     let currentImage = null;
     let activeChatController = null;
     let activeThinkingRow = null;
+    let userCancelledChat = false;
     let allConversations = [];
     let convSearchQuery = "";
+
+    const SUGGESTION_KEYS = [
+        "suggest_brainstorm",
+        "suggest_explain",
+        "suggest_code",
+        "suggest_plan",
+    ];
+
+    function renderSuggestionChips() {
+        const wrap = document.getElementById("suggestion-chips");
+        if (!wrap) return;
+        wrap.innerHTML = "";
+        for (const key of SUGGESTION_KEYS) {
+            const label = t(key);
+            const btn = document.createElement("button");
+            btn.type = "button";
+            btn.className = "suggest-chip";
+            btn.textContent = label;
+            btn.addEventListener("click", () => useSuggestion(label));
+            wrap.appendChild(btn);
+        }
+    }
+
+    function useSuggestion(text) {
+        // Strip the leading emoji + space so the composer holds just the prompt.
+        const stripped = text.replace(/^[^\wÀ-ſ]*\s*/, "").trim();
+        const input = document.getElementById("user-input");
+        if (!input) return;
+        input.value = stripped || text;
+        autoResizeInput();
+        input.focus();
+        // Place the caret at the end so the user can keep typing.
+        try { input.setSelectionRange(input.value.length, input.value.length); } catch {}
+    }
+
+    function autoResizeInput() {
+        const el = document.getElementById("user-input");
+        if (!el) return;
+        el.style.height = "auto";
+        const max = 220;
+        el.style.height = Math.min(el.scrollHeight, max) + "px";
+    }
 
     function setSendButtonToSend() {
         const btn = document.getElementById("send-btn");
@@ -1610,12 +1821,30 @@
         const btn = document.getElementById("send-btn");
         if (!btn) return;
         btn.disabled = false;
-        btn.textContent = "Stop";
+        btn.textContent = t("stop");
         btn.onclick = stopMessage;
+    }
+
+    function appendStoppedNotice() {
+        const messagesEl = document.getElementById("messages");
+        if (!messagesEl) return;
+        const row = document.createElement("div");
+        row.className = "message-row nova";
+        const label = document.createElement("div");
+        label.className = "message-label";
+        label.textContent = "Nova";
+        const bubble = document.createElement("div");
+        bubble.className = "message stopped";
+        bubble.textContent = t("stopped_notice");
+        row.appendChild(label);
+        row.appendChild(bubble);
+        messagesEl.appendChild(row);
+        messagesEl.scrollTop = messagesEl.scrollHeight;
     }
 
     function stopMessage() {
         if (!isThinking) return;
+        userCancelledChat = true;
         if (activeChatController) {
             activeChatController.abort();
         }
@@ -1623,10 +1852,30 @@
             activeThinkingRow.remove();
         }
         activeThinkingRow = null;
+        appendStoppedNotice();
         isThinking = false;
         activeChatController = null;
         setSendButtonToSend();
         document.getElementById("user-input")?.focus();
+    }
+
+    function applyUserCard() {
+        const card = document.getElementById("current-user-card");
+        if (!card) return;
+        if (!currentUser) {
+            card.style.display = "none";
+            return;
+        }
+        const nameEl = document.getElementById("current-user-name");
+        const tagEl = document.getElementById("current-user-role");
+        if (!nameEl || !tagEl) return;
+        nameEl.textContent = currentUser.username || "—";
+        const r = currentUser.role === "admin"
+            ? "admin"
+            : (currentUser.is_restricted ? "restricted" : "user");
+        tagEl.textContent = t("role_" + r);
+        tagEl.className = "user-role-tag role-" + r;
+        card.style.display = "flex";
     }
 
     function handleImageSelect(event) {
@@ -1668,11 +1917,13 @@
     });
 
     document.getElementById("user-input").addEventListener("keydown", e => {
-        if (e.key === "Enter" && !e.shiftKey) {
+        // Enter sends; Shift+Enter inserts a newline.
+        if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
             e.preventDefault();
             sendMessage();
         }
     });
+    document.getElementById("user-input").addEventListener("input", autoResizeInput);
 
     async function login() {
         const username = document.getElementById("username-input").value.trim();
@@ -1721,6 +1972,7 @@
                 if (adminBtn) {
                     adminBtn.style.display = currentUser.role === "admin" ? "block" : "none";
                 }
+                applyUserCard();
             }
         } catch (e) {}
     }
@@ -1729,6 +1981,8 @@
         document.getElementById("login-screen").style.display = "none";
         document.getElementById("app").style.display = "flex";
         setMode(currentMode);
+        renderSuggestionChips();
+        autoResizeInput();
         loadCurrentUser();
         loadConversations();
     }
@@ -1784,6 +2038,10 @@
 
     function onConvSearchInput(value) {
         convSearchQuery = value || "";
+        // A search filter change re-renders the list, so any pending
+        // delete-confirm state is moot; clear it explicitly so a new row
+        // is not auto-confirmed by a stray click.
+        clearPendingDelete();
         renderConversations();
     }
 
@@ -1848,22 +2106,40 @@
                 div.dataset.id = conv.id;
                 div.innerHTML = `
                     <span class="conv-title">${escapeHtml(conv.title)}</span>
-                    <button class="conv-delete" onclick="deleteConversation(event, ${conv.id})">✕</button>
+                    <button class="conv-delete" type="button" title="${t("confirm_delete")}" onclick="askDeleteConversation(event, ${conv.id})">✕</button>
+                    <span class="conv-confirm">
+                        <span class="conv-confirm-text">${t("confirm_delete")}</span>
+                        <button class="conv-confirm-btn yes" type="button" onclick="confirmDeleteConversation(event, ${conv.id})">${t("confirm_yes")}</button>
+                        <button class="conv-confirm-btn no" type="button" onclick="cancelDeleteConversation(event, ${conv.id})">${t("confirm_no")}</button>
+                    </span>
                 `;
-                div.addEventListener("click", () => openConversation(conv.id, conv.title));
+                div.addEventListener("click", () => {
+                    // If the row is in confirmation mode, swallow the row click
+                    // so it cannot be opened by accident; the user must press
+                    // ✓ or ✕ explicitly.
+                    if (div.classList.contains("confirming")) return;
+                    openConversation(conv.id, conv.title);
+                });
                 list.appendChild(div);
             }
         }
     }
 
-    function newConversation() {
-        currentConvId = null;
+    function renderEmptyState() {
         document.getElementById("messages").innerHTML = `
             <div id="empty-state">
                 <h2>⬡ NOVA</h2>
-                <span>${t("empty_state")}</span>
+                <span id="empty-state-title">${t("empty_state")}</span>
+                <span id="empty-state-hint">${t("empty_state_hint")}</span>
+                <div id="suggestion-chips"></div>
             </div>
         `;
+        renderSuggestionChips();
+    }
+
+    function newConversation() {
+        currentConvId = null;
+        renderEmptyState();
         document.getElementById("chat-title").textContent = t("new_conv_title");
         document.getElementById("model-badge").textContent = "—";
         document.querySelectorAll(".conv-item").forEach(el => el.classList.remove("active"));
@@ -1896,8 +2172,45 @@
         document.getElementById("user-input").focus();
     }
 
-    async function deleteConversation(event, id) {
+    let pendingDeleteId = null;
+    let pendingDeleteTimer = null;
+
+    function clearPendingDelete() {
+        if (pendingDeleteTimer) {
+            clearTimeout(pendingDeleteTimer);
+            pendingDeleteTimer = null;
+        }
+        document.querySelectorAll(".conv-item.confirming").forEach(el => {
+            el.classList.remove("confirming");
+        });
+        pendingDeleteId = null;
+    }
+
+    function askDeleteConversation(event, id) {
         event.stopPropagation();
+        // If another row was already pending, reset it so only one row is in
+        // confirm state at a time.
+        if (pendingDeleteId !== null && pendingDeleteId !== id) {
+            clearPendingDelete();
+        }
+        const item = event.currentTarget.closest(".conv-item");
+        if (!item) return;
+        item.classList.add("confirming");
+        pendingDeleteId = id;
+        if (pendingDeleteTimer) clearTimeout(pendingDeleteTimer);
+        // Auto-revert after 4s if the user does nothing — keeps the sidebar
+        // from being visually "stuck" if they wander off.
+        pendingDeleteTimer = setTimeout(clearPendingDelete, 4000);
+    }
+
+    function cancelDeleteConversation(event, id) {
+        event.stopPropagation();
+        clearPendingDelete();
+    }
+
+    async function confirmDeleteConversation(event, id) {
+        event.stopPropagation();
+        clearPendingDelete();
         await fetch(`/conversations/${id}`, {
             method: "DELETE",
             headers: { "Authorization": `Bearer ${token}` }
@@ -1920,7 +2233,7 @@
 
         const label = document.createElement("div");
         label.className = "message-label";
-        label.textContent = role === "user" ? "Toi" : "Nova";
+        label.textContent = role === "user" ? t("you") : "Nova";
 
         const bubble = document.createElement("div");
         bubble.className = `message ${role}`;
@@ -1947,9 +2260,11 @@
         if (role === "nova") {
             const copyBtn = document.createElement("button");
             copyBtn.className = "copy-btn";
-            copyBtn.textContent = "copier";
+            const copyLabel = t("copy");
+            const copiedLabel = t("copied");
+            copyBtn.textContent = copyLabel;
             copyBtn.onclick = () => {
-                const plainText = bubble.innerText.replace("copier", "").replace("copié!", "").trim();
+                const plainText = bubble.innerText.replace(copyLabel, "").replace(copiedLabel, "").trim();
                 try {
                     navigator.clipboard.writeText(plainText);
                 } catch {
@@ -1960,10 +2275,10 @@
                     document.execCommand("copy");
                     document.body.removeChild(ta);
                 }
-                copyBtn.textContent = "copié!";
+                copyBtn.textContent = copiedLabel;
                 copyBtn.classList.add("copied");
                 setTimeout(() => {
-                    copyBtn.textContent = "copier";
+                    copyBtn.textContent = copyLabel;
                     copyBtn.classList.remove("copied");
                 }, 2000);
             };
@@ -1992,7 +2307,9 @@
         if (!text && !currentImage) return;
 
         input.value = "";
+        autoResizeInput();
         isThinking = true;
+        userCancelledChat = false;
         setSendButtonToStop();
 
         appendMessage("user", text || "", null, currentImage);
@@ -2002,14 +2319,13 @@
         thinkingRow.className = "message-row nova";
         thinkingRow.innerHTML = `
             <div class="message-label">Nova</div>
-            <div class="message thinking">réfléchit...</div>
+            <div class="message thinking">${t("thinking")}</div>
         `;
         messagesEl.appendChild(thinkingRow);
         messagesEl.scrollTop = messagesEl.scrollHeight;
         activeThinkingRow = thinkingRow;
         activeChatController = new AbortController();
 
-        console.log("Sending image:", currentImage ? "YES (" + currentImage.substring(0,20) + "...)" : "NO");
         try {
             const res = await fetch("/chat", {
                 method: "POST",
@@ -2036,18 +2352,30 @@
 
             const data = await res.json();
             currentConvId = data.conversation_id;
-            appendMessage("nova", data.response, data.model);
+            // If the user pressed Stop while the response was in flight,
+            // the stopped-notice has already been shown; suppress the
+            // response render so the two visuals don't fight. The reply
+            // is still persisted server-side — see issue #96 for true
+            // backend cancellation.
+            if (!userCancelledChat) {
+                appendMessage("nova", data.response, data.model);
+            }
             loadConversations();
         } catch (e) {
             if (thinkingRow.isConnected) {
                 thinkingRow.remove();
             }
             activeThinkingRow = null;
-            if (e?.name !== "AbortError") {
+            if (e?.name === "AbortError") {
+                // The stopMessage() handler already rendered the stopped
+                // notice; nothing more to do here. We deliberately do not
+                // claim the backend computation was cancelled — see #96.
+            } else {
                 appendMessage("nova", "Ollama is unreachable. Make sure Ollama is running, then try again.");
             }
         } finally {
             isThinking = false;
+            userCancelledChat = false;
             activeChatController = null;
             setSendButtonToSend();
             searchEnabled = false;
