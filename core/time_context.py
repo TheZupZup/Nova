@@ -57,14 +57,14 @@ def resolve_relative_date(expression: str) -> str | None:
 
     # Week expressions — always anchored to the Monday of the week
     week_offsets = {
-        "this week":            0,
-        "cette semaine":        0,
-        "last week":            -7,
-        "la semaine dernière":  -7,
-        "semaine dernière":     -7,
-        "next week":            7,
+        "this week": 0,
+        "cette semaine": 0,
+        "last week": -7,
+        "la semaine dernière": -7,
+        "semaine dernière": -7,
+        "next week": 7,
         "la semaine prochaine": 7,
-        "semaine prochaine":    7,
+        "semaine prochaine": 7,
     }
     if expr in week_offsets:
         monday = today - timedelta(days=today.weekday()) + timedelta(days=week_offsets[expr])
