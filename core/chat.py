@@ -8,6 +8,7 @@ from core.identity import IDENTITY_CONTRACT
 from core.policies import ADMIN_POLICY, Policy
 from core.router import route
 from core.search import web_search, should_search
+from core.security_feed import get_security_context, is_security_query
 from core.weather import detect_weather_city, get_weather
 from memory.extractor import extract_memories
 from memory.policy import is_memory_allowed
@@ -47,6 +48,15 @@ Réponds dans la langue de l'utilisateur.
 Données météo:
 {weather_data}"""
 
+SECURITY_SYSTEM_PROMPT = """Tu es Nova, un assistant personnel intelligent.
+Tu reçois un résumé en lecture seule du flux SilentGuard (connexions, processus, statut de confiance).
+Analyse ces données pour répondre à la question de l'utilisateur, mets en évidence les anomalies, et n'hésite pas à demander si une action est souhaitée.
+Tu n'as AUCUN moyen d'agir : tu ne peux ni bloquer, ni tuer un processus, ni modifier le système. Ne suggère que des pistes d'analyse, pas des commandes destructrices.
+Réponds dans la langue de l'utilisateur.
+
+Données SilentGuard (read-only):
+{security_data}"""
+
 
 def _extract_and_save_natural_memories(user_message: str, user_id: int):
     """Runs the rule-based extractor on the user message and persists allowed memories under `user_id`."""
@@ -81,6 +91,8 @@ def build_messages(history: list[dict], user_input: str, memories: list[dict], e
         system_prompt = WEATHER_SYSTEM_PROMPT.format(weather_data=extra_context)
     elif context_type == "search":
         system_prompt = SEARCH_SYSTEM_PROMPT.format(search_results=extra_context)
+    elif context_type == "security":
+        system_prompt = SECURITY_SYSTEM_PROMPT.format(security_data=extra_context)
     else:
         memory_text = format_memories_for_prompt(memories)
         natural_text = format_for_prompt(natural_memories) if natural_memories else ""
@@ -148,6 +160,16 @@ def chat(history: list[dict], user_input: str, memories: list[dict], user_id: in
 
             if weather_result == "unknown_city":
                 return "Je n'ai pas accès à la météo pour cette ville.", model
+
+        # SilentGuard read-only feed — surfaces local security telemetry
+        # when the user explicitly asks about it. No system actions.
+        if is_security_query(user_input):
+            security_data = get_security_context()
+            if security_data:
+                messages = build_messages(history, user_input, memories, security_data, "security")
+                response = client.chat(model=model, messages=messages)
+                reply = response["message"]["content"]
+                return reply, model
 
         # Web search — both the explicit `force_search` flag and the
         # auto-detected `should_search` path require web_search_enabled.
