@@ -8,7 +8,8 @@ from core.identity import IDENTITY_CONTRACT
 from core.policies import ADMIN_POLICY, Policy
 from core.router import route
 from core.search import web_search, should_search
-from core.security_feed import get_security_context, is_security_query
+from core.security_feed import is_security_query
+from core.integrations import silentguard as silentguard_integration
 from core.weather import detect_weather_city, get_weather
 from memory.extractor import extract_memories
 from memory.policy import is_memory_allowed
@@ -162,9 +163,10 @@ def chat(history: list[dict], user_input: str, memories: list[dict], user_id: in
                 return "Je n'ai pas accès à la météo pour cette ville.", model
 
         # SilentGuard read-only feed — surfaces local security telemetry
-        # when the user explicitly asks about it. No system actions.
+        # when the user explicitly asks about it AND the user has turned
+        # the SilentGuard integration on in Settings. No system actions.
         if is_security_query(user_input):
-            security_data = get_security_context()
+            security_data = silentguard_integration.recent_events_summary(user_id)
             if security_data:
                 messages = build_messages(history, user_input, memories, security_data, "security")
                 response = client.chat(model=model, messages=messages)

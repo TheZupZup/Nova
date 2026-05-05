@@ -953,6 +953,51 @@
             white-space: nowrap;
         }
 
+        .integration-status {
+            font-size: 0.68rem;
+            border-radius: 4px;
+            padding: 1px 6px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            white-space: nowrap;
+            border: 1px solid var(--border);
+            color: var(--text-dim);
+        }
+        .integration-status.connected {
+            color: #4caf50;
+            border-color: #2e7d32;
+        }
+        .integration-status.disabled {
+            color: var(--text-dim);
+            border-color: var(--border);
+        }
+        .integration-status.not_found,
+        .integration-status.unreachable {
+            color: #f0a000;
+            border-color: #b07a00;
+        }
+        .integration-toggle-btn {
+            font-family: monospace;
+            font-size: 0.75rem;
+            padding: 4px 12px;
+            border-radius: 6px;
+            cursor: pointer;
+            border: 1px solid var(--border);
+            background: var(--bg);
+            color: var(--text-dim);
+            min-width: 52px;
+        }
+        .integration-toggle-btn.on {
+            color: var(--cyan);
+            border-color: var(--cyan);
+        }
+        .integration-detail {
+            font-size: 0.7rem;
+            color: var(--text-dim);
+            margin-top: 4px;
+            word-break: break-all;
+        }
+
         .pers-select, .pers-textarea {
             background: var(--bg);
             border: 1px solid var(--border);
@@ -1661,6 +1706,7 @@
                 <button class="settings-nav-btn" data-pane="personalization" onclick="switchSettingsPane('personalization')" id="settings-nav-personalization">Personalization</button>
                 <button class="settings-nav-btn" data-pane="memory" onclick="switchSettingsPane('memory')" id="settings-nav-memory">Memory</button>
                 <button class="settings-nav-btn" data-pane="models" onclick="switchSettingsPane('models')" id="settings-nav-models">Models</button>
+                <button class="settings-nav-btn" data-pane="integrations" onclick="switchSettingsPane('integrations')" id="settings-nav-integrations">Integrations</button>
                 <button class="settings-nav-btn" data-pane="admin" onclick="switchSettingsPane('admin')" id="settings-nav-admin" style="display:none;">Admin</button>
                 <div class="settings-nav-divider"></div>
                 <button class="settings-nav-btn" data-pane="account" onclick="switchSettingsPane('account')" id="settings-nav-account">Account</button>
@@ -1828,6 +1874,53 @@
                     </div>
                 </section>
 
+                <!-- INTEGRATIONS -->
+                <section class="settings-pane" id="settings-pane-integrations">
+                    <div class="settings-section-title" id="settings-integrations-title">Integrations</div>
+                    <div class="settings-row-hint" id="settings-integrations-note">
+                        Optional bridges to external tools. Each switch is per-user and stays off until you turn it on. Nova never modifies the external tools.
+                    </div>
+
+                    <!-- SilentGuard -->
+                    <div class="settings-row">
+                        <div class="settings-row-head">
+                            <div class="settings-row-label">
+                                <span class="settings-row-title" id="settings-int-sg-title">SilentGuard</span>
+                                <span class="settings-row-hint" id="settings-int-sg-hint">Read-only feed of network observations from ~/.silentguard_memory.json.</span>
+                            </div>
+                            <div style="display:flex;gap:8px;align-items:center;">
+                                <span id="int-sg-status" class="integration-status disabled">checking…</span>
+                                <button id="int-sg-toggle" class="integration-toggle-btn" onclick="toggleIntegration('silentguard')">OFF</button>
+                            </div>
+                        </div>
+                        <div id="int-sg-detail" class="integration-detail"></div>
+                    </div>
+
+                    <!-- NexaNote -->
+                    <div class="settings-row">
+                        <div class="settings-row-head">
+                            <div class="settings-row-label">
+                                <span class="settings-row-title" id="settings-int-nn-title">NexaNote</span>
+                                <span class="settings-row-hint" id="settings-int-nn-hint">Notes via the NexaNote HTTP API. Read-only by default.</span>
+                            </div>
+                            <div style="display:flex;gap:8px;align-items:center;">
+                                <span id="int-nn-status" class="integration-status disabled">checking…</span>
+                                <button id="int-nn-toggle" class="integration-toggle-btn" onclick="toggleIntegration('nexanote')">OFF</button>
+                            </div>
+                        </div>
+                        <div id="int-nn-detail" class="integration-detail"></div>
+                        <div id="int-nn-write-row" style="display:none;margin-top:8px;padding-top:8px;border-top:1px dashed var(--border);">
+                            <div class="settings-row-head">
+                                <div class="settings-row-label">
+                                    <span class="settings-row-title" id="settings-int-nn-write-title">Allow writes</span>
+                                    <span class="settings-row-hint" id="settings-int-nn-write-hint">Lets Nova create or update notes via NexaNote. Off by default.</span>
+                                </div>
+                                <button id="int-nn-write-toggle" class="integration-toggle-btn" onclick="toggleIntegrationWrite('nexanote')">OFF</button>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
                 <!-- ADMIN (admin-only) -->
                 <section class="settings-pane" id="settings-pane-admin">
                     <div class="settings-section-title" id="settings-admin-title">Admin</div>
@@ -1925,14 +2018,27 @@
             nav_personalization: "Personnalisation",
             nav_memory: "Mémoire",
             nav_models: "Modèles",
+            nav_integrations: "Intégrations",
             nav_admin: "Admin",
             nav_account: "Compte",
             section_general: "Général",
             section_personalization: "Personnalisation",
             section_memory: "Mémoire",
             section_models: "Modèles",
+            section_integrations: "Intégrations",
             section_admin: "Admin",
             section_account: "Compte",
+            integrations_note: "Ponts optionnels vers des outils externes. Chaque interrupteur est par utilisateur et reste désactivé jusqu'à ce que tu l'actives. Nova ne modifie jamais les outils externes.",
+            int_sg_title: "SilentGuard",
+            int_sg_hint: "Flux en lecture seule des observations réseau depuis ~/.silentguard_memory.json.",
+            int_nn_title: "NexaNote",
+            int_nn_hint: "Notes via l'API HTTP de NexaNote. Lecture seule par défaut.",
+            int_nn_write_title: "Autoriser l'écriture",
+            int_nn_write_hint: "Permet à Nova de créer ou modifier des notes via NexaNote. Désactivé par défaut.",
+            int_state_connected: "Connecté",
+            int_state_disabled: "Désactivé",
+            int_state_not_found: "Introuvable",
+            int_state_unreachable: "Injoignable",
             ram_title: "Budget RAM",
             ram_hint: "Contrôle la taille de l'historique et des mémoires",
             update_title: "Mise à jour automatique des modèles",
@@ -2012,14 +2118,27 @@
             nav_personalization: "Personalization",
             nav_memory: "Memory",
             nav_models: "Models",
+            nav_integrations: "Integrations",
             nav_admin: "Admin",
             nav_account: "Account",
             section_general: "General",
             section_personalization: "Personalization",
             section_memory: "Memory",
             section_models: "Models",
+            section_integrations: "Integrations",
             section_admin: "Admin",
             section_account: "Account",
+            integrations_note: "Optional bridges to external tools. Each switch is per-user and stays off until you turn it on. Nova never modifies the external tools.",
+            int_sg_title: "SilentGuard",
+            int_sg_hint: "Read-only feed of network observations from ~/.silentguard_memory.json.",
+            int_nn_title: "NexaNote",
+            int_nn_hint: "Notes via the NexaNote HTTP API. Read-only by default.",
+            int_nn_write_title: "Allow writes",
+            int_nn_write_hint: "Lets Nova create or update notes via NexaNote. Off by default.",
+            int_state_connected: "Connected",
+            int_state_disabled: "Disabled",
+            int_state_not_found: "Not found",
+            int_state_unreachable: "Unreachable",
             ram_title: "RAM Budget",
             ram_hint: "Controls conversation history size and memory limits",
             update_title: "Auto-update models",
@@ -2133,6 +2252,7 @@
         _setText("settings-nav-personalization", t("nav_personalization"));
         _setText("settings-nav-memory", t("nav_memory"));
         _setText("settings-nav-models", t("nav_models"));
+        _setText("settings-nav-integrations", t("nav_integrations"));
         _setText("settings-nav-admin", t("nav_admin"));
         _setText("settings-nav-account", t("nav_account"));
 
@@ -2140,8 +2260,17 @@
         _setText("settings-personalization-title", t("section_personalization"));
         _setText("settings-memory-title", t("section_memory"));
         _setText("settings-models-title", t("section_models"));
+        _setText("settings-integrations-title", t("section_integrations"));
         _setText("settings-admin-title", t("section_admin"));
         _setText("settings-account-title", t("section_account"));
+
+        _setText("settings-integrations-note", t("integrations_note"));
+        _setText("settings-int-sg-title", t("int_sg_title"));
+        _setText("settings-int-sg-hint", t("int_sg_hint"));
+        _setText("settings-int-nn-title", t("int_nn_title"));
+        _setText("settings-int-nn-hint", t("int_nn_hint"));
+        _setText("settings-int-nn-write-title", t("int_nn_write_title"));
+        _setText("settings-int-nn-write-hint", t("int_nn_write_hint"));
 
         _setText("settings-ram-title", t("ram_title"));
         _setText("settings-ram-hint", t("ram_hint"));
@@ -2935,6 +3064,108 @@
         switchSettingsPane(settingsCurrentPane || "general");
         await loadSystemSettings();
         await loadMemories();
+        loadIntegrationsStatus();
+    }
+
+    // ── INTEGRATIONS ──
+    let integrationSwitches = {
+        silentguard_enabled: false,
+        nexanote_enabled: false,
+        nexanote_write_enabled: false,
+    };
+
+    function _setIntegrationToggle(btnId, on) {
+        const btn = document.getElementById(btnId);
+        if (!btn) return;
+        btn.textContent = on ? "ON" : "OFF";
+        btn.classList.toggle("on", !!on);
+    }
+
+    function _setIntegrationStatus(elId, state, label) {
+        const el = document.getElementById(elId);
+        if (!el) return;
+        el.classList.remove("connected", "disabled", "not_found", "unreachable");
+        const safe = ["connected", "disabled", "not_found", "unreachable"].includes(state)
+            ? state : "disabled";
+        el.classList.add(safe);
+        el.textContent = label || safe;
+    }
+
+    function _statusLabel(state) {
+        const map = {
+            connected: t("int_state_connected"),
+            disabled: t("int_state_disabled"),
+            not_found: t("int_state_not_found"),
+            unreachable: t("int_state_unreachable"),
+        };
+        return map[state] || state;
+    }
+
+    async function loadIntegrationsStatus() {
+        // Pull both: persisted switches (from /settings) and live status
+        // (from /integrations/status). The two endpoints are independent
+        // so a missing external tool never breaks the toggles.
+        try {
+            const [settingsRes, statusRes] = await Promise.all([
+                fetch("/settings", { headers: { "Authorization": `Bearer ${token}` } }),
+                fetch("/integrations/status", { headers: { "Authorization": `Bearer ${token}` } }),
+            ]);
+            if (settingsRes.ok) {
+                const s = await settingsRes.json();
+                integrationSwitches.silentguard_enabled = !!s.silentguard_enabled;
+                integrationSwitches.nexanote_enabled = !!s.nexanote_enabled;
+                integrationSwitches.nexanote_write_enabled = !!s.nexanote_write_enabled;
+            }
+            _setIntegrationToggle("int-sg-toggle", integrationSwitches.silentguard_enabled);
+            _setIntegrationToggle("int-nn-toggle", integrationSwitches.nexanote_enabled);
+            _setIntegrationToggle("int-nn-write-toggle", integrationSwitches.nexanote_write_enabled);
+            document.getElementById("int-nn-write-row").style.display =
+                integrationSwitches.nexanote_enabled ? "" : "none";
+
+            if (statusRes.ok) {
+                const data = await statusRes.json();
+                const sg = data.silentguard || {};
+                _setIntegrationStatus("int-sg-status", sg.state, _statusLabel(sg.state));
+                document.getElementById("int-sg-detail").textContent = sg.detail || "";
+                const nn = data.nexanote || {};
+                _setIntegrationStatus("int-nn-status", nn.state, _statusLabel(nn.state));
+                document.getElementById("int-nn-detail").textContent = nn.detail || "";
+            }
+        } catch (e) {
+            // Never let a missing endpoint break the settings page.
+            _setIntegrationStatus("int-sg-status", "disabled", _statusLabel("disabled"));
+            _setIntegrationStatus("int-nn-status", "disabled", _statusLabel("disabled"));
+        }
+    }
+
+    async function toggleIntegration(name) {
+        const key = `${name}_enabled`;
+        const newVal = !integrationSwitches[key];
+        await fetch("/settings", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${token}`,
+            },
+            body: JSON.stringify({ [key]: newVal }),
+        });
+        integrationSwitches[key] = newVal;
+        await loadIntegrationsStatus();
+    }
+
+    async function toggleIntegrationWrite(name) {
+        const key = `${name}_write_enabled`;
+        const newVal = !integrationSwitches[key];
+        await fetch("/settings", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${token}`,
+            },
+            body: JSON.stringify({ [key]: newVal }),
+        });
+        integrationSwitches[key] = newVal;
+        _setIntegrationToggle(`int-${name === "nexanote" ? "nn" : name}-write-toggle`, newVal);
     }
 
     function closeSettings() {
@@ -2958,6 +3189,9 @@
         document.querySelectorAll(".settings-pane").forEach(p => {
             p.classList.toggle("active", p.id === "settings-pane-" + pane);
         });
+        if (pane === "integrations") {
+            loadIntegrationsStatus();
+        }
     }
 
     function applySettingsAdminVisibility() {

@@ -16,6 +16,15 @@ NOVA_AUTO_WEB_LEARNING = os.getenv("NOVA_AUTO_WEB_LEARNING", "false").lower() ==
 GITHUB_CLIENT_ID = os.getenv("GITHUB_CLIENT_ID", "")
 GITHUB_CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET", "")
 GITHUB_OAUTH_REDIRECT_URI = os.getenv("GITHUB_OAUTH_REDIRECT_URI", "")
+
+# ── Optional integrations (passive bridges) ─────────────────────────
+# SilentGuard is read from a JSON file on disk; the path is overridable
+# via NOVA_SILENTGUARD_PATH (used by core.security_feed). NexaNote is
+# reached over HTTP. All integration switches are per-user and default
+# to disabled; nothing is contacted until the user opts in.
+NEXANOTE_API_URL = os.getenv("NEXANOTE_API_URL", "").strip().rstrip("/")
+NEXANOTE_API_TOKEN = os.getenv("NEXANOTE_API_TOKEN", "").strip()
+NEXANOTE_TIMEOUT_SECONDS = float(os.getenv("NEXANOTE_TIMEOUT_SECONDS", "3.0"))
 NOVA_ALPHA_ALLOWED_USERS: frozenset[str] = frozenset(
     u.strip().lower()
     for u in os.getenv("NOVA_ALPHA_ALLOWED_USERS", "").split(",")
@@ -39,4 +48,7 @@ ALLOWED_SETTINGS = {
     "ram_budget": {"type": int, "min": 256, "max": 16384},
     "nova_model_enabled": {"type": str, "allowed": ["true", "false"]},
     "nova_model_name": {"type": str, "max_len": 100},
+    "silentguard_enabled": {"type": str, "allowed": ["true", "false"]},
+    "nexanote_enabled": {"type": str, "allowed": ["true", "false"]},
+    "nexanote_write_enabled": {"type": str, "allowed": ["true", "false"]},
 }

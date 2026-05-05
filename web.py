@@ -47,6 +47,8 @@ from core.model_registry import (
 )
 from core import model_pulls as _model_pulls
 from core import model_access as _model_access
+from core.integrations import silentguard as _silentguard_integration
+from core.integrations import nexanote as _nexanote_integration
 import sqlite3 as _sqlite3
 from core import users as _users_mod
 from memory.store import (
@@ -273,6 +275,9 @@ class SettingsUpdateRequest(BaseModel):
     ram_budget: int | None = None
     nova_model_enabled: bool | None = None
     nova_model_name: str | None = None
+    silentguard_enabled: bool | None = None
+    nexanote_enabled: bool | None = None
+    nexanote_write_enabled: bool | None = None
 
     @field_validator("ram_budget")
     @classmethod
@@ -531,6 +536,15 @@ def get_settings(user: CurrentUser = Depends(get_current_user)):
         "nova_model_name": get_user_setting(
             user.id, "nova_model_name", NOVA_MODEL_DEFAULT_NAME
         ),
+        "silentguard_enabled": (
+            get_user_setting(user.id, "silentguard_enabled", "false") == "true"
+        ),
+        "nexanote_enabled": (
+            get_user_setting(user.id, "nexanote_enabled", "false") == "true"
+        ),
+        "nexanote_write_enabled": (
+            get_user_setting(user.id, "nexanote_write_enabled", "false") == "true"
+        ),
     }
 
 
@@ -567,7 +581,43 @@ def update_settings(
         )
     if data.nova_model_name is not None:
         save_user_setting(user.id, "nova_model_name", data.nova_model_name)
+    if data.silentguard_enabled is not None:
+        save_user_setting(
+            user.id,
+            "silentguard_enabled",
+            "true" if data.silentguard_enabled else "false",
+        )
+    if data.nexanote_enabled is not None:
+        save_user_setting(
+            user.id,
+            "nexanote_enabled",
+            "true" if data.nexanote_enabled else "false",
+        )
+    if data.nexanote_write_enabled is not None:
+        save_user_setting(
+            user.id,
+            "nexanote_write_enabled",
+            "true" if data.nexanote_write_enabled else "false",
+        )
     return {"ok": True}
+
+
+# ── INTEGRATIONS ────────────────────────────────────────────────────
+# Optional, per-user, opt-in bridges to external tools. Status is
+# computed against the caller's own switches; one user enabling
+# SilentGuard never affects another. The endpoint is read-only —
+# mutations go through /settings.
+
+@app.get("/integrations/status")
+def integrations_status(user: CurrentUser = Depends(get_current_user)):
+    """Per-integration availability snapshot for the caller."""
+    return {
+        "silentguard": _silentguard_integration.status(user.id).as_dict(),
+        "nexanote": {
+            **_nexanote_integration.status(user.id).as_dict(),
+            "write_enabled": _nexanote_integration.is_write_enabled(user.id),
+        },
+    }
 
 
 # ── ADMIN: USER MANAGEMENT ──────────────────────────────────────────

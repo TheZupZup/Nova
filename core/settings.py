@@ -27,6 +27,11 @@ from typing import Optional
 USER_SETTING_KEYS: frozenset[str] = frozenset({
     "nova_model_enabled",
     "nova_model_name",
+    # Optional integration switches. Stored per-user so each account
+    # opts in independently; integrations stay dark until flipped on.
+    "silentguard_enabled",
+    "nexanote_enabled",
+    "nexanote_write_enabled",
 })
 
 
