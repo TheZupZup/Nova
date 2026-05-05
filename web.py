@@ -47,6 +47,8 @@ from core.model_registry import (
 )
 from core import model_pulls as _model_pulls
 from core import model_access as _model_access
+from core import local_models as _local_models
+from core.ollama_client import OllamaUnavailable
 from core.integrations import silentguard as _silentguard_integration
 from core.integrations import nexanote as _nexanote_integration
 import sqlite3 as _sqlite3
@@ -897,6 +899,28 @@ def admin_list_models(_: CurrentUser = Depends(require_admin)):
     # and never triggers a pull.
     reconcile_installed_models()
     return list_registered_models()
+
+
+# ── ADMIN: LOCAL OLLAMA MODEL DETECTION ─────────────────────────────
+# Detected-model registry. Refresh hits `GET /api/tags` and upserts a
+# row per (provider, model_name); models that disappear from Ollama
+# stay in the registry. Pulling and GGUF import are out of scope.
+
+@app.post("/admin/ollama/refresh")
+def admin_refresh_ollama_models(_: CurrentUser = Depends(require_admin)):
+    try:
+        stats = _local_models.refresh_from_ollama()
+    except OllamaUnavailable:
+        raise HTTPException(
+            status_code=503,
+            detail="Ollama is unavailable.",
+        )
+    return {"ok": True, **stats}
+
+
+@app.get("/admin/ollama/models")
+def admin_list_ollama_models(_: CurrentUser = Depends(require_admin)):
+    return _local_models.list_models()
 
 
 # ── ADMIN: MODEL PULL ───────────────────────────────────────────────
