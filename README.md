@@ -152,6 +152,11 @@ sudo systemctl enable nova
 sudo systemctl start nova
 ```
 
+For an optional hardened unit file with systemd sandbox restrictions
+(`NoNewPrivileges`, `ProtectSystem=strict`, capability drop, etc.), see
+[deploy/systemd/README.md](deploy/systemd/README.md). It is a drop-in
+replacement for the minimal unit above and does not change Nova's behavior.
+
 ## Configuration
 
 All configuration is read from `.env` at startup. Key variables:

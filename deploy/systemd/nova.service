@@ -1,0 +1,95 @@
+# Nova — hardened systemd unit (example)
+#
+# This is an OPTIONAL hardened unit file. The minimal unit shown in the project
+# README still works. This file adds systemd sandbox restrictions that reduce
+# the blast radius of any unsafe behavior from Nova, the underlying tools, or
+# future plugins. It does not change how Nova runs or what it can do at the
+# application level.
+#
+# Before installing:
+#   1. Replace USERNAME with the local Linux account that owns the Nova checkout.
+#   2. Replace /path/to/Nova with the absolute path of your Nova checkout
+#      (the directory that contains web.py and nova.db).
+#   3. If you keep nova.db somewhere other than the checkout, add that path to
+#      ReadWritePaths= as well.
+#
+# See deploy/systemd/README.md for the full guide and a per-option explanation.
+
+[Unit]
+Description=Nova AI Assistant (hardened)
+After=network.target ollama.service
+
+[Service]
+Type=simple
+User=USERNAME
+Group=USERNAME
+WorkingDirectory=/path/to/Nova
+ExecStart=/path/to/Nova/.venv/bin/uvicorn web:app --host 0.0.0.0 --port 8080
+Restart=always
+RestartSec=5
+Environment="PATH=/path/to/Nova/.venv/bin:/usr/bin:/usr/local/bin"
+
+# ── Sandbox hardening ──────────────────────────────────────────────────────
+# These directives restrict what the Nova process can see and do on the host.
+# They do not modify Nova's application behavior; they constrain the kernel
+# surface available to it.
+
+# Refuse to gain new privileges (e.g. via setuid binaries) for the lifetime
+# of the process and any children it spawns.
+NoNewPrivileges=true
+
+# Give the unit a private /tmp and /var/tmp that disappear when it stops.
+PrivateTmp=true
+
+# Mount the entire filesystem read-only, with /usr, /boot and /efi made
+# inaccessible for write. Only paths listed in ReadWritePaths= remain writable.
+ProtectSystem=strict
+
+# /home, /root and /run/user are mounted read-only. Nova does not need to
+# write there; it only reads its own checkout.
+ProtectHome=read-only
+
+# Restore write access to the Nova checkout so nova.db, backups, and any
+# file written under WorkingDirectory continue to work. Adjust this list if
+# the database lives outside the checkout.
+ReadWritePaths=/path/to/Nova
+
+# Drop every Linux capability. Nova is a userspace HTTP app and needs none
+# of them.
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+# Allow only the address families Nova actually uses: IPv4 and IPv6 for the
+# HTTP listener and outbound calls to Ollama / web tools, plus AF_UNIX for
+# local IPC primitives the Python runtime may use.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+# Disallow personality(2) changes — the process cannot switch to a different
+# execution domain (e.g. legacy 32-bit emulation) at runtime.
+LockPersonality=true
+
+# Refuse memory mappings that are simultaneously writable and executable.
+# Blocks a common class of in-memory code-injection techniques.
+MemoryDenyWriteExecute=true
+
+# Reject syscalls compiled for non-native architectures. On x86_64 this
+# blocks the i386 and x32 ABIs that are otherwise exposed to the process.
+SystemCallArchitectures=native
+
+# Block creation of SUID/SGID files and prevent the process from acquiring
+# those bits at exec time.
+RestrictSUIDSGID=true
+
+# Make /proc/sys, /sys, /proc/sysrq-trigger and related kernel tunables
+# read-only or invisible.
+ProtectKernelTunables=true
+
+# Disallow loading or unloading kernel modules from this unit.
+ProtectKernelModules=true
+
+# Make the cgroup hierarchy read-only, so the unit cannot escape or rewrite
+# its own resource limits.
+ProtectControlGroups=true
+
+[Install]
+WantedBy=multi-user.target
