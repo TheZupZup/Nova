@@ -10,6 +10,7 @@ from core.router import route
 from core.search import web_search, should_search
 from core.security_feed import is_security_query
 from core.integrations import silentguard as silentguard_integration
+from core.time_context import format_time_context
 from core.weather import detect_weather_city, get_weather
 from memory.extractor import extract_memories
 from memory.policy import is_memory_allowed
@@ -100,7 +101,7 @@ def build_messages(history: list[dict], user_input: str, memories: list[dict], e
         combined = "\n\n".join(filter(None, [memory_text, natural_text]))
         system_prompt = NOVA_SYSTEM_PROMPT.format(memories=combined)
 
-    messages = [{"role": "system", "content": IDENTITY_CONTRACT + "\n\n" + system_prompt}]
+    messages = [{"role": "system", "content": IDENTITY_CONTRACT + "\n\n" + system_prompt + "\n\n" + format_time_context()}]
     messages += history[-CHAT_HISTORY_LIMIT:]
     messages.append({"role": "user", "content": user_input})
     return messages
