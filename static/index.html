@@ -1457,6 +1457,50 @@
             cursor: not-allowed;
         }
 
+        /* Voice settings — keep the row calm and uncluttered. */
+        #voice-select optgroup {
+            color: var(--text-dim);
+            font-size: 0.74rem;
+            font-weight: 500;
+            font-style: normal;
+            letter-spacing: 0.04em;
+        }
+        #voice-select option { color: var(--text); }
+
+        .voice-row-foot {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-top: 2px;
+        }
+
+        .voice-test-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 5px 12px;
+            font-size: 0.78rem;
+        }
+        .voice-test-btn.is-playing {
+            color: var(--cyan);
+            border-color: var(--cyan-glow);
+            background: var(--cyan-soft);
+        }
+        .voice-test-btn:disabled {
+            opacity: 0.45;
+            cursor: not-allowed;
+        }
+
+        .voice-status {
+            font-size: 0.74rem;
+            color: var(--text-dim);
+            opacity: 0;
+            transition: opacity var(--t-base);
+            min-height: 1em;
+        }
+        .voice-status.is-visible { opacity: 1; }
+        .voice-status.is-warn { color: var(--text-mid); }
+
         #mem-search {
             width: 100%;
             box-sizing: border-box;
@@ -2234,6 +2278,7 @@
                 <button class="settings-nav-btn active" data-pane="general" onclick="switchSettingsPane('general')" id="settings-nav-general">General</button>
                 <button class="settings-nav-btn" data-pane="personalization" onclick="switchSettingsPane('personalization')" id="settings-nav-personalization">Personalization</button>
                 <button class="settings-nav-btn" data-pane="memory" onclick="switchSettingsPane('memory')" id="settings-nav-memory">Memory</button>
+                <button class="settings-nav-btn" data-pane="voice" onclick="switchSettingsPane('voice')" id="settings-nav-voice">Voice</button>
                 <button class="settings-nav-btn" data-pane="models" onclick="switchSettingsPane('models')" id="settings-nav-models">Models</button>
                 <button class="settings-nav-btn" data-pane="admin" onclick="switchSettingsPane('admin')" id="settings-nav-admin" style="display:none;">Admin</button>
                 <div class="settings-nav-divider"></div>
@@ -2375,6 +2420,32 @@
                     </div>
                 </section>
 
+                <!-- VOICE -->
+                <section class="settings-pane" id="settings-pane-voice">
+                    <div class="settings-section-title" id="settings-voice-title">Voice</div>
+                    <div class="settings-row-hint" id="settings-voice-note">
+                        Choose the voice Nova uses for read-aloud. Synthesis stays on this device — no audio leaves your machine.
+                    </div>
+
+                    <div class="settings-row" id="voice-row">
+                        <div class="settings-row-head">
+                            <div class="settings-row-label">
+                                <span class="settings-row-title" id="voice-select-title">Voice</span>
+                                <span class="settings-row-hint" id="voice-select-hint">Used for every "Read aloud" button. Falls back gracefully if unavailable.</span>
+                            </div>
+                        </div>
+                        <select id="voice-select" class="pers-select" onchange="onVoiceSelectionChange(this.value)">
+                            <option value="auto">Nova default (recommended)</option>
+                        </select>
+                        <div class="voice-row-foot">
+                            <button type="button" class="memory-btn voice-test-btn" id="voice-test-btn" onclick="testSelectedVoice()">
+                                <span id="voice-test-label">Test voice</span>
+                            </button>
+                            <span class="voice-status" id="voice-status" aria-live="polite"></span>
+                        </div>
+                    </div>
+                </section>
+
                 <!-- MODELS -->
                 <section class="settings-pane" id="settings-pane-models">
                     <div class="settings-section-title" id="settings-models-title">Models</div>
@@ -2501,12 +2572,14 @@
             nav_general: "Général",
             nav_personalization: "Personnalisation",
             nav_memory: "Mémoire",
+            nav_voice: "Voix",
             nav_models: "Modèles",
             nav_admin: "Admin",
             nav_account: "Compte",
             section_general: "Général",
             section_personalization: "Personnalisation",
             section_memory: "Mémoire",
+            section_voice: "Voix",
             section_models: "Modèles",
             section_admin: "Admin",
             section_account: "Compte",
@@ -2527,6 +2600,21 @@
             coming_soon: "bientôt",
             memory_note: "Nova retient les faits que tu as partagés. Ces mémoires sont privées à ton compte.",
             mem_search_placeholder: "Rechercher dans les mémoires...",
+            voice_note: "Choisis la voix utilisée pour la lecture à voix haute. La synthèse reste sur ton appareil — aucun audio ne quitte ta machine.",
+            voice_select_title: "Voix",
+            voice_select_hint: "Utilisée pour chaque bouton « Lire à voix haute ». Bascule en douceur si la voix n'est pas disponible.",
+            voice_default_label: "Voix par défaut de Nova (recommandée)",
+            voice_test: "Tester la voix",
+            voice_test_stop: "Arrêter le test",
+            voice_test_sample: "Bonjour, je suis Nova. Voici un aperçu de cette voix.",
+            voice_status_saved: "Voix enregistrée.",
+            voice_status_unavailable: "Cette voix n'est pas disponible — Nova reviendra à la voix par défaut.",
+            voice_status_loading: "Chargement des voix disponibles…",
+            voice_status_unsupported: "Ton navigateur n'expose pas de voix de synthèse.",
+            voice_group_recommended: "Recommandées",
+            voice_group_english: "Anglais",
+            voice_group_french: "Français",
+            voice_group_other: "Autres langues",
             novamodel_title: "Utiliser le modèle Nova",
             novamodel_hint: "Remplace tout le routage par un seul modèle.",
             novamodel_help: "Nom du modèle Ollama (ex. nova-assistant, llama3:8b)",
@@ -2597,12 +2685,14 @@
             nav_general: "General",
             nav_personalization: "Personalization",
             nav_memory: "Memory",
+            nav_voice: "Voice",
             nav_models: "Models",
             nav_admin: "Admin",
             nav_account: "Account",
             section_general: "General",
             section_personalization: "Personalization",
             section_memory: "Memory",
+            section_voice: "Voice",
             section_models: "Models",
             section_admin: "Admin",
             section_account: "Account",
@@ -2623,6 +2713,21 @@
             coming_soon: "coming soon",
             memory_note: "Nova remembers facts you've shared. These memories are private to your account.",
             mem_search_placeholder: "Search memories...",
+            voice_note: "Choose the voice Nova uses for read-aloud. Synthesis stays on this device — no audio leaves your machine.",
+            voice_select_title: "Voice",
+            voice_select_hint: "Used for every \"Read aloud\" button. Falls back gracefully if unavailable.",
+            voice_default_label: "Nova default (recommended)",
+            voice_test: "Test voice",
+            voice_test_stop: "Stop test",
+            voice_test_sample: "Hi, I'm Nova. Here's a quick preview of this voice.",
+            voice_status_saved: "Voice saved.",
+            voice_status_unavailable: "That voice isn't available — Nova will use the default instead.",
+            voice_status_loading: "Loading available voices…",
+            voice_status_unsupported: "Your browser doesn't expose any speech voices.",
+            voice_group_recommended: "Recommended",
+            voice_group_english: "English",
+            voice_group_french: "French",
+            voice_group_other: "Other languages",
             novamodel_title: "Use Nova model",
             novamodel_hint: "Override all routing with a single model.",
             novamodel_help: "Ollama model name (e.g. nova-assistant, llama3:8b)",
@@ -2722,6 +2827,7 @@
         _setText("settings-nav-general", t("nav_general"));
         _setText("settings-nav-personalization", t("nav_personalization"));
         _setText("settings-nav-memory", t("nav_memory"));
+        _setText("settings-nav-voice", t("nav_voice"));
         _setText("settings-nav-models", t("nav_models"));
         _setText("settings-nav-admin", t("nav_admin"));
         _setText("settings-nav-account", t("nav_account"));
@@ -2729,6 +2835,7 @@
         _setText("settings-general-title", t("section_general"));
         _setText("settings-personalization-title", t("section_personalization"));
         _setText("settings-memory-title", t("section_memory"));
+        _setText("settings-voice-title", t("section_voice"));
         _setText("settings-models-title", t("section_models"));
         _setText("settings-admin-title", t("section_admin"));
         _setText("settings-account-title", t("section_account"));
@@ -2752,6 +2859,19 @@
         _setText("settings-memory-note", t("memory_note"));
         const memSearch = document.getElementById("mem-search");
         if (memSearch) memSearch.placeholder = t("mem_search_placeholder");
+
+        _setText("settings-voice-note", t("voice_note"));
+        _setText("voice-select-title", t("voice_select_title"));
+        _setText("voice-select-hint", t("voice_select_hint"));
+        // The voice catalog labels its option groups via the language map.
+        // If Settings is open we re-render the dropdown so optgroup labels
+        // flip immediately; otherwise the next openSettings() handles it.
+        const overlay = document.getElementById("settings-overlay");
+        if (overlay && overlay.classList.contains("open")
+                && typeof renderVoiceSelect === "function") {
+            renderVoiceSelect();
+        }
+        if (typeof updateVoiceTestButtonLabel === "function") updateVoiceTestButtonLabel();
 
         _setText("settings-novamodel-title", t("novamodel_title"));
         _setText("settings-novamodel-hint", t("novamodel_hint"));
@@ -3407,7 +3527,35 @@
         button: null,             // button that owns the active utterance
         idleLabel: "",
         playingLabel: "",
+        // Settings "Test voice" preview — owns its own utterance so it
+        // stays distinct from per-message playback above.
+        testUtterance: null,
+        testButtonPlaying: false,
     };
+
+    // Persistence key for the user's chosen voice. The stored value is an
+    // opaque token (voiceURI or platform voice name) — never displayed in
+    // the UI, only used to re-resolve the same voice on next load.
+    const VOICE_STORAGE_KEY = "nova_voice_id";
+    const VOICE_DEFAULT = "auto";
+
+    function getSelectedVoiceId() {
+        try {
+            return localStorage.getItem(VOICE_STORAGE_KEY) || VOICE_DEFAULT;
+        } catch {
+            return VOICE_DEFAULT;
+        }
+    }
+
+    function setSelectedVoiceId(id) {
+        try {
+            if (!id || id === VOICE_DEFAULT) {
+                localStorage.removeItem(VOICE_STORAGE_KEY);
+            } else {
+                localStorage.setItem(VOICE_STORAGE_KEY, id);
+            }
+        } catch {}
+    }
 
     function voiceSupported() {
         return typeof window !== "undefined"
@@ -3436,13 +3584,29 @@
     }
 
     // Walks the preferred voice list against the platform's installed
-    // voices and returns the first match. The browser's `getVoices()`
-    // can return an empty list on first read; the caller is expected to
+    // voices and returns the first match. If the user has explicitly
+    // chosen a voice in Settings, that selection wins — but if it is no
+    // longer installed, we silently fall back to the curated default
+    // list so playback never breaks. The browser's `getVoices()` can
+    // return an empty list on first read; the caller is expected to
     // handle that by falling back to the platform default voice.
     function pickVoice(preferredNames) {
-        if (!voiceSupported() || !Array.isArray(preferredNames)) return null;
+        if (!voiceSupported()) return null;
         const voices = window.speechSynthesis.getVoices() || [];
         if (!voices.length) return null;
+
+        const selectedId = getSelectedVoiceId();
+        if (selectedId && selectedId !== VOICE_DEFAULT) {
+            const chosen = voices.find(v => v.voiceURI === selectedId)
+                || voices.find(v => v.name === selectedId);
+            if (chosen) return chosen;
+            // Selection vanished (voice uninstalled, browser swap, etc.)
+            // — drop through to the curated default rather than failing.
+        }
+
+        if (!Array.isArray(preferredNames) || preferredNames.length === 0) {
+            return null;
+        }
         const byName = new Map(voices.map(v => [v.name, v]));
         for (const name of preferredNames) {
             const match = byName.get(name);
@@ -3499,6 +3663,14 @@
             voice.button = null;
         }
         voice.utterance = null;
+        // `cancel()` also halts the Settings preview utterance — keep
+        // the test button's visual state in sync so it never gets stuck
+        // showing "Stop test" when nothing is speaking.
+        if (voice.testButtonPlaying) {
+            voice.testUtterance = null;
+            voice.testButtonPlaying = false;
+            updateVoiceTestButtonLabel();
+        }
     }
 
     async function playMessageSpeech(btn, rawText) {
@@ -3545,6 +3717,270 @@
             window.speechSynthesis.speak(utter);
         } catch {
             stopVoicePlayback();
+        }
+    }
+
+    // ── VOICE PICKER (Settings) ──
+    // Builds a friendly, grouped catalog of platform voices. The intent
+    // is to offer a calm, professional dropdown — not a debug surface —
+    // so we collapse parenthetical clutter, drop locale tags, and never
+    // expose the raw voiceURI to the UI.
+    function friendlyVoiceLabel(v) {
+        const raw = (v && v.name) || "";
+        if (!raw) return "Voice";
+        // Microsoft "Aria Online (Natural) - English (United States)" → "Aria"
+        let m = raw.match(/^Microsoft\s+([A-Za-zÀ-ÿ]+)\s+Online\s*\(Natural\)/i);
+        if (m) return m[1];
+        // Microsoft "Microsoft Hazel - English (Great Britain)" → "Hazel"
+        m = raw.match(/^Microsoft\s+([A-Za-zÀ-ÿ]+)\s*-/);
+        if (m) return m[1];
+        // Generic "Aria - English (United States)" → "Aria"
+        m = raw.match(/^([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ\s]{1,24}?)\s*-\s*[A-Za-z]+\s*\(/);
+        if (m) return m[1].trim();
+        // Apple "Samantha (Enhanced)" / "(Premium)" → "Samantha"
+        return raw.replace(/\s*\((Enhanced|Premium|Compact)\)\s*$/i, "").trim();
+    }
+
+    // Buckets a SpeechSynthesisVoice into a calm i18n group key. We keep
+    // the buckets short and human (Recommended / English / French /
+    // Other) rather than one row per locale, which would clutter the
+    // dropdown with dozens of near-duplicates.
+    function voiceGroupKey(v, recommendedURIs) {
+        if (recommendedURIs.has(v.voiceURI) || recommendedURIs.has(v.name)) {
+            return "recommended";
+        }
+        const lang = (v.lang || "").toLowerCase();
+        if (lang.startsWith("en")) return "english";
+        if (lang.startsWith("fr")) return "french";
+        return "other";
+    }
+
+    // Walks the curated DEFAULT_VOICE_NAMES list (returned by the server)
+    // and resolves each entry to an actual installed voice. The returned
+    // set is the source of truth for the "Recommended" group and keeps
+    // the calm/feminine voices first in the dropdown.
+    function resolveRecommendedVoices(installed, preferredNames) {
+        const out = [];
+        const seen = new Set();
+        const byName = new Map(installed.map(v => [v.name, v]));
+        for (const name of preferredNames || []) {
+            let match = byName.get(name);
+            if (!match) {
+                const lower = name.toLowerCase();
+                match = installed.find(v => v.name.toLowerCase().includes(lower));
+            }
+            if (match && !seen.has(match.voiceURI || match.name)) {
+                seen.add(match.voiceURI || match.name);
+                out.push(match);
+            }
+        }
+        return out;
+    }
+
+    // Produces the `{ key, label, voices }` groups consumed by the
+    // dropdown renderer. Within each non-recommended group we dedupe by
+    // friendly label (collapsing locale duplicates) and sort
+    // alphabetically; the recommended group keeps the curated order.
+    function buildVoiceCatalog(preferredNames) {
+        if (!voiceSupported()) return [];
+        const installed = window.speechSynthesis.getVoices() || [];
+        if (!installed.length) return [];
+
+        const recommended = resolveRecommendedVoices(installed, preferredNames);
+        const recommendedURIs = new Set();
+        recommended.forEach(v => {
+            recommendedURIs.add(v.voiceURI);
+            recommendedURIs.add(v.name);
+        });
+
+        const buckets = { recommended: [], english: [], french: [], other: [] };
+        const seenLabel = { english: new Set(), french: new Set(), other: new Set() };
+
+        recommended.forEach(v => buckets.recommended.push(v));
+
+        for (const v of installed) {
+            const key = voiceGroupKey(v, recommendedURIs);
+            if (key === "recommended") continue;
+            const label = friendlyVoiceLabel(v);
+            if (!label) continue;
+            // Dedupe by friendly label so the user sees one "Aria" rather
+            // than seven near-identical entries from different locales.
+            const dedupeKey = label.toLowerCase();
+            if (seenLabel[key].has(dedupeKey)) continue;
+            seenLabel[key].add(dedupeKey);
+            buckets[key].push(v);
+        }
+
+        const collator = new Intl.Collator(undefined, { sensitivity: "base" });
+        ["english", "french", "other"].forEach(k => {
+            buckets[k].sort((a, b) => collator.compare(
+                friendlyVoiceLabel(a), friendlyVoiceLabel(b)
+            ));
+        });
+
+        const order = [
+            { key: "recommended", labelKey: "voice_group_recommended" },
+            { key: "english",     labelKey: "voice_group_english" },
+            { key: "french",      labelKey: "voice_group_french" },
+            { key: "other",       labelKey: "voice_group_other" },
+        ];
+        return order
+            .map(o => ({ key: o.key, label: t(o.labelKey), voices: buckets[o.key] }))
+            .filter(g => g.voices.length > 0);
+    }
+
+    function setVoiceStatus(text, opts) {
+        const el = document.getElementById("voice-status");
+        if (!el) return;
+        if (el._timer) { clearTimeout(el._timer); el._timer = null; }
+        if (!text) {
+            el.classList.remove("is-visible", "is-warn");
+            el.textContent = "";
+            return;
+        }
+        el.textContent = text;
+        el.classList.toggle("is-warn", !!(opts && opts.warn));
+        el.classList.add("is-visible");
+        const ttl = (opts && opts.ttl) || 2400;
+        if (ttl > 0) {
+            el._timer = setTimeout(() => {
+                el.classList.remove("is-visible", "is-warn");
+                el._timer = null;
+            }, ttl);
+        }
+    }
+
+    async function renderVoiceSelect() {
+        const select = document.getElementById("voice-select");
+        if (!select) return;
+
+        if (!voiceSupported()) {
+            select.innerHTML = "";
+            const opt = document.createElement("option");
+            opt.value = VOICE_DEFAULT;
+            opt.textContent = t("voice_default_label");
+            select.appendChild(opt);
+            select.disabled = true;
+            const testBtn = document.getElementById("voice-test-btn");
+            if (testBtn) testBtn.disabled = true;
+            setVoiceStatus(t("voice_status_unsupported"), { ttl: 0, warn: true });
+            return;
+        }
+
+        const config = (await loadVoiceConfig()) || {};
+        const preferred = config.preferred_voice_names || [];
+        const groups = buildVoiceCatalog(preferred);
+
+        select.innerHTML = "";
+        const defaultOpt = document.createElement("option");
+        defaultOpt.value = VOICE_DEFAULT;
+        defaultOpt.textContent = t("voice_default_label");
+        select.appendChild(defaultOpt);
+
+        if (groups.length === 0) {
+            // `getVoices()` is still empty — the `voiceschanged` listener
+            // will re-run this function once the platform reports voices.
+            select.value = VOICE_DEFAULT;
+            select.disabled = false;
+            setVoiceStatus(t("voice_status_loading"));
+            return;
+        }
+
+        const selectedId = getSelectedVoiceId();
+        let selectedFound = false;
+
+        for (const group of groups) {
+            const og = document.createElement("optgroup");
+            og.label = group.label;
+            for (const v of group.voices) {
+                const opt = document.createElement("option");
+                // Persist a stable token internally, but never display it.
+                opt.value = v.voiceURI || v.name;
+                opt.textContent = friendlyVoiceLabel(v);
+                if (opt.value === selectedId) {
+                    opt.selected = true;
+                    selectedFound = true;
+                }
+                og.appendChild(opt);
+            }
+            select.appendChild(og);
+        }
+
+        select.disabled = false;
+
+        // If the persisted selection no longer exists in the catalog
+        // (voice uninstalled, browser swap, etc.), surface a calm hint
+        // and fall back to the default option without clobbering the
+        // stored value — the user may reinstall the voice later.
+        if (selectedId !== VOICE_DEFAULT && !selectedFound) {
+            select.value = VOICE_DEFAULT;
+            setVoiceStatus(t("voice_status_unavailable"), { warn: true, ttl: 0 });
+        } else if (!selectedFound) {
+            select.value = VOICE_DEFAULT;
+        }
+    }
+
+    function onVoiceSelectionChange(value) {
+        // Cancel any in-flight test so the next preview uses the new voice.
+        stopVoiceTest();
+        setSelectedVoiceId(value);
+        setVoiceStatus(t("voice_status_saved"));
+    }
+
+    function updateVoiceTestButtonLabel() {
+        const labelEl = document.getElementById("voice-test-label");
+        const btn = document.getElementById("voice-test-btn");
+        if (!labelEl || !btn) return;
+        labelEl.textContent = voice.testButtonPlaying ? t("voice_test_stop") : t("voice_test");
+        btn.classList.toggle("is-playing", !!voice.testButtonPlaying);
+        btn.setAttribute("aria-pressed", voice.testButtonPlaying ? "true" : "false");
+    }
+
+    function stopVoiceTest() {
+        if (!voiceSupported()) return;
+        try { window.speechSynthesis.cancel(); } catch {}
+        voice.testUtterance = null;
+        voice.testButtonPlaying = false;
+        updateVoiceTestButtonLabel();
+    }
+
+    async function testSelectedVoice() {
+        if (!voiceSupported()) return;
+        // Toggle: clicking while a preview is playing stops it.
+        if (voice.testButtonPlaying) {
+            stopVoiceTest();
+            return;
+        }
+        // Cancel any active read-aloud before previewing — only one
+        // speech stream should be audible at a time.
+        stopVoicePlayback();
+
+        const config = (await loadVoiceConfig()) || {};
+        const sample = t("voice_test_sample");
+        const utter = new SpeechSynthesisUtterance(sample);
+        utter.rate = typeof config.rate === "number" ? config.rate : 0.97;
+        utter.pitch = typeof config.pitch === "number" ? config.pitch : 1.0;
+        utter.volume = typeof config.volume === "number" ? config.volume : 1.0;
+
+        const preferred = config.preferred_voice_names || [];
+        const chosen = pickVoice(preferred);
+        if (chosen) {
+            utter.voice = chosen;
+            if (chosen.lang) utter.lang = chosen.lang;
+        }
+
+        utter.onend = () => {
+            if (voice.testUtterance === utter) stopVoiceTest();
+        };
+        utter.onerror = utter.onend;
+
+        voice.testUtterance = utter;
+        voice.testButtonPlaying = true;
+        updateVoiceTestButtonLabel();
+        try {
+            window.speechSynthesis.speak(utter);
+        } catch {
+            stopVoiceTest();
         }
     }
 
@@ -3708,10 +4144,17 @@
 
     // Some browsers populate `getVoices()` asynchronously; touch the API
     // early so the first read-aloud click already has a populated list.
+    // We also rebuild the Settings dropdown on every `voiceschanged`
+    // tick so a freshly installed voice (or a deferred OS handshake)
+    // appears without forcing the user to reopen the panel.
     if (voiceSupported()) {
         try {
             window.speechSynthesis.getVoices();
-            window.speechSynthesis.addEventListener?.("voiceschanged", () => {});
+            window.speechSynthesis.addEventListener?.("voiceschanged", () => {
+                if (document.getElementById("voice-select")) {
+                    renderVoiceSelect();
+                }
+            });
         } catch {}
     }
 
@@ -4054,12 +4497,20 @@
         applySettingsAdminVisibility();
         applySettingsAccount();
         switchSettingsPane(settingsCurrentPane || "general");
+        // Render the voice picker eagerly so switching to the Voice pane
+        // never shows an empty dropdown.
+        updateVoiceTestButtonLabel();
+        renderVoiceSelect();
         await loadSystemSettings();
         await loadMemories();
     }
 
     function closeSettings() {
         document.getElementById("settings-overlay").classList.remove("open");
+        // Don't leave a preview running in the background after the panel
+        // is dismissed — a still-speaking voice on a hidden control feels
+        // broken.
+        try { stopVoiceTest(); } catch {}
     }
 
     function handleSettingsOverlayClick(e) {
