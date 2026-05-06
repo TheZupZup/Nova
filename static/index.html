@@ -10,17 +10,24 @@
         * { box-sizing: border-box; margin: 0; padding: 0; }
 
         :root {
-            --bg:        #0d0d0d;
-            --bg2:       #111111;
-            --bg3:       #1a1a1a;
-            --border:    #222222;
-            --cyan:      #00bcd4;
-            --cyan-dim:  #00838f;
-            --text:      #e0e0e0;
-            --text-dim:  #666666;
-            --user-bg:   #1a3a4a;
-            --user-text: #80deea;
-            --danger:    #f44336;
+            /* Calmer dark palette — less saturated than v1, easier on the eyes
+               for long chat sessions. The cyan family is preserved as Nova's
+               accent, but desaturated so it stops shouting. */
+            --bg:          #0e0f10;
+            --bg2:         #131416;
+            --bg3:         #1a1c1f;
+            --border:      #25282c;
+            --border-soft: #2e3236;
+            /* `--cyan` is kept as the variable name for compatibility with the
+               many existing references; the value is now a softer teal-cyan. */
+            --cyan:        #6cb4c2;
+            --cyan-dim:    #4f8b96;
+            --cyan-soft:   rgba(108, 180, 194, 0.10);
+            --text:        #dcdee0;
+            --text-dim:    #7a7f86;
+            --user-bg:     #1c2a31;
+            --user-text:   #b9d6dc;
+            --danger:      #d97670;
         }
 
         body {
@@ -498,7 +505,7 @@
         .suggest-chip:hover {
             border-color: var(--cyan);
             color: var(--cyan);
-            background: rgba(0, 188, 212, 0.06);
+            background: var(--cyan-soft);
         }
 
         .suggest-chip:focus {
@@ -655,7 +662,7 @@
         }
 
         #search-btn:hover { border-color: var(--cyan); color: var(--cyan); }
-        #search-btn.active { border-color: var(--cyan); color: var(--cyan); background: rgba(0,188,212,0.1); }
+        #search-btn.active { border-color: var(--cyan); color: var(--cyan); background: var(--cyan-soft); }
 
         #image-btn {
             padding: 10px 12px;
@@ -671,7 +678,7 @@
         }
 
         #image-btn:hover { border-color: var(--cyan); color: var(--cyan); }
-        #image-btn.active { border-color: var(--cyan); color: var(--cyan); background: rgba(0,188,212,0.1); }
+        #image-btn.active { border-color: var(--cyan); color: var(--cyan); background: var(--cyan-soft); }
 
         #image-preview {
             display: none;
@@ -751,16 +758,40 @@
         .message.nova pre {
             background: var(--bg);
             padding: 10px;
+            padding-top: 28px;
             border-radius: 6px;
             overflow-x: auto;
             margin: 6px 0;
             border: 1px solid var(--border);
+            position: relative;
         }
         .message.nova pre code {
             background: none;
             padding: 0;
             color: var(--text);
         }
+        /* Per-code-block copy button. Always visible (faded) so the
+           affordance is obvious on touch devices too; brightens on hover.
+           The button overlays the top-right of the <pre> block. */
+        .code-copy-btn {
+            position: absolute;
+            top: 6px;
+            right: 6px;
+            padding: 2px 8px;
+            background: var(--bg2);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            color: var(--text-dim);
+            font-family: monospace;
+            font-size: 0.7rem;
+            cursor: pointer;
+            opacity: 0.55;
+            transition: opacity 0.15s, color 0.15s, border-color 0.15s;
+        }
+        .message.nova pre:hover .code-copy-btn,
+        .code-copy-btn:focus { opacity: 1; }
+        .code-copy-btn:hover { color: var(--cyan); border-color: var(--cyan); opacity: 1; }
+        .code-copy-btn.copied { color: var(--cyan); border-color: var(--cyan); opacity: 1; }
         .message.nova strong { color: var(--text); }
         .message.nova em { color: var(--text-dim); }
         .message.nova a { color: var(--cyan); }
@@ -773,11 +804,15 @@
         }
         .message.nova th { background: var(--bg3); color: var(--cyan); }
 
-        /* ── COPY BUTTON ── */
-        .message-row.nova:hover .copy-btn { opacity: 1; }
+        /* ── COPY BUTTON (whole-message) ──
+           Faded by default so it does not compete with the content, brighter
+           on row hover or button focus. The opacity baseline keeps the
+           affordance discoverable on mobile/touch where there is no hover. */
+        .message-row.nova:hover .copy-btn,
+        .copy-btn:focus { opacity: 1; }
 
         .copy-btn {
-            opacity: 0;
+            opacity: 0.45;
             position: absolute;
             top: 6px;
             right: 6px;
@@ -789,11 +824,11 @@
             font-family: monospace;
             font-size: 0.7rem;
             cursor: pointer;
-            transition: all 0.2s;
+            transition: opacity 0.15s, color 0.15s, border-color 0.15s;
         }
 
-        .copy-btn:hover { color: var(--cyan); border-color: var(--cyan); }
-        .copy-btn.copied { color: var(--cyan); border-color: var(--cyan); }
+        .copy-btn:hover { color: var(--cyan); border-color: var(--cyan); opacity: 1; }
+        .copy-btn.copied { color: var(--cyan); border-color: var(--cyan); opacity: 1; }
 
         .message.nova { position: relative; }
 
@@ -951,51 +986,6 @@
             text-transform: uppercase;
             letter-spacing: 1px;
             white-space: nowrap;
-        }
-
-        .integration-status {
-            font-size: 0.68rem;
-            border-radius: 4px;
-            padding: 1px 6px;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-            white-space: nowrap;
-            border: 1px solid var(--border);
-            color: var(--text-dim);
-        }
-        .integration-status.connected {
-            color: #4caf50;
-            border-color: #2e7d32;
-        }
-        .integration-status.disabled {
-            color: var(--text-dim);
-            border-color: var(--border);
-        }
-        .integration-status.not_found,
-        .integration-status.unreachable {
-            color: #f0a000;
-            border-color: #b07a00;
-        }
-        .integration-toggle-btn {
-            font-family: monospace;
-            font-size: 0.75rem;
-            padding: 4px 12px;
-            border-radius: 6px;
-            cursor: pointer;
-            border: 1px solid var(--border);
-            background: var(--bg);
-            color: var(--text-dim);
-            min-width: 52px;
-        }
-        .integration-toggle-btn.on {
-            color: var(--cyan);
-            border-color: var(--cyan);
-        }
-        .integration-detail {
-            font-size: 0.7rem;
-            color: var(--text-dim);
-            margin-top: 4px;
-            word-break: break-all;
         }
 
         .pers-select, .pers-textarea {
@@ -1706,7 +1696,6 @@
                 <button class="settings-nav-btn" data-pane="personalization" onclick="switchSettingsPane('personalization')" id="settings-nav-personalization">Personalization</button>
                 <button class="settings-nav-btn" data-pane="memory" onclick="switchSettingsPane('memory')" id="settings-nav-memory">Memory</button>
                 <button class="settings-nav-btn" data-pane="models" onclick="switchSettingsPane('models')" id="settings-nav-models">Models</button>
-                <button class="settings-nav-btn" data-pane="integrations" onclick="switchSettingsPane('integrations')" id="settings-nav-integrations">Integrations</button>
                 <button class="settings-nav-btn" data-pane="admin" onclick="switchSettingsPane('admin')" id="settings-nav-admin" style="display:none;">Admin</button>
                 <div class="settings-nav-divider"></div>
                 <button class="settings-nav-btn" data-pane="account" onclick="switchSettingsPane('account')" id="settings-nav-account">Account</button>
@@ -1870,53 +1859,6 @@
                     </div>
                 </section>
 
-                <!-- INTEGRATIONS -->
-                <section class="settings-pane" id="settings-pane-integrations">
-                    <div class="settings-section-title" id="settings-integrations-title">Integrations</div>
-                    <div class="settings-row-hint" id="settings-integrations-note">
-                        Optional bridges to external tools. Each switch is per-user and stays off until you turn it on. Nova never modifies the external tools.
-                    </div>
-
-                    <!-- SilentGuard -->
-                    <div class="settings-row">
-                        <div class="settings-row-head">
-                            <div class="settings-row-label">
-                                <span class="settings-row-title" id="settings-int-sg-title">SilentGuard</span>
-                                <span class="settings-row-hint" id="settings-int-sg-hint">Read-only feed of network observations from ~/.silentguard_memory.json.</span>
-                            </div>
-                            <div style="display:flex;gap:8px;align-items:center;">
-                                <span id="int-sg-status" class="integration-status disabled">checking…</span>
-                                <button id="int-sg-toggle" class="integration-toggle-btn" onclick="toggleIntegration('silentguard')">OFF</button>
-                            </div>
-                        </div>
-                        <div id="int-sg-detail" class="integration-detail"></div>
-                    </div>
-
-                    <!-- NexaNote -->
-                    <div class="settings-row">
-                        <div class="settings-row-head">
-                            <div class="settings-row-label">
-                                <span class="settings-row-title" id="settings-int-nn-title">NexaNote</span>
-                                <span class="settings-row-hint" id="settings-int-nn-hint">Notes via the NexaNote HTTP API. Read-only by default.</span>
-                            </div>
-                            <div style="display:flex;gap:8px;align-items:center;">
-                                <span id="int-nn-status" class="integration-status disabled">checking…</span>
-                                <button id="int-nn-toggle" class="integration-toggle-btn" onclick="toggleIntegration('nexanote')">OFF</button>
-                            </div>
-                        </div>
-                        <div id="int-nn-detail" class="integration-detail"></div>
-                        <div id="int-nn-write-row" style="display:none;margin-top:8px;padding-top:8px;border-top:1px dashed var(--border);">
-                            <div class="settings-row-head">
-                                <div class="settings-row-label">
-                                    <span class="settings-row-title" id="settings-int-nn-write-title">Allow writes</span>
-                                    <span class="settings-row-hint" id="settings-int-nn-write-hint">Lets Nova create or update notes via NexaNote. Off by default.</span>
-                                </div>
-                                <button id="int-nn-write-toggle" class="integration-toggle-btn" onclick="toggleIntegrationWrite('nexanote')">OFF</button>
-                            </div>
-                        </div>
-                    </div>
-                </section>
-
                 <!-- ADMIN (admin-only) -->
                 <section class="settings-pane" id="settings-pane-admin">
                     <div class="settings-section-title" id="settings-admin-title">Admin</div>
@@ -2014,27 +1956,14 @@
             nav_personalization: "Personnalisation",
             nav_memory: "Mémoire",
             nav_models: "Modèles",
-            nav_integrations: "Intégrations",
             nav_admin: "Admin",
             nav_account: "Compte",
             section_general: "Général",
             section_personalization: "Personnalisation",
             section_memory: "Mémoire",
             section_models: "Modèles",
-            section_integrations: "Intégrations",
             section_admin: "Admin",
             section_account: "Compte",
-            integrations_note: "Ponts optionnels vers des outils externes. Chaque interrupteur est par utilisateur et reste désactivé jusqu'à ce que tu l'actives. Nova ne modifie jamais les outils externes.",
-            int_sg_title: "SilentGuard",
-            int_sg_hint: "Flux en lecture seule des observations réseau depuis ~/.silentguard_memory.json.",
-            int_nn_title: "NexaNote",
-            int_nn_hint: "Notes via l'API HTTP de NexaNote. Lecture seule par défaut.",
-            int_nn_write_title: "Autoriser l'écriture",
-            int_nn_write_hint: "Permet à Nova de créer ou modifier des notes via NexaNote. Désactivé par défaut.",
-            int_state_connected: "Connecté",
-            int_state_disabled: "Désactivé",
-            int_state_not_found: "Introuvable",
-            int_state_unreachable: "Injoignable",
             ram_title: "Budget RAM",
             ram_hint: "Contrôle la taille de l'historique et des mémoires",
             update_title: "Mise à jour automatique des modèles",
@@ -2114,27 +2043,14 @@
             nav_personalization: "Personalization",
             nav_memory: "Memory",
             nav_models: "Models",
-            nav_integrations: "Integrations",
             nav_admin: "Admin",
             nav_account: "Account",
             section_general: "General",
             section_personalization: "Personalization",
             section_memory: "Memory",
             section_models: "Models",
-            section_integrations: "Integrations",
             section_admin: "Admin",
             section_account: "Account",
-            integrations_note: "Optional bridges to external tools. Each switch is per-user and stays off until you turn it on. Nova never modifies the external tools.",
-            int_sg_title: "SilentGuard",
-            int_sg_hint: "Read-only feed of network observations from ~/.silentguard_memory.json.",
-            int_nn_title: "NexaNote",
-            int_nn_hint: "Notes via the NexaNote HTTP API. Read-only by default.",
-            int_nn_write_title: "Allow writes",
-            int_nn_write_hint: "Lets Nova create or update notes via NexaNote. Off by default.",
-            int_state_connected: "Connected",
-            int_state_disabled: "Disabled",
-            int_state_not_found: "Not found",
-            int_state_unreachable: "Unreachable",
             ram_title: "RAM Budget",
             ram_hint: "Controls conversation history size and memory limits",
             update_title: "Auto-update models",
@@ -2248,7 +2164,6 @@
         _setText("settings-nav-personalization", t("nav_personalization"));
         _setText("settings-nav-memory", t("nav_memory"));
         _setText("settings-nav-models", t("nav_models"));
-        _setText("settings-nav-integrations", t("nav_integrations"));
         _setText("settings-nav-admin", t("nav_admin"));
         _setText("settings-nav-account", t("nav_account"));
 
@@ -2256,17 +2171,8 @@
         _setText("settings-personalization-title", t("section_personalization"));
         _setText("settings-memory-title", t("section_memory"));
         _setText("settings-models-title", t("section_models"));
-        _setText("settings-integrations-title", t("section_integrations"));
         _setText("settings-admin-title", t("section_admin"));
         _setText("settings-account-title", t("section_account"));
-
-        _setText("settings-integrations-note", t("integrations_note"));
-        _setText("settings-int-sg-title", t("int_sg_title"));
-        _setText("settings-int-sg-hint", t("int_sg_hint"));
-        _setText("settings-int-nn-title", t("int_nn_title"));
-        _setText("settings-int-nn-hint", t("int_nn_hint"));
-        _setText("settings-int-nn-write-title", t("int_nn_write_title"));
-        _setText("settings-int-nn-write-hint", t("int_nn_write_hint"));
 
         _setText("settings-ram-title", t("ram_title"));
         _setText("settings-ram-hint", t("ram_hint"));
@@ -2776,6 +2682,59 @@
     }
 
     // ── MESSAGES ──
+
+    // Shared clipboard helper. Falls back to a transient textarea + execCommand
+    // when navigator.clipboard is unavailable (older browsers, file:// origin).
+    function copyTextToClipboard(text) {
+        try {
+            navigator.clipboard.writeText(text);
+        } catch {
+            const ta = document.createElement("textarea");
+            ta.value = text;
+            document.body.appendChild(ta);
+            ta.select();
+            document.execCommand("copy");
+            document.body.removeChild(ta);
+        }
+    }
+
+    // Briefly flips a copy button into its "copied" state so the user gets
+    // visual confirmation. The same routine is reused by the message-level
+    // and per-code-block buttons; behaviour stays consistent.
+    function flashCopied(btn, copyLabel, copiedLabel) {
+        btn.textContent = copiedLabel;
+        btn.classList.add("copied");
+        setTimeout(() => {
+            btn.textContent = copyLabel;
+            btn.classList.remove("copied");
+        }, 1600);
+    }
+
+    // Walks the rendered markdown tree and injects a small copy button into
+    // every <pre> code block. Each button copies only the code in its own
+    // block, never the surrounding prose — this is the affordance users
+    // expect when Nova returns a snippet.
+    function attachCodeBlockCopyButtons(container) {
+        const copyLabel = t("copy");
+        const copiedLabel = t("copied");
+        container.querySelectorAll("pre").forEach((pre) => {
+            if (pre.querySelector(".code-copy-btn")) return;
+            const btn = document.createElement("button");
+            btn.type = "button";
+            btn.className = "code-copy-btn";
+            btn.textContent = copyLabel;
+            btn.setAttribute("aria-label", copyLabel);
+            btn.onclick = (e) => {
+                e.stopPropagation();
+                const code = pre.querySelector("code");
+                const text = (code ? code.textContent : pre.textContent) || "";
+                copyTextToClipboard(text);
+                flashCopied(btn, copyLabel, copiedLabel);
+            };
+            pre.appendChild(btn);
+        });
+    }
+
     function appendMessage(role, content, model, imageB64) {
         const emptyState = document.getElementById("empty-state");
         if (emptyState) emptyState.remove();
@@ -2793,6 +2752,10 @@
 
         const bubble = document.createElement("div");
         bubble.className = `message ${role}`;
+        // The original markdown source is stashed on the bubble so the
+        // message-level copy button reproduces exactly what Nova returned,
+        // without the noise of injected copy-button labels.
+        if (role === "nova" && content) bubble.dataset.rawText = content;
 
         if (imageB64) {
             const img = document.createElement("img");
@@ -2806,6 +2769,7 @@
                 const div = document.createElement("div");
                 div.innerHTML = marked.parse(content);
                 bubble.appendChild(div);
+                attachCodeBlockCopyButtons(div);
             } else {
                 const text = document.createElement("span");
                 text.textContent = content;
@@ -2815,28 +2779,17 @@
 
         if (role === "nova") {
             const copyBtn = document.createElement("button");
+            copyBtn.type = "button";
             copyBtn.className = "copy-btn";
             const copyLabel = t("copy");
             const copiedLabel = t("copied");
             copyBtn.textContent = copyLabel;
-            copyBtn.onclick = () => {
-                const plainText = bubble.innerText.replace(copyLabel, "").replace(copiedLabel, "").trim();
-                try {
-                    navigator.clipboard.writeText(plainText);
-                } catch {
-                    const ta = document.createElement("textarea");
-                    ta.value = plainText;
-                    document.body.appendChild(ta);
-                    ta.select();
-                    document.execCommand("copy");
-                    document.body.removeChild(ta);
-                }
-                copyBtn.textContent = copiedLabel;
-                copyBtn.classList.add("copied");
-                setTimeout(() => {
-                    copyBtn.textContent = copyLabel;
-                    copyBtn.classList.remove("copied");
-                }, 2000);
+            copyBtn.setAttribute("aria-label", copyLabel);
+            copyBtn.onclick = (e) => {
+                e.stopPropagation();
+                const plainText = bubble.dataset.rawText || bubble.innerText;
+                copyTextToClipboard(plainText);
+                flashCopied(copyBtn, copyLabel, copiedLabel);
             };
             bubble.appendChild(copyBtn);
         }
@@ -3106,108 +3059,6 @@
         switchSettingsPane(settingsCurrentPane || "general");
         await loadSystemSettings();
         await loadMemories();
-        loadIntegrationsStatus();
-    }
-
-    // ── INTEGRATIONS ──
-    let integrationSwitches = {
-        silentguard_enabled: false,
-        nexanote_enabled: false,
-        nexanote_write_enabled: false,
-    };
-
-    function _setIntegrationToggle(btnId, on) {
-        const btn = document.getElementById(btnId);
-        if (!btn) return;
-        btn.textContent = on ? "ON" : "OFF";
-        btn.classList.toggle("on", !!on);
-    }
-
-    function _setIntegrationStatus(elId, state, label) {
-        const el = document.getElementById(elId);
-        if (!el) return;
-        el.classList.remove("connected", "disabled", "not_found", "unreachable");
-        const safe = ["connected", "disabled", "not_found", "unreachable"].includes(state)
-            ? state : "disabled";
-        el.classList.add(safe);
-        el.textContent = label || safe;
-    }
-
-    function _statusLabel(state) {
-        const map = {
-            connected: t("int_state_connected"),
-            disabled: t("int_state_disabled"),
-            not_found: t("int_state_not_found"),
-            unreachable: t("int_state_unreachable"),
-        };
-        return map[state] || state;
-    }
-
-    async function loadIntegrationsStatus() {
-        // Pull both: persisted switches (from /settings) and live status
-        // (from /integrations/status). The two endpoints are independent
-        // so a missing external tool never breaks the toggles.
-        try {
-            const [settingsRes, statusRes] = await Promise.all([
-                fetch("/settings", { headers: { "Authorization": `Bearer ${token}` } }),
-                fetch("/integrations/status", { headers: { "Authorization": `Bearer ${token}` } }),
-            ]);
-            if (settingsRes.ok) {
-                const s = await settingsRes.json();
-                integrationSwitches.silentguard_enabled = !!s.silentguard_enabled;
-                integrationSwitches.nexanote_enabled = !!s.nexanote_enabled;
-                integrationSwitches.nexanote_write_enabled = !!s.nexanote_write_enabled;
-            }
-            _setIntegrationToggle("int-sg-toggle", integrationSwitches.silentguard_enabled);
-            _setIntegrationToggle("int-nn-toggle", integrationSwitches.nexanote_enabled);
-            _setIntegrationToggle("int-nn-write-toggle", integrationSwitches.nexanote_write_enabled);
-            document.getElementById("int-nn-write-row").style.display =
-                integrationSwitches.nexanote_enabled ? "" : "none";
-
-            if (statusRes.ok) {
-                const data = await statusRes.json();
-                const sg = data.silentguard || {};
-                _setIntegrationStatus("int-sg-status", sg.state, _statusLabel(sg.state));
-                document.getElementById("int-sg-detail").textContent = sg.detail || "";
-                const nn = data.nexanote || {};
-                _setIntegrationStatus("int-nn-status", nn.state, _statusLabel(nn.state));
-                document.getElementById("int-nn-detail").textContent = nn.detail || "";
-            }
-        } catch (e) {
-            // Never let a missing endpoint break the settings page.
-            _setIntegrationStatus("int-sg-status", "disabled", _statusLabel("disabled"));
-            _setIntegrationStatus("int-nn-status", "disabled", _statusLabel("disabled"));
-        }
-    }
-
-    async function toggleIntegration(name) {
-        const key = `${name}_enabled`;
-        const newVal = !integrationSwitches[key];
-        await fetch("/settings", {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                "Authorization": `Bearer ${token}`,
-            },
-            body: JSON.stringify({ [key]: newVal }),
-        });
-        integrationSwitches[key] = newVal;
-        await loadIntegrationsStatus();
-    }
-
-    async function toggleIntegrationWrite(name) {
-        const key = `${name}_write_enabled`;
-        const newVal = !integrationSwitches[key];
-        await fetch("/settings", {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                "Authorization": `Bearer ${token}`,
-            },
-            body: JSON.stringify({ [key]: newVal }),
-        });
-        integrationSwitches[key] = newVal;
-        _setIntegrationToggle(`int-${name === "nexanote" ? "nn" : name}-write-toggle`, newVal);
     }
 
     function closeSettings() {
@@ -3231,9 +3082,6 @@
         document.querySelectorAll(".settings-pane").forEach(p => {
             p.classList.toggle("active", p.id === "settings-pane-" + pane);
         });
-        if (pane === "integrations") {
-            loadIntegrationsStatus();
-        }
     }
 
     function applySettingsAdminVisibility() {

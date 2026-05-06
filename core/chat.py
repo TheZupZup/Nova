@@ -5,7 +5,9 @@ from config import NOVA_SYSTEM_PROMPT, CHAT_HISTORY_LIMIT, MODELS
 from core.ollama_client import client
 from core.memory import format_memories_for_prompt, parse_and_save
 from core.identity import IDENTITY_CONTRACT
+from core.nova_contract import build_personalization_block
 from core.policies import ADMIN_POLICY, Policy
+from core.settings import get_personalization
 from core.router import route
 from core.search import web_search, should_search
 from core.security_feed import is_security_query
@@ -87,8 +89,14 @@ def extract_and_save_memory(user_message: str, assistant_response: str, user_id:
     parse_and_save(result, user_id)
 
 
-def build_messages(history: list[dict], user_input: str, memories: list[dict], extra_context: str = None, context_type: str = None, natural_memories=None) -> list[dict]:
-    """Construit la liste de messages à envoyer à Ollama."""
+def build_messages(history: list[dict], user_input: str, memories: list[dict], extra_context: str = None, context_type: str = None, natural_memories=None, personalization: dict | None = None) -> list[dict]:
+    """Construit la liste de messages à envoyer à Ollama.
+
+    `personalization` is the per-user style payload from
+    `core.settings.get_personalization`. It produces an extra block appended
+    after the identity contract. Defaults / empty payloads contribute
+    nothing, so existing single-user behaviour is preserved.
+    """
     if context_type == "weather":
         system_prompt = WEATHER_SYSTEM_PROMPT.format(weather_data=extra_context)
     elif context_type == "search":
@@ -101,7 +109,13 @@ def build_messages(history: list[dict], user_input: str, memories: list[dict], e
         combined = "\n\n".join(filter(None, [memory_text, natural_text]))
         system_prompt = NOVA_SYSTEM_PROMPT.format(memories=combined)
 
-    messages = [{"role": "system", "content": IDENTITY_CONTRACT + "\n\n" + system_prompt + "\n\n" + format_time_context()}]
+    parts = [IDENTITY_CONTRACT, system_prompt]
+    pers_block = build_personalization_block(personalization)
+    if pers_block:
+        parts.append(pers_block)
+    parts.append(format_time_context())
+
+    messages = [{"role": "system", "content": "\n\n".join(parts)}]
     messages += history[-CHAT_HISTORY_LIMIT:]
     messages.append({"role": "user", "content": user_input})
     return messages
@@ -144,6 +158,12 @@ def chat(history: list[dict], user_input: str, memories: list[dict], user_id: in
         model = forced_model if forced_model else route(user_input)
 
         natural_mems = get_relevant_memories(user_input, user_id)
+        # Per-user style preferences. A failure here must never block the
+        # chat flow — the panel is opt-in and a fresh DB has no rows.
+        try:
+            personalization = get_personalization(user_id)
+        except Exception:
+            personalization = None
 
         # Weather is gated; restricted users with weather disabled fall
         # straight through to the regular chat branch.
@@ -152,7 +172,7 @@ def chat(history: list[dict], user_input: str, memories: list[dict], user_id: in
             if isinstance(weather_result, tuple):
                 lat, lon, city = weather_result
                 weather_data = get_weather(lat, lon, city)
-                messages = build_messages(history, user_input, memories, weather_data, "weather")
+                messages = build_messages(history, user_input, memories, weather_data, "weather", personalization=personalization)
                 response = client.chat(model=model, messages=messages)
                 reply = response["message"]["content"]
                 return reply, model
@@ -169,7 +189,7 @@ def chat(history: list[dict], user_input: str, memories: list[dict], user_id: in
         if is_security_query(user_input):
             security_data = silentguard_integration.recent_events_summary(user_id)
             if security_data:
-                messages = build_messages(history, user_input, memories, security_data, "security")
+                messages = build_messages(history, user_input, memories, security_data, "security", personalization=personalization)
                 response = client.chat(model=model, messages=messages)
                 reply = response["message"]["content"]
                 return reply, model
@@ -178,13 +198,13 @@ def chat(history: list[dict], user_input: str, memories: list[dict], user_id: in
         # auto-detected `should_search` path require web_search_enabled.
         if policy.web_search_enabled and (force_search or should_search(user_input)):
             search_results = web_search(user_input)
-            messages = build_messages(history, user_input, memories, search_results, "search")
+            messages = build_messages(history, user_input, memories, search_results, "search", personalization=personalization)
             response = client.chat(model=model, messages=messages)
             reply = response["message"]["content"]
             return reply, model
 
         # Chat normal — inject relevant natural memories into context
-        messages = build_messages(history, user_input, memories, natural_memories=natural_mems)
+        messages = build_messages(history, user_input, memories, natural_memories=natural_mems, personalization=personalization)
         response = client.chat(model=model, messages=messages)
         reply = response["message"]["content"]
 
@@ -200,7 +220,7 @@ def chat(history: list[dict], user_input: str, memories: list[dict], user_id: in
         if policy.web_search_enabled and any(t in reply.lower() for t in uncertainty_triggers):
             search_results = web_search(user_input)
             if search_results and "Aucun résultat" not in search_results:
-                messages = build_messages(history, user_input, memories, search_results, "search")
+                messages = build_messages(history, user_input, memories, search_results, "search", personalization=personalization)
                 response = client.chat(model=model, messages=messages)
                 reply = response["message"]["content"]
 

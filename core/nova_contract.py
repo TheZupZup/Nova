@@ -52,6 +52,87 @@ LONGUEUR:
 Ne commence jamais par "Bien sûr!", "Certainement!", "Absolument!". Va droit au but."""
 
 
+# ── Personalization → prompt instructions ────────────────────────────────────
+# Each non-default preference contributes one line to the per-user style block
+# appended after the contract. Defaults map to empty strings so a fresh user
+# gets the unchanged contract (and pays no token cost).
+_RESPONSE_STYLE_LINES = {
+    "concise": "Style: réponses courtes et directes, va à l'essentiel.",
+    "detailed": "Style: explique en détail, donne du contexte et des exemples utiles.",
+    "technical": (
+        "Style: privilégie la précision technique, les termes exacts, les "
+        "détails d'implémentation et le code quand c'est pertinent."
+    ),
+}
+
+_WARMTH_LINES = {
+    "low": "Ton: neutre et factuel, sans formules de politesse superflues.",
+    "high": (
+        "Ton: chaleureux et attentionné, comme une personne qui prend le temps "
+        "de bien répondre — sans tomber dans la flatterie."
+    ),
+}
+
+_ENTHUSIASM_LINES = {
+    "low": "Énergie: posée et calme, pas d'exclamations.",
+    "high": "Énergie: dynamique et engagée, montre un intérêt sincère.",
+}
+
+_EMOJI_LINES = {
+    # "low" is the storage default and intentionally absent here so a fresh
+    # user pays no token cost. Only the explicit non-default choices add a
+    # directive to the prompt.
+    "none": "Emoji: ne pas en utiliser.",
+    "medium": (
+        "Emoji: utilise des emojis pertinents dans les échanges informels "
+        "(jamais dans le code, jamais dans les réponses techniques sérieuses)."
+    ),
+}
+
+
+def build_personalization_block(prefs: dict | None) -> str:
+    """
+    Assemble the per-user style block from a personalization payload.
+
+    Empty/default preferences produce an empty string so the system prompt
+    is unchanged for users who never opened the panel. The block sits below
+    the identity contract; callers must keep that ordering so identity
+    rules win over user style overrides.
+    """
+    if not prefs:
+        return ""
+    lines: list[str] = []
+
+    style = prefs.get("response_style") or "default"
+    if style in _RESPONSE_STYLE_LINES:
+        lines.append(_RESPONSE_STYLE_LINES[style])
+
+    warmth = prefs.get("warmth_level") or "normal"
+    if warmth in _WARMTH_LINES:
+        lines.append(_WARMTH_LINES[warmth])
+
+    enthusiasm = prefs.get("enthusiasm_level") or "normal"
+    if enthusiasm in _ENTHUSIASM_LINES:
+        lines.append(_ENTHUSIASM_LINES[enthusiasm])
+
+    emoji = prefs.get("emoji_level") or "low"
+    if emoji in _EMOJI_LINES:
+        lines.append(_EMOJI_LINES[emoji])
+
+    custom = (prefs.get("custom_instructions") or "").strip()
+    if custom:
+        lines.append(f"Note de l'utilisateur: {custom}")
+
+    if not lines:
+        return ""
+
+    header = (
+        "PRÉFÉRENCES UTILISATEUR (à respecter sauf si elles contredisent "
+        "l'identité ou les règles de Nova ci-dessus):"
+    )
+    return header + "\n" + "\n".join(f"- {line}" for line in lines)
+
+
 def build_contract() -> str:
     """Returns the assembled Nova behavior contract for system prompt injection."""
     return "\n\n".join([
