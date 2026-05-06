@@ -197,8 +197,10 @@ def test_resolve_next_week_is_monday_after_this_week():
 
 def test_resolve_unknown_returns_none():
     assert resolve_relative_date("last year") is None
+    # Number words ("three") are intentionally not parsed — only digits are.
     assert resolve_relative_date("in three days") is None
     assert resolve_relative_date("") is None
+    assert resolve_relative_date("   ") is None
 
 
 def test_resolve_case_insensitive():
@@ -208,3 +210,121 @@ def test_resolve_case_insensitive():
 
 def test_resolve_strips_whitespace():
     assert resolve_relative_date("  tomorrow  ") == resolve_relative_date("tomorrow")
+
+
+# ── Relative date — weekday names ────────────────────────────────────────────
+
+
+def test_resolve_next_weekday_is_strictly_in_the_future():
+    today = _today_in_tz()
+    today_name = ("monday", "tuesday", "wednesday", "thursday",
+                  "friday", "saturday", "sunday")[today.weekday()]
+    result = date.fromisoformat(resolve_relative_date(f"next {today_name}"))
+    # "next monday" on a Monday is the Monday seven days from now, never today.
+    assert result == today + timedelta(days=7)
+
+
+def test_resolve_last_weekday_is_strictly_in_the_past():
+    today = _today_in_tz()
+    today_name = ("monday", "tuesday", "wednesday", "thursday",
+                  "friday", "saturday", "sunday")[today.weekday()]
+    result = date.fromisoformat(resolve_relative_date(f"last {today_name}"))
+    assert result == today - timedelta(days=7)
+
+
+def test_resolve_next_weekday_lands_on_target_weekday():
+    today = _today_in_tz()
+    for idx, name in enumerate(("monday", "tuesday", "wednesday", "thursday",
+                                "friday", "saturday", "sunday")):
+        result = date.fromisoformat(resolve_relative_date(f"next {name}"))
+        assert result.weekday() == idx
+        assert result > today
+
+
+def test_resolve_last_weekday_lands_on_target_weekday():
+    today = _today_in_tz()
+    for idx, name in enumerate(("monday", "tuesday", "wednesday", "thursday",
+                                "friday", "saturday", "sunday")):
+        result = date.fromisoformat(resolve_relative_date(f"last {name}"))
+        assert result.weekday() == idx
+        assert result < today
+
+
+def test_resolve_french_weekday_prochain():
+    today = _today_in_tz()
+    result = date.fromisoformat(resolve_relative_date("mardi prochain"))
+    assert result.weekday() == 1
+    assert result > today
+
+
+def test_resolve_french_weekday_dernier():
+    today = _today_in_tz()
+    result = date.fromisoformat(resolve_relative_date("vendredi dernier"))
+    assert result.weekday() == 4
+    assert result < today
+
+
+def test_resolve_bare_weekday_returns_none():
+    # "monday" alone is ambiguous (next or last?) — leave it to the model.
+    assert resolve_relative_date("monday") is None
+    assert resolve_relative_date("lundi") is None
+
+
+# ── Relative date — numeric offsets ──────────────────────────────────────────
+
+
+def test_resolve_in_n_days():
+    today = _today_in_tz()
+    assert resolve_relative_date("in 3 days") == (today + timedelta(days=3)).isoformat()
+    assert resolve_relative_date("in 1 day") == (today + timedelta(days=1)).isoformat()
+    assert resolve_relative_date("in 0 days") == today.isoformat()
+
+
+def test_resolve_n_days_ago():
+    today = _today_in_tz()
+    assert resolve_relative_date("3 days ago") == (today - timedelta(days=3)).isoformat()
+    assert resolve_relative_date("1 day ago") == (today - timedelta(days=1)).isoformat()
+
+
+def test_resolve_in_n_weeks():
+    today = _today_in_tz()
+    assert resolve_relative_date("in 2 weeks") == (today + timedelta(days=14)).isoformat()
+    assert resolve_relative_date("in 1 week") == (today + timedelta(days=7)).isoformat()
+
+
+def test_resolve_n_weeks_ago():
+    today = _today_in_tz()
+    assert resolve_relative_date("2 weeks ago") == (today - timedelta(days=14)).isoformat()
+
+
+def test_resolve_french_dans_n_jours():
+    today = _today_in_tz()
+    assert resolve_relative_date("dans 3 jours") == (today + timedelta(days=3)).isoformat()
+    assert resolve_relative_date("dans 1 jour") == (today + timedelta(days=1)).isoformat()
+
+
+def test_resolve_french_il_y_a_n_jours():
+    today = _today_in_tz()
+    assert resolve_relative_date("il y a 5 jours") == (today - timedelta(days=5)).isoformat()
+
+
+def test_resolve_french_dans_n_semaines():
+    today = _today_in_tz()
+    assert resolve_relative_date("dans 2 semaines") == (today + timedelta(days=14)).isoformat()
+
+
+def test_resolve_french_il_y_a_n_semaines():
+    today = _today_in_tz()
+    assert resolve_relative_date("il y a 1 semaine") == (today - timedelta(days=7)).isoformat()
+
+
+def test_resolve_numeric_offset_case_insensitive():
+    assert resolve_relative_date("IN 3 DAYS") == resolve_relative_date("in 3 days")
+
+
+def test_resolve_numeric_offset_malformed_returns_none():
+    # Negative numbers, decimals, missing units — all fall through.
+    assert resolve_relative_date("in -1 days") is None
+    assert resolve_relative_date("in 1.5 days") is None
+    assert resolve_relative_date("in days") is None
+    assert resolve_relative_date("3 days") is None  # missing "ago" / "in"
