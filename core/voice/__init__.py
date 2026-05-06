@@ -23,10 +23,14 @@ from __future__ import annotations
 from .providers import (
     DEFAULT_VOICE_NAMES,
     ENGINE_BROWSER,
+    ENGINE_PIPER,
     BrowserProvider,
     Provider,
     VoiceConfig,
     get_default_provider,
+    get_piper_provider,
+    get_provider,
+    list_available_engines,
 )
 
 
@@ -58,9 +62,13 @@ __all__ = [
     "BrowserProvider",
     "DEFAULT_VOICE_NAMES",
     "ENGINE_BROWSER",
+    "ENGINE_PIPER",
     "MAX_TTS_INPUT_CHARS",
     "Provider",
     "VoiceConfig",
     "get_default_provider",
+    "get_piper_provider",
+    "get_provider",
+    "list_available_engines",
     "prepare_text",
 ]

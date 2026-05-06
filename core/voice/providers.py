@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 
 
 ENGINE_BROWSER = "browser"
+ENGINE_PIPER = "piper"
 
 
 # Ordered preference list for the client's voice picker. The frontend
@@ -95,8 +96,9 @@ class Provider(ABC):
 
     A provider answers two questions: is it usable on this host, and
     what voice profile should the client request? Server-rendered
-    providers will extend this with a ``synthesize(text) -> bytes``
-    method when they land; the foundation deliberately stops here.
+    providers may also implement ``synthesize(text) -> bytes`` to
+    return raw audio; client-side engines (the browser default) leave
+    that method as a no-op so the same call site works for both.
     """
 
     name: str
@@ -108,6 +110,17 @@ class Provider(ABC):
     @abstractmethod
     def voice_config(self) -> VoiceConfig:
         """Return the voice profile the client should use."""
+
+    def synthesize(self, text: str) -> bytes:
+        """Render ``text`` to audio bytes.
+
+        Default implementation raises ``NotImplementedError`` because
+        the browser engine renders client-side and never reaches this
+        path. Server-rendered providers (Piper, Coqui, …) override.
+        """
+        raise NotImplementedError(
+            f"{self.name} provider does not render audio server-side"
+        )
 
 
 class BrowserProvider(Provider):
@@ -131,12 +144,68 @@ class BrowserProvider(Provider):
 
 
 def get_default_provider() -> Provider:
-    """Return the active TTS provider for this Nova instance.
+    """Return the active server-default TTS provider.
 
-    Today this is always ``BrowserProvider``: Nova ships with no
-    server-side TTS dependency and the browser already gives us a
-    calm, high-quality default voice on every modern OS. A future
-    config switch can route this to a local server engine without
-    touching call sites.
+    Browser remains the default because it works zero-install on every
+    modern OS, including mobile. The server will *offer* additional
+    engines through ``available_engines`` so the user can opt into a
+    local neural voice from Settings without changing the read-aloud
+    fallback path.
     """
     return BrowserProvider()
+
+
+def get_piper_provider():
+    """Return a freshly-resolved ``PiperProvider``, or None on import error.
+
+    Imported lazily so a clean install never has to load the Piper
+    surface, and an env-driven misconfiguration never breaks the
+    voice foundation as a whole.
+    """
+    try:
+        from .piper import PiperProvider
+        from config import (
+            NOVA_PIPER_BINARY,
+            NOVA_PIPER_VOICE_MODEL,
+            NOVA_PIPER_VOICE_CONFIG,
+            NOVA_PIPER_TIMEOUT_SECONDS,
+        )
+    except ImportError:
+        return None
+    return PiperProvider(
+        binary=NOVA_PIPER_BINARY,
+        model=NOVA_PIPER_VOICE_MODEL,
+        config=NOVA_PIPER_VOICE_CONFIG,
+        timeout_seconds=NOVA_PIPER_TIMEOUT_SECONDS,
+    )
+
+
+def list_available_engines() -> list[str]:
+    """Return the engines this server can currently serve.
+
+    Browser is always available (the client renders it). Piper is
+    listed only when its binary and voice model both resolve; a
+    half-configured Piper stays absent so the UI never offers a
+    broken option.
+    """
+    engines = [ENGINE_BROWSER]
+    piper = get_piper_provider()
+    if piper is not None and piper.is_available():
+        engines.append(ENGINE_PIPER)
+    return engines
+
+
+def get_provider(name: str) -> Provider | None:
+    """Resolve an engine name to a configured provider, or None.
+
+    Unknown / unavailable names return None so callers can fall back
+    to the browser engine without raising.
+    """
+    if name == ENGINE_BROWSER:
+        return BrowserProvider()
+    if name == ENGINE_PIPER:
+        piper = get_piper_provider()
+        if piper is not None and piper.is_available():
+            return piper
+        return None
+    return None

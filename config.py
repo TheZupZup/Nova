@@ -25,6 +25,22 @@ GITHUB_OAUTH_REDIRECT_URI = os.getenv("GITHUB_OAUTH_REDIRECT_URI", "")
 NEXANOTE_API_URL = os.getenv("NEXANOTE_API_URL", "").strip().rstrip("/")
 NEXANOTE_API_TOKEN = os.getenv("NEXANOTE_API_TOKEN", "").strip()
 NEXANOTE_TIMEOUT_SECONDS = float(os.getenv("NEXANOTE_TIMEOUT_SECONDS", "3.0"))
+
+# ── Optional local TTS: Piper ─────────────────────────────────────────
+# Browser speechSynthesis remains the safe default. Piper is an opt-in
+# local neural voice for hosts where the platform default sounds robotic
+# (notably some Fedora/Linux desktops). When both NOVA_PIPER_BINARY and
+# NOVA_PIPER_VOICE_MODEL resolve, the server can render audio locally;
+# anything missing or broken falls back to the browser engine without
+# raising. Models are never downloaded automatically — see README.
+NOVA_PIPER_BINARY = os.getenv("NOVA_PIPER_BINARY", "").strip()
+NOVA_PIPER_VOICE_MODEL = os.getenv("NOVA_PIPER_VOICE_MODEL", "").strip()
+NOVA_PIPER_VOICE_CONFIG = os.getenv("NOVA_PIPER_VOICE_CONFIG", "").strip()
+# Soft cap on synthesis time so a hung subprocess never wedges the API.
+try:
+    NOVA_PIPER_TIMEOUT_SECONDS = float(os.getenv("NOVA_PIPER_TIMEOUT_SECONDS", "20"))
+except ValueError:
+    NOVA_PIPER_TIMEOUT_SECONDS = 20.0
 NOVA_ALPHA_ALLOWED_USERS: frozenset[str] = frozenset(
     u.strip().lower()
     for u in os.getenv("NOVA_ALPHA_ALLOWED_USERS", "").split(",")

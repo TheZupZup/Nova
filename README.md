@@ -157,6 +157,70 @@ For an optional hardened unit file with systemd sandbox restrictions
 [deploy/systemd/README.md](deploy/systemd/README.md). It is a drop-in
 replacement for the minimal unit above and does not change Nova's behavior.
 
+## Voice / read-aloud
+
+Every assistant message has a "Read aloud" button. By default, Nova uses
+the browser's built-in `speechSynthesis` API — zero install, fully
+local, and pleasant on most platforms (Apple Samantha, Microsoft Aria,
+Google Female, …).
+
+On Fedora and other Linux desktops the platform voices sometimes fall
+back to a robotic engine. In that case Nova can drive a local
+[Piper](https://github.com/rhasspy/piper) neural voice instead. Piper
+is opt-in, runs entirely on this host, and is never downloaded
+automatically.
+
+### Optional: enable Piper
+
+1. Install the Piper binary. The simplest path is the official release:
+
+   ```bash
+   # Pick the build for your CPU; this example is x86_64 Linux.
+   curl -L -o piper.tar.gz \
+     https://github.com/rhasspy/piper/releases/latest/download/piper_linux_x86_64.tar.gz
+   tar -xzf piper.tar.gz
+   sudo mv piper /usr/local/bin/   # or anywhere on PATH
+   ```
+
+2. Download a calm voice model. Nova suggests these soft, natural
+   voices (`.onnx` model + `.onnx.json` config, side by side):
+
+   - `en_US-amy-medium`
+   - `en_GB-jenny_dioco-medium`
+   - `en_US-lessac-medium`
+   - `fr_FR-siwis-medium` (French)
+
+   Models live in the
+   [rhasspy/piper-voices](https://huggingface.co/rhasspy/piper-voices)
+   repository. Place the `.onnx` and `.onnx.json` together in a folder
+   you control (for example `~/.local/share/piper/voices/`).
+
+3. Configure Nova by adding to your `.env`:
+
+   ```ini
+   NOVA_PIPER_BINARY=/usr/local/bin/piper
+   NOVA_PIPER_VOICE_MODEL=/home/you/.local/share/piper/voices/en_US-amy-medium.onnx
+   ```
+
+   Both variables must be set. Leave `NOVA_PIPER_BINARY` blank if
+   `piper` is already on the system `PATH`. `NOVA_PIPER_VOICE_CONFIG`
+   is optional — Piper auto-discovers the sibling `.onnx.json`.
+
+4. Restart Nova. Open Settings → Voice. A new "Voice engine" row will
+   appear with `Browser` and `Piper (local neural)` options. Select
+   Piper and click "Test voice" to confirm it works.
+
+If Piper is missing, the model is unreadable, the subprocess fails, or
+synthesis times out, Nova silently falls back to the browser engine —
+the read-aloud experience is never lost.
+
+### Privacy
+
+- Piper runs offline. No audio bytes leave this host.
+- Nova never auto-installs a Piper binary or voice model.
+- No telemetry, no microphone capture, no always-on listening — the
+  read-aloud button is the only voice surface in Nova today.
+
 ## Configuration
 
 All configuration is read from `.env` at startup. Key variables:
@@ -171,6 +235,10 @@ All configuration is read from `.env` at startup. Key variables:
 | `LOGIN_RATE_LIMIT_MAX` | `5` | Max login attempts per window |
 | `LOGIN_RATE_LIMIT_WINDOW` | `60` | Rate limit window in seconds (sliding) |
 | `LOGIN_RATE_LIMIT_TRUSTED_PROXIES` | — | Comma-separated proxy IPs to trust for `X-Forwarded-For` |
+| `NOVA_PIPER_BINARY` | — | Path to the optional Piper TTS binary (blank = auto-detect on `PATH`) |
+| `NOVA_PIPER_VOICE_MODEL` | — | Path to a Piper `.onnx` voice model. Blank disables Piper. |
+| `NOVA_PIPER_VOICE_CONFIG` | — | Path to the `.onnx.json` config (blank = auto-discover sibling) |
+| `NOVA_PIPER_TIMEOUT_SECONDS` | `20` | Synthesis timeout, in seconds |
 
 Model assignments are defined in `config.py` in the `MODELS` dictionary. To swap a model, update that dictionary and restart Nova.
 

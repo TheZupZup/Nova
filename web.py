@@ -3,7 +3,7 @@ import secrets as _secrets
 import uvicorn
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Depends, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field, field_validator
@@ -688,32 +688,64 @@ def integrations_status(user: CurrentUser = Depends(get_current_user)):
 
 
 # ── VOICE / TTS ─────────────────────────────────────────────────────
-# Foundation for an opt-in "read aloud" surface on assistant replies.
-# The server returns voice preferences and validates input; today the
-# default provider is the browser engine, so no audio bytes are
-# rendered server-side and no third-party service is contacted.
-# Future server-rendered providers can plug into the abstraction in
-# `core/voice/providers.py` without changing this endpoint's shape.
+# Opt-in "read aloud" surface on assistant replies. The server returns
+# voice preferences, validates input, and (when a local engine is
+# configured) renders WAV audio. The browser engine remains the safe
+# default — no audio bytes ever leave the user's host on either path.
+# Additional engines plug into `core/voice/providers.py` without
+# changing this endpoint's shape.
+
+# Engines the request body is allowed to ask for. Unknown values are
+# rejected by Pydantic with a 422 before our handler runs.
+_TTS_ALLOWED_ENGINES = (_voice.ENGINE_BROWSER, _voice.ENGINE_PIPER)
+
 
 class TTSRequest(BaseModel):
     model_config = {"extra": "forbid"}
     text: str = Field(min_length=1, max_length=_voice.MAX_TTS_INPUT_CHARS)
+    # Optional engine override. When omitted we use the server default
+    # (browser), which preserves the original zero-config behaviour.
+    engine: str | None = Field(default=None)
+
+    @field_validator("engine")
+    @classmethod
+    def _engine(cls, v):
+        if v is None:
+            return v
+        if v not in _TTS_ALLOWED_ENGINES:
+            raise ValueError(
+                f"engine must be one of {list(_TTS_ALLOWED_ENGINES)}"
+            )
+        return v
+
+
+def _voice_config_payload() -> dict:
+    """Build the /voice/config response.
+
+    Always reports the server-default provider so the existing browser
+    flow is unchanged. Adds ``available_engines`` and an optional
+    ``piper`` block so the Settings UI can offer Piper as an opt-in
+    engine when (and only when) it is fully configured on this host.
+    """
+    provider = _voice.get_default_provider()
+    payload = {
+        "available": provider.is_available(),
+        **provider.voice_config().as_dict(),
+        "available_engines": _voice.list_available_engines(),
+    }
+    piper = _voice.get_piper_provider()
+    if piper is not None:
+        # Surface the diagnostic block whether or not Piper resolves —
+        # the UI uses ``status.available`` to decide if the option is
+        # offered, and ``detail`` to show a calm hint when it isn't.
+        payload["piper"] = piper.status().as_dict()
+    return payload
 
 
 @app.get("/voice/config")
 def voice_config(_: CurrentUser = Depends(get_current_user)):
-    """Return the active voice profile for the calling user.
-
-    The payload is small and read-only: engine name plus the calm,
-    feminine voice preferences the client uses to drive
-    `speechSynthesis`. The endpoint exists so the UI never has to
-    hard-code voice names.
-    """
-    provider = _voice.get_default_provider()
-    return {
-        "available": provider.is_available(),
-        **provider.voice_config().as_dict(),
-    }
+    """Return the active voice profile for the calling user."""
+    return _voice_config_payload()
 
 
 @app.post("/voice/synthesize")
@@ -723,26 +755,68 @@ def voice_synthesize(
 ):
     """Prepare a single message for playback.
 
-    For the browser engine — the only one shipped today — this is a
-    thin pass-through that validates the text and echoes the voice
-    profile. The route exists so future server-rendered providers can
-    return audio bytes here without the frontend learning new shapes.
+    Browser engine (default): returns the same JSON envelope the client
+    has always consumed — text plus voice profile — and the page drives
+    `speechSynthesis` locally.
+
+    Piper engine (opt-in): renders WAV audio on the host and returns
+    it as ``audio/wav`` bytes. Any failure (binary missing at runtime,
+    subprocess error, timeout, …) returns a JSON envelope marked
+    ``fallback: true`` so the client can play the message through the
+    browser engine instead — the read-aloud experience is never lost.
     """
     try:
         text = _voice.prepare_text(req.text)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
+    requested_engine = req.engine
+    if requested_engine == _voice.ENGINE_PIPER:
+        provider = _voice.get_provider(_voice.ENGINE_PIPER)
+        if provider is None:
+            return _piper_fallback_response(
+                text, reason="Piper is not configured on this host."
+            )
+        try:
+            audio = provider.synthesize(text)
+        except Exception as exc:  # noqa: BLE001 — graceful fallback is the point
+            return _piper_fallback_response(text, reason=str(exc))
+        headers = {
+            "X-Voice-Engine": _voice.ENGINE_PIPER,
+            "Cache-Control": "no-store",
+        }
+        return Response(content=audio, media_type="audio/wav", headers=headers)
+
+    # Browser engine — unchanged JSON envelope.
     provider = _voice.get_default_provider()
     if not provider.is_available():
         raise HTTPException(
             status_code=503, detail="No TTS provider is currently available."
         )
-
     return {
         "text": text,
         **provider.voice_config().as_dict(),
     }
+
+
+def _piper_fallback_response(text: str, reason: str) -> JSONResponse:
+    """Render the JSON the client uses to fall back to the browser.
+
+    Status 200 with ``fallback: true`` keeps this off the error path;
+    the browser engine is a perfectly good outcome, not a 5xx event.
+    The ``reason`` is short and user-safe — never the input text.
+    """
+    browser = _voice.get_default_provider()
+    payload = {
+        "text": text,
+        "fallback": True,
+        "fallback_reason": reason[:200],
+        **browser.voice_config().as_dict(),
+    }
+    return JSONResponse(
+        content=payload,
+        headers={"X-Voice-Engine": _voice.ENGINE_BROWSER},
+    )
 
 
 # ── ADMIN: USER MANAGEMENT ──────────────────────────────────────────
