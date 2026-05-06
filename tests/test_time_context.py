@@ -75,6 +75,7 @@ def test_get_time_context_keys():
     ctx = get_time_context()
     assert "current_date" in ctx
     assert "current_time" in ctx
+    assert "day_of_week" in ctx
     assert "timezone" in ctx
 
 
@@ -95,7 +96,38 @@ def test_format_time_context_contains_fields():
     text = format_time_context()
     assert "current_date" in text
     assert "current_time" in text
+    assert "day_of_week" in text
     assert "timezone" in text
+
+
+def test_get_time_context_day_of_week_matches_now():
+    ctx = get_time_context()
+    expected = (
+        "Monday", "Tuesday", "Wednesday", "Thursday",
+        "Friday", "Saturday", "Sunday",
+    )[now().weekday()]
+    assert ctx["day_of_week"] == expected
+
+
+def test_get_time_context_day_of_week_is_english_name():
+    # Locale-independent: must be one of the seven canonical English names,
+    # regardless of the host's LC_TIME.
+    ctx = get_time_context()
+    assert ctx["day_of_week"] in {
+        "Monday", "Tuesday", "Wednesday", "Thursday",
+        "Friday", "Saturday", "Sunday",
+    }
+
+
+def test_format_time_context_day_of_week_is_english_name():
+    text = format_time_context()
+    assert any(
+        f"day_of_week: {name}" in text
+        for name in (
+            "Monday", "Tuesday", "Wednesday", "Thursday",
+            "Friday", "Saturday", "Sunday",
+        )
+    )
 
 
 # ── Relative date resolution ─────────────────────────────────────────────────

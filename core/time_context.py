@@ -3,6 +3,13 @@ import pathlib
 import zoneinfo
 from datetime import datetime, timedelta
 
+# Locale-independent day names so the prompt is deterministic regardless of
+# the host's LC_TIME setting.
+_DAY_NAMES = (
+    "Monday", "Tuesday", "Wednesday", "Thursday",
+    "Friday", "Saturday", "Sunday",
+)
+
 
 def _get_timezone_name() -> str:
     tz_name = os.environ.get("NOVA_TIMEZONE", "").strip()
@@ -78,6 +85,7 @@ def get_time_context() -> dict:
     return {
         "current_date": dt.date().isoformat(),
         "current_time": dt.strftime("%H:%M"),
+        "day_of_week":  _DAY_NAMES[dt.weekday()],
         "timezone":     _get_timezone_name(),
     }
 
@@ -87,6 +95,7 @@ def format_time_context() -> str:
     return (
         f"[Time context]\n"
         f"current_date: {ctx['current_date']}\n"
+        f"day_of_week: {ctx['day_of_week']}\n"
         f"current_time: {ctx['current_time']}\n"
         f"timezone: {ctx['timezone']}"
     )
