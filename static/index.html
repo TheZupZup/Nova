@@ -1766,9 +1766,8 @@
                                 <span class="settings-row-title" id="pers-style-title">Response style</span>
                                 <span class="settings-row-hint" id="pers-style-hint">How detailed Nova's answers should be.</span>
                             </div>
-                            <span class="settings-coming-soon" id="pers-coming-soon-1">coming soon</span>
                         </div>
-                        <select id="pers-response-style" class="pers-select" disabled>
+                        <select id="pers-response-style" class="pers-select" onchange="savePersonalizationField('response_style', this.value)">
                             <option value="default">Default</option>
                             <option value="concise">Concise</option>
                             <option value="detailed">Detailed</option>
@@ -1782,9 +1781,8 @@
                                 <span class="settings-row-title" id="pers-warmth-title">Warmth</span>
                                 <span class="settings-row-hint" id="pers-warmth-hint">How warm or neutral Nova should sound.</span>
                             </div>
-                            <span class="settings-coming-soon" id="pers-coming-soon-2">coming soon</span>
                         </div>
-                        <select id="pers-warmth" class="pers-select" disabled>
+                        <select id="pers-warmth" class="pers-select" onchange="savePersonalizationField('warmth_level', this.value)">
                             <option value="low">Low</option>
                             <option value="normal" selected>Normal</option>
                             <option value="high">High</option>
@@ -1797,9 +1795,8 @@
                                 <span class="settings-row-title" id="pers-enth-title">Enthusiasm</span>
                                 <span class="settings-row-hint" id="pers-enth-hint">How energetic Nova's replies should feel.</span>
                             </div>
-                            <span class="settings-coming-soon" id="pers-coming-soon-3">coming soon</span>
                         </div>
-                        <select id="pers-enthusiasm" class="pers-select" disabled>
+                        <select id="pers-enthusiasm" class="pers-select" onchange="savePersonalizationField('enthusiasm_level', this.value)">
                             <option value="low">Low</option>
                             <option value="normal" selected>Normal</option>
                             <option value="high">High</option>
@@ -1812,9 +1809,8 @@
                                 <span class="settings-row-title" id="pers-emoji-title">Emoji level</span>
                                 <span class="settings-row-hint" id="pers-emoji-hint">How often Nova may use emoji.</span>
                             </div>
-                            <span class="settings-coming-soon" id="pers-coming-soon-4">coming soon</span>
                         </div>
-                        <select id="pers-emoji" class="pers-select" disabled>
+                        <select id="pers-emoji" class="pers-select" onchange="savePersonalizationField('emoji_level', this.value)">
                             <option value="none">None</option>
                             <option value="low" selected>Low</option>
                             <option value="medium">Medium</option>
@@ -1827,9 +1823,9 @@
                                 <span class="settings-row-title" id="pers-instr-title">Custom instructions</span>
                                 <span class="settings-row-hint" id="pers-instr-hint">A short note Nova should keep in mind for your messages.</span>
                             </div>
-                            <span class="settings-coming-soon" id="pers-coming-soon-5">coming soon</span>
                         </div>
-                        <textarea id="pers-custom-instructions" class="pers-textarea" maxlength="1000" disabled
+                        <textarea id="pers-custom-instructions" class="pers-textarea" maxlength="1000"
+                            onchange="savePersonalizationField('custom_instructions', this.value)"
                             placeholder="e.g. Prefer short answers. Avoid headings unless asked."></textarea>
                     </div>
                 </section>
@@ -2287,7 +2283,6 @@
         _setText("pers-emoji-hint", t("pers_emoji_hint"));
         _setText("pers-instr-title", t("pers_instr_title"));
         _setText("pers-instr-hint", t("pers_instr_hint"));
-        for (let i = 1; i <= 5; i++) _setText("pers-coming-soon-" + i, t("coming_soon"));
 
         _setText("settings-memory-note", t("memory_note"));
         const memSearch = document.getElementById("mem-search");
@@ -2973,6 +2968,53 @@
         const nameInput = document.getElementById("nova-model-name-input");
         if (nameInput && data.nova_model_name) {
             nameInput.value = data.nova_model_name;
+        }
+        applyPersonalizationUI(data);
+    }
+
+    // ── PERSONALIZATION ──
+    // Maps each /settings field to the DOM control that surfaces it. The
+    // map is the single source of truth for both the load and save paths.
+    const PERSONALIZATION_FIELDS = {
+        response_style: "pers-response-style",
+        warmth_level: "pers-warmth",
+        enthusiasm_level: "pers-enthusiasm",
+        emoji_level: "pers-emoji",
+        custom_instructions: "pers-custom-instructions",
+    };
+
+    function applyPersonalizationUI(data) {
+        for (const [key, elId] of Object.entries(PERSONALIZATION_FIELDS)) {
+            const el = document.getElementById(elId);
+            if (!el) continue;
+            const value = data[key];
+            if (value === undefined || value === null) continue;
+            el.value = value;
+        }
+    }
+
+    async function savePersonalizationField(key, rawValue) {
+        if (!(key in PERSONALIZATION_FIELDS)) return;
+        // Mirror the server-side trim so the control reflects exactly what
+        // will be stored when the user blurs the textarea.
+        const value = key === "custom_instructions"
+            ? (rawValue || "").trim()
+            : rawValue;
+        const resp = await fetch("/settings", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${token}`,
+            },
+            body: JSON.stringify({ [key]: value }),
+        });
+        if (!resp.ok) {
+            // Re-pull on rejection so the UI snaps back to the persisted
+            // value rather than showing a phantom write.
+            await loadSystemSettings();
+        } else if (key === "custom_instructions") {
+            const el = document.getElementById(PERSONALIZATION_FIELDS[key]);
+            if (el) el.value = value;
         }
     }
 

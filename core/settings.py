@@ -22,6 +22,33 @@ from __future__ import annotations
 import sqlite3
 from typing import Optional
 
+# ── Personalization ─────────────────────────────────────────────────────────
+# Tone-shaping preferences the user can flip from the settings panel. Stored
+# as plain strings in user_settings; enum values are validated server-side
+# before any write so the column never carries a value the UI can't render.
+PERSONALIZATION_ENUMS: dict[str, frozenset[str]] = {
+    "response_style": frozenset({"default", "concise", "detailed", "technical"}),
+    "warmth_level": frozenset({"low", "normal", "high"}),
+    "enthusiasm_level": frozenset({"low", "normal", "high"}),
+    "emoji_level": frozenset({"none", "low", "medium"}),
+}
+
+PERSONALIZATION_DEFAULTS: dict[str, str] = {
+    "response_style": "default",
+    "warmth_level": "normal",
+    "enthusiasm_level": "normal",
+    "emoji_level": "low",
+    "custom_instructions": "",
+}
+
+# Hard cap on the free-text instructions field. The UI sets the same limit
+# via maxlength; the server enforces it independently so a crafted client
+# can't smuggle a larger blob into the DB.
+CUSTOM_INSTRUCTIONS_MAX_LEN = 1000
+
+PERSONALIZATION_KEYS: frozenset[str] = frozenset(PERSONALIZATION_DEFAULTS)
+
+
 # Keys that belong to a user, not to the host. Anything not in this set
 # is treated as a system/global setting.
 USER_SETTING_KEYS: frozenset[str] = frozenset({
@@ -32,11 +59,58 @@ USER_SETTING_KEYS: frozenset[str] = frozenset({
     "silentguard_enabled",
     "nexanote_enabled",
     "nexanote_write_enabled",
+    # Personalization preferences. Per-user so one account's tone choices
+    # never leak onto another's chat.
+    *PERSONALIZATION_KEYS,
 })
 
 
 def is_user_setting(key: str) -> bool:
     return key in USER_SETTING_KEYS
+
+
+def validate_personalization_value(key: str, value: str) -> str:
+    """
+    Normalize and validate a personalization value before storage.
+
+    Raises ValueError on unknown keys, unknown enum values, or
+    over-length custom instructions. The returned string is what should
+    be persisted (trimmed for free-text, untouched for enums).
+    """
+    if key == "custom_instructions":
+        if not isinstance(value, str):
+            raise ValueError("custom_instructions must be a string")
+        # Trim incidental whitespace; leave internal newlines intact so the
+        # user's formatting choices survive round-tripping.
+        cleaned = value.strip()
+        if len(cleaned) > CUSTOM_INSTRUCTIONS_MAX_LEN:
+            raise ValueError(
+                f"custom_instructions too long "
+                f"(max {CUSTOM_INSTRUCTIONS_MAX_LEN} characters)"
+            )
+        return cleaned
+
+    allowed = PERSONALIZATION_ENUMS.get(key)
+    if allowed is None:
+        raise ValueError(f"unknown personalization key: {key}")
+    if value not in allowed:
+        raise ValueError(
+            f"invalid value for {key}: must be one of "
+            f"{sorted(allowed)}"
+        )
+    return value
+
+
+def get_personalization(user_id: int) -> dict[str, str]:
+    """
+    Read the full personalization payload for a user, falling back to
+    defaults for unset keys. The shape is stable so the client can render
+    every control without checking for missing fields.
+    """
+    return {
+        key: get_user_setting(user_id, key, default)
+        for key, default in PERSONALIZATION_DEFAULTS.items()
+    }
 
 
 def _db_path() -> str:

@@ -31,6 +31,10 @@ from core.memory import (
 )
 from core.settings import (
     get_user_setting, save_user_setting,
+    get_personalization,
+    validate_personalization_value,
+    CUSTOM_INSTRUCTIONS_MAX_LEN,
+    PERSONALIZATION_ENUMS,
 )
 from core.policies import (
     KNOWN_MODES,
@@ -281,6 +285,16 @@ class SettingsUpdateRequest(BaseModel):
     nexanote_enabled: bool | None = None
     nexanote_write_enabled: bool | None = None
 
+    # Personalization preferences (per-user). Enum fields are validated
+    # against PERSONALIZATION_ENUMS so the DB never carries a value the
+    # UI can't render; custom_instructions is length-capped server-side
+    # to match the textarea's maxlength.
+    response_style: str | None = None
+    warmth_level: str | None = None
+    enthusiasm_level: str | None = None
+    emoji_level: str | None = None
+    custom_instructions: str | None = None
+
     @field_validator("ram_budget")
     @classmethod
     def validate_ram_budget(cls, v):
@@ -299,6 +313,34 @@ class SettingsUpdateRequest(BaseModel):
                 raise ValueError("model name cannot be empty")
             if len(v) > ALLOWED_SETTINGS["nova_model_name"]["max_len"]:
                 raise ValueError("model name too long (max 100 characters)")
+        return v
+
+    @field_validator(
+        "response_style", "warmth_level", "enthusiasm_level", "emoji_level"
+    )
+    @classmethod
+    def validate_personalization_enum(cls, v, info):
+        if v is None:
+            return v
+        allowed = PERSONALIZATION_ENUMS[info.field_name]
+        if v not in allowed:
+            raise ValueError(
+                f"must be one of {sorted(allowed)}"
+            )
+        return v
+
+    @field_validator("custom_instructions")
+    @classmethod
+    def validate_custom_instructions(cls, v):
+        if v is None:
+            return v
+        if not isinstance(v, str):
+            raise ValueError("must be a string")
+        v = v.strip()
+        if len(v) > CUSTOM_INSTRUCTIONS_MAX_LEN:
+            raise ValueError(
+                f"must be {CUSTOM_INSTRUCTIONS_MAX_LEN} characters or fewer"
+            )
         return v
 
 
@@ -528,7 +570,7 @@ def add_memory(
 def get_settings(user: CurrentUser = Depends(get_current_user)):
     # System-scoped values are global; user-scoped values are read for the
     # caller, so two users see two different `nova_model_*` payloads.
-    return {
+    payload = {
         "ram_budget": get_setting("ram_budget", "2048"),
         "last_model_update": get_setting("last_model_update", "Never"),
         "last_updated_models": get_setting("last_updated_models", ""),
@@ -548,6 +590,11 @@ def get_settings(user: CurrentUser = Depends(get_current_user)):
             get_user_setting(user.id, "nexanote_write_enabled", "false") == "true"
         ),
     }
+    # Personalization is read for the caller and merged in flat; the
+    # client renders one control per key without checking for missing
+    # fields.
+    payload.update(get_personalization(user.id))
+    return payload
 
 
 @app.post("/models/update")
@@ -600,6 +647,23 @@ def update_settings(
             user.id,
             "nexanote_write_enabled",
             "true" if data.nexanote_write_enabled else "false",
+        )
+    # Personalization. Pydantic has already validated each field; the
+    # second pass through validate_personalization_value is the canonical
+    # check used by tests and any non-HTTP caller, and it normalises
+    # custom_instructions consistently.
+    for key in (
+        "response_style",
+        "warmth_level",
+        "enthusiasm_level",
+        "emoji_level",
+        "custom_instructions",
+    ):
+        value = getattr(data, key)
+        if value is None:
+            continue
+        save_user_setting(
+            user.id, key, validate_personalization_value(key, value)
         )
     return {"ok": True}
 
