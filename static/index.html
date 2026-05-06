@@ -996,12 +996,19 @@
             #menu-toggle { display: block; }
             #sidebar-overlay.show { display: block; }
             .message { max-width: 90%; }
+            .message-actions { max-width: 90%; }
+            .msg-action-divider { margin: 0 6px; }
+            .msg-action-status {
+                margin-left: 6px;
+                font-size: 0.68rem;
+            }
             #mode-label-text { display: none; }
         }
 
         @media (min-width: 1200px) {
             #sidebar { width: 300px; min-width: 300px; }
             .message { max-width: 65%; }
+            .message-actions { max-width: 65%; }
         }
 
         /* ── MARKDOWN ── */
@@ -1099,77 +1106,153 @@
             letter-spacing: 0.06em;
         }
 
-        /* ── COPY BUTTON (whole-message) ── */
-        .message-row.nova:hover .copy-btn,
-        .copy-btn:focus { opacity: 0.9; }
-
-        .copy-btn {
-            opacity: 0;
-            position: absolute;
-            top: 8px;
-            right: 8px;
-            padding: 4px 10px;
-            background: var(--bg-elev);
-            border: 1px solid var(--border);
-            border-radius: var(--r-sm);
-            color: var(--text-dim);
-            font-family: var(--font-mono);
-            font-size: 0.7rem;
-            cursor: pointer;
-            transition: opacity var(--t-base), color var(--t-base), border-color var(--t-base), background var(--t-base);
+        /* ── ASSISTANT MESSAGE ACTIONS ──
+           A calm, integrated control row that lives directly under each Nova
+           response. Buttons are icon-only, borderless, and always present
+           (never floating, never hover-revealed) — they read as a quiet
+           footer of the response, not as detached utility chrome. */
+        .message-actions {
+            display: flex;
+            align-items: center;
+            gap: 2px;
+            padding: 8px 4px 2px;
+            margin-top: 4px;
+            width: 100%;
+            max-width: 75%;
+            position: relative;
         }
 
-        .copy-btn:hover { color: var(--cyan); border-color: var(--cyan-glow); background: var(--cyan-soft); opacity: 1; }
-        .copy-btn.copied { color: var(--cyan); border-color: var(--cyan-glow); background: var(--cyan-soft); opacity: 1; }
-
-        /* ── SPEAK BUTTON (read-aloud, per-message) ──
-           Sits next to the copy button. Stays subtle by default; reveals on
-           row hover/focus. The "playing" state never blinks or pulses
-           harshly — Nova's voice surface is meant to feel calm. */
-        .message-row.nova:hover .speak-btn,
-        .speak-btn:focus { opacity: 0.9; }
-
-        .speak-btn {
-            opacity: 0;
+        /* Soft hairline separator between bubble and actions. The gradient
+           keeps the line from feeling like a hard rule and lets it visually
+           continue from the bubble's lower edge. */
+        .message-actions::before {
+            content: '';
             position: absolute;
-            top: 8px;
-            right: 60px;
-            width: 28px;
-            height: 24px;
-            padding: 0;
-            background: var(--bg-elev);
-            border: 1px solid var(--border);
+            top: 0;
+            left: 6px;
+            right: 6px;
+            height: 1px;
+            background: linear-gradient(90deg,
+                transparent,
+                var(--border) 28%,
+                var(--border-soft) 72%,
+                transparent);
+            opacity: 0.7;
+        }
+
+        .msg-action-group {
+            display: inline-flex;
+            align-items: center;
+            gap: 2px;
+        }
+
+        /* Subtle vertical divider between the feedback group and the
+           utility group — just enough to read as two clusters without
+           introducing a hard separator. */
+        .msg-action-divider {
+            width: 1px;
+            height: 14px;
+            margin: 0 8px;
+            background: var(--border-soft);
+            border-radius: 1px;
+            opacity: 0.8;
+        }
+
+        .msg-action {
+            appearance: none;
+            -webkit-appearance: none;
+            background: transparent;
+            border: none;
             border-radius: var(--r-sm);
             color: var(--text-dim);
-            font-size: 0.78rem;
-            line-height: 1;
             cursor: pointer;
+            padding: 0;
+            width: 30px;
+            height: 30px;
             display: inline-flex;
             align-items: center;
             justify-content: center;
             transition:
-                opacity var(--t-base),
                 color var(--t-base),
-                border-color var(--t-base),
-                background var(--t-base);
+                background var(--t-base),
+                box-shadow var(--t-base),
+                transform var(--t-fast);
         }
 
-        .speak-btn:hover { color: var(--cyan); border-color: var(--cyan-glow); background: var(--cyan-soft); opacity: 1; }
+        .msg-action svg {
+            width: 16px;
+            height: 16px;
+            display: block;
+            stroke: currentColor;
+            transition: transform var(--t-fast);
+        }
 
-        .speak-btn.playing {
+        .msg-action:hover {
+            color: var(--text);
+            background: rgba(255, 255, 255, 0.045);
+        }
+
+        .msg-action:focus { outline: none; }
+        .msg-action:focus-visible {
+            color: var(--text);
+            box-shadow: 0 0 0 2px var(--cyan-glow);
+        }
+
+        .msg-action:active { transform: scale(0.94); }
+
+        /* Persistent "selected" state for like/dislike, and a brief flash
+           after a successful copy. Cyan glow stays gentle — it whispers
+           confirmation, never shouts. */
+        .msg-action.is-active {
             color: var(--cyan);
-            border-color: var(--cyan-glow);
             background: var(--cyan-soft);
-            opacity: 1;
+            box-shadow: 0 0 0 1px var(--cyan-glow) inset;
         }
 
-        .speak-btn .icon { display: inline-flex; align-items: center; justify-content: center; }
-        .speak-btn .icon svg { width: 13px; height: 13px; display: block; }
-        .speak-btn .icon-stop { display: none; }
-        .speak-btn.playing .icon-play { display: none; }
-        .speak-btn.playing .icon-stop { display: inline-flex; }
+        .msg-action.is-playing {
+            color: var(--cyan);
+            background: var(--cyan-soft);
+            box-shadow: 0 0 0 1px var(--cyan-glow) inset;
+        }
 
-        .message.nova { position: relative; }
+        .msg-action .ic-play,
+        .msg-action .ic-stop {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .msg-action .ic-stop { display: none; }
+        .msg-action.is-playing .ic-play { display: none; }
+        .msg-action.is-playing .ic-stop { display: inline-flex; }
+
+        /* Subtle inline confirmation: "Copied", "Thanks for the feedback".
+           Lives at the end of the action row, fades in/out gracefully and
+           never re-flows the layout because it sits in the natural flex
+           gap. */
+        .msg-action-status {
+            margin-left: 10px;
+            font-size: 0.72rem;
+            letter-spacing: 0.02em;
+            color: var(--text-dim);
+            opacity: 0;
+            transform: translateY(2px);
+            pointer-events: none;
+            transition:
+                opacity var(--t-base),
+                transform var(--t-base),
+                color var(--t-base);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            min-width: 0;
+        }
+
+        .msg-action-status.is-visible {
+            opacity: 1;
+            transform: translateY(0);
+        }
+
+        .msg-action-status.is-positive { color: var(--cyan); }
 
         /* ── SETTINGS PANEL ── */
         #settings-overlay {
@@ -2394,6 +2477,11 @@
             copied: "copié!",
             read_aloud: "Lire à voix haute",
             stop_reading: "Arrêter la lecture",
+            like_response: "Réponse utile",
+            dislike_response: "Réponse à améliorer",
+            feedback_positive: "Merci — Nova a pris note.",
+            feedback_negative: "Merci — Nova ajustera.",
+            nova_actions: "Actions du message",
             mode: "Mode",
             mode_auto_desc: "Choisit automatiquement le bon mode",
             mode_chat_desc: "Conversation et questions du jour",
@@ -2485,6 +2573,11 @@
             copied: "copied!",
             read_aloud: "Read aloud",
             stop_reading: "Stop reading",
+            like_response: "Helpful response",
+            dislike_response: "Needs improvement",
+            feedback_positive: "Thanks — Nova noted this.",
+            feedback_negative: "Thanks — Nova will adjust.",
+            nova_actions: "Message actions",
             mode: "Mode",
             mode_auto_desc: "Picks the right mode automatically",
             mode_chat_desc: "Everyday chat and questions",
@@ -3387,6 +3480,10 @@
 
     function setSpeakButtonState(btn, playing) {
         if (!btn) return;
+        // The redesigned action row uses `is-playing`; the old `playing`
+        // class is kept as a harmless alias so any in-flight legacy DOM
+        // (e.g. from a stale tab) continues to work.
+        btn.classList.toggle("is-playing", !!playing);
         btn.classList.toggle("playing", !!playing);
         const label = playing ? voice.playingLabel : voice.idleLabel;
         btn.setAttribute("aria-label", label);
@@ -3451,37 +3548,162 @@
         }
     }
 
-    function attachSpeakButton(bubble, rawText) {
-        if (!voiceSupported() || !rawText) return;
-        voice.idleLabel = t("read_aloud");
-        voice.playingLabel = t("stop_reading");
+    // ── ASSISTANT ACTION ROW ──
+    // Refined SVG icons (16px stroke-1.6) used by the per-message action
+    // row. Kept as plain string templates so each button can be hydrated
+    // without bringing in an icon framework.
+    const ACTION_SVG = {
+        thumbUp: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 11v9H4.5A1.5 1.5 0 0 1 3 18.5v-6A1.5 1.5 0 0 1 4.5 11H7z"/><path d="M7 11l4-7a2 2 0 0 1 3.78 1.16L13.6 11h5.07a2 2 0 0 1 1.97 2.36l-1.32 6.4A2 2 0 0 1 17.36 21H7"/></svg>`,
+        thumbDown: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 13V4H4.5A1.5 1.5 0 0 0 3 5.5v6A1.5 1.5 0 0 0 4.5 13H7z"/><path d="M7 13l4 7a2 2 0 0 0 3.78-1.16L13.6 13h5.07a2 2 0 0 0 1.97-2.36l-1.32-6.4A2 2 0 0 0 17.36 3H7"/></svg>`,
+        copy: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2.2"/><path d="M5 15H4.5A1.5 1.5 0 0 1 3 13.5v-9A1.5 1.5 0 0 1 4.5 3h9A1.5 1.5 0 0 1 15 4.5V5"/></svg>`,
+        check: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4 4 10-10"/></svg>`,
+        speaker: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 5L6 9H4a1 1 0 0 0-1 1v4a1 1 0 0 0 1 1h2l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18.5 5.5a9 9 0 0 1 0 13"/></svg>`,
+        stop: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6.5" y="6.5" width="11" height="11" rx="2"/></svg>`,
+    };
 
+    function makeActionButton(kind, label, html) {
         const btn = document.createElement("button");
         btn.type = "button";
-        btn.className = "speak-btn";
-        btn.setAttribute("aria-label", voice.idleLabel);
-        btn.setAttribute("title", voice.idleLabel);
-        btn.setAttribute("aria-pressed", "false");
-        btn.innerHTML = `
-            <span class="icon icon-play" aria-hidden="true">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                     stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M5 9v6h3l5 4V5L8 9H5z"/>
-                    <path d="M16 8.5c1.2 1 1.2 6 0 7"/>
-                </svg>
-            </span>
-            <span class="icon icon-stop" aria-hidden="true">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                     stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-                    <rect x="7" y="7" width="10" height="10" rx="1.5"/>
-                </svg>
-            </span>
-        `;
-        btn.onclick = (e) => {
+        btn.className = `msg-action msg-action-${kind}`;
+        btn.setAttribute("aria-label", label);
+        btn.setAttribute("title", label);
+        btn.innerHTML = html;
+        return btn;
+    }
+
+    // Shows / hides the inline confirmation text inside an action row
+    // (e.g. "Copied", "Thanks — Nova noted this."). Auto-fades after a
+    // moment so the row returns to its calm resting state.
+    function showActionStatus(actions, text, opts) {
+        const status = actions.querySelector(".msg-action-status");
+        if (!status) return;
+        if (status._timer) {
+            clearTimeout(status._timer);
+            status._timer = null;
+        }
+        if (!text) {
+            status.classList.remove("is-visible", "is-positive");
+            status.textContent = "";
+            return;
+        }
+        status.textContent = text;
+        status.classList.toggle("is-positive", !!(opts && opts.positive));
+        status.classList.add("is-visible");
+        const ttl = (opts && opts.ttl) || 2200;
+        status._timer = setTimeout(() => {
+            status.classList.remove("is-visible");
+            status._timer = null;
+        }, ttl);
+    }
+
+    function setFeedback(actions, primary, secondary, kind) {
+        const wasActive = primary.classList.contains("is-active");
+        if (wasActive) {
+            // Toggle off: clear the rating without leaving a status message.
+            primary.classList.remove("is-active");
+            primary.setAttribute("aria-pressed", "false");
+            showActionStatus(actions, "");
+            return;
+        }
+        primary.classList.add("is-active");
+        primary.setAttribute("aria-pressed", "true");
+        secondary.classList.remove("is-active");
+        secondary.setAttribute("aria-pressed", "false");
+        const message = kind === "like" ? t("feedback_positive") : t("feedback_negative");
+        showActionStatus(actions, message, { positive: kind === "like" });
+    }
+
+    // Builds and attaches the per-message action row. The row sits as a
+    // sibling of the bubble inside `.message-row.nova` so it visually
+    // belongs to the response without competing with markdown content
+    // (lists, code blocks, etc.) inside the bubble itself.
+    function buildAssistantActions(row, bubble, rawText) {
+        if (!rawText) return null;
+
+        const actions = document.createElement("div");
+        actions.className = "message-actions";
+        actions.setAttribute("role", "toolbar");
+        actions.setAttribute("aria-label", t("nova_actions"));
+
+        // Feedback group ----------------------------------------------------
+        const feedbackGroup = document.createElement("div");
+        feedbackGroup.className = "msg-action-group";
+
+        const likeBtn = makeActionButton("like", t("like_response"), ACTION_SVG.thumbUp);
+        likeBtn.setAttribute("aria-pressed", "false");
+        const dislikeBtn = makeActionButton("dislike", t("dislike_response"), ACTION_SVG.thumbDown);
+        dislikeBtn.setAttribute("aria-pressed", "false");
+
+        likeBtn.onclick = (e) => {
             e.stopPropagation();
-            playMessageSpeech(btn, bubble.dataset.rawText || bubble.innerText || "");
+            setFeedback(actions, likeBtn, dislikeBtn, "like");
         };
-        bubble.appendChild(btn);
+        dislikeBtn.onclick = (e) => {
+            e.stopPropagation();
+            setFeedback(actions, dislikeBtn, likeBtn, "dislike");
+        };
+
+        feedbackGroup.appendChild(likeBtn);
+        feedbackGroup.appendChild(dislikeBtn);
+        actions.appendChild(feedbackGroup);
+
+        // Group divider -----------------------------------------------------
+        const divider = document.createElement("span");
+        divider.className = "msg-action-divider";
+        divider.setAttribute("aria-hidden", "true");
+        actions.appendChild(divider);
+
+        // Utility group: copy + (optional) read-aloud -----------------------
+        const utilityGroup = document.createElement("div");
+        utilityGroup.className = "msg-action-group";
+
+        const copyLabel = t("copy");
+        const copiedLabel = t("copied");
+        const copyBtn = makeActionButton("copy", copyLabel, ACTION_SVG.copy);
+        copyBtn.onclick = (e) => {
+            e.stopPropagation();
+            const plainText = bubble.dataset.rawText || bubble.innerText || "";
+            copyTextToClipboard(plainText);
+            // Briefly swap to a check glyph so the click registers visually
+            // even when the inline status text is not the primary signal.
+            const original = copyBtn.innerHTML;
+            copyBtn.innerHTML = ACTION_SVG.check;
+            copyBtn.classList.add("is-active");
+            showActionStatus(actions, copiedLabel, { positive: true, ttl: 1400 });
+            setTimeout(() => {
+                copyBtn.innerHTML = original;
+                copyBtn.classList.remove("is-active");
+            }, 1200);
+        };
+        utilityGroup.appendChild(copyBtn);
+
+        if (voiceSupported()) {
+            voice.idleLabel = t("read_aloud");
+            voice.playingLabel = t("stop_reading");
+            const speakBtn = makeActionButton(
+                "speak",
+                voice.idleLabel,
+                `<span class="ic-play">${ACTION_SVG.speaker}</span>` +
+                `<span class="ic-stop">${ACTION_SVG.stop}</span>`
+            );
+            speakBtn.setAttribute("aria-pressed", "false");
+            speakBtn.onclick = (e) => {
+                e.stopPropagation();
+                playMessageSpeech(speakBtn, bubble.dataset.rawText || bubble.innerText || "");
+            };
+            utilityGroup.appendChild(speakBtn);
+        }
+
+        actions.appendChild(utilityGroup);
+
+        // Inline status text (live region for SR users).
+        const status = document.createElement("span");
+        status.className = "msg-action-status";
+        status.setAttribute("aria-live", "polite");
+        actions.appendChild(status);
+
+        row.appendChild(actions);
+        return actions;
     }
 
     // Some browsers populate `getVoices()` asynchronously; touch the API
@@ -3560,33 +3782,17 @@
             }
         }
 
-        if (role === "nova") {
-            const copyBtn = document.createElement("button");
-            copyBtn.type = "button";
-            copyBtn.className = "copy-btn";
-            const copyLabel = t("copy");
-            const copiedLabel = t("copied");
-            copyBtn.textContent = copyLabel;
-            copyBtn.setAttribute("aria-label", copyLabel);
-            copyBtn.onclick = (e) => {
-                e.stopPropagation();
-                const plainText = bubble.dataset.rawText || bubble.innerText;
-                copyTextToClipboard(plainText);
-                flashCopied(copyBtn, copyLabel, copiedLabel);
-            };
-            bubble.appendChild(copyBtn);
-
-            // Per-message read-aloud control. The speaker button uses the
-            // browser's local TTS; nothing autoplays and only one message
-            // ever speaks at a time. Skip when there is no text content
-            // (e.g. an image-only assistant turn).
-            if (content) {
-                attachSpeakButton(bubble, content);
-            }
-        }
-
         row.appendChild(label);
         row.appendChild(bubble);
+
+        if (role === "nova" && content) {
+            // The integrated action row (like / dislike / copy / read-aloud)
+            // sits as a sibling of the bubble inside the row. Skipping it
+            // for image-only assistant turns keeps the surface uncluttered
+            // when there's nothing to copy or read.
+            buildAssistantActions(row, bubble, content);
+        }
+
         messagesEl.appendChild(row);
         messagesEl.scrollTop = messagesEl.scrollHeight;
 
