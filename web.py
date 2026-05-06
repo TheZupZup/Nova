@@ -55,6 +55,7 @@ from core import local_models as _local_models
 from core.ollama_client import OllamaUnavailable
 from core.integrations import silentguard as _silentguard_integration
 from core.integrations import nexanote as _nexanote_integration
+from core import voice as _voice
 import sqlite3 as _sqlite3
 from core import users as _users_mod
 from memory.store import (
@@ -683,6 +684,64 @@ def integrations_status(user: CurrentUser = Depends(get_current_user)):
             **_nexanote_integration.status(user.id).as_dict(),
             "write_enabled": _nexanote_integration.is_write_enabled(user.id),
         },
+    }
+
+
+# ── VOICE / TTS ─────────────────────────────────────────────────────
+# Foundation for an opt-in "read aloud" surface on assistant replies.
+# The server returns voice preferences and validates input; today the
+# default provider is the browser engine, so no audio bytes are
+# rendered server-side and no third-party service is contacted.
+# Future server-rendered providers can plug into the abstraction in
+# `core/voice/providers.py` without changing this endpoint's shape.
+
+class TTSRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    text: str = Field(min_length=1, max_length=_voice.MAX_TTS_INPUT_CHARS)
+
+
+@app.get("/voice/config")
+def voice_config(_: CurrentUser = Depends(get_current_user)):
+    """Return the active voice profile for the calling user.
+
+    The payload is small and read-only: engine name plus the calm,
+    feminine voice preferences the client uses to drive
+    `speechSynthesis`. The endpoint exists so the UI never has to
+    hard-code voice names.
+    """
+    provider = _voice.get_default_provider()
+    return {
+        "available": provider.is_available(),
+        **provider.voice_config().as_dict(),
+    }
+
+
+@app.post("/voice/synthesize")
+def voice_synthesize(
+    req: TTSRequest,
+    _: CurrentUser = Depends(get_current_user),
+):
+    """Prepare a single message for playback.
+
+    For the browser engine — the only one shipped today — this is a
+    thin pass-through that validates the text and echoes the voice
+    profile. The route exists so future server-rendered providers can
+    return audio bytes here without the frontend learning new shapes.
+    """
+    try:
+        text = _voice.prepare_text(req.text)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    provider = _voice.get_default_provider()
+    if not provider.is_available():
+        raise HTTPException(
+            status_code=503, detail="No TTS provider is currently available."
+        )
+
+    return {
+        "text": text,
+        **provider.voice_config().as_dict(),
     }
 
 
