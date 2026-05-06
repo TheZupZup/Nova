@@ -222,6 +222,8 @@ The following are areas of active interest, not commitments:
 - Improved model fallback and error reporting in the web UI
 - Broader test coverage
 
+For the longer-term direction — turning Nova into a local-first cognitive copilot with semantic memory, temporal awareness, and Git-aware workflows — see the design document in [docs/cognitive-copilot-roadmap.md](docs/cognitive-copilot-roadmap.md). Like the multi-user plan, it is a design document only; nothing in it is implemented yet.
+
 ## License
 
 [Mozilla Public License 2.0](LICENSE)
