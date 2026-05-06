@@ -89,7 +89,15 @@ def extract_and_save_memory(user_message: str, assistant_response: str, user_id:
     parse_and_save(result, user_id)
 
 
-def build_messages(history: list[dict], user_input: str, memories: list[dict], extra_context: str = None, context_type: str = None, natural_memories=None, personalization: dict | None = None) -> list[dict]:
+def build_messages(
+    history: list[dict],
+    user_input: str,
+    memories: list[dict],
+    extra_context: str = None,
+    context_type: str = None,
+    natural_memories=None,
+    personalization: dict | None = None,
+) -> list[dict]:
     """Construit la liste de messages à envoyer à Ollama.
 
     `personalization` is the per-user style payload from
