@@ -938,6 +938,37 @@
             background: rgba(224, 136, 129, 0.06);
         }
 
+        /* ── DRAG & DROP ──
+           Soft drop-zone affordance on the composer. We avoid a hard
+           border or flashing animation: a gentle glow plus a calm hint
+           label is enough signal without dragging the eye. */
+        #input-area.drag-over {
+            border-color: var(--cyan-glow);
+            box-shadow: 0 0 0 3px var(--cyan-soft), var(--shadow-md), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+            background: linear-gradient(180deg, rgba(32, 36, 41, 0.85), rgba(25, 28, 32, 0.85));
+        }
+
+        #drop-hint {
+            display: none;
+            margin: 0 24px 6px;
+            padding: 8px 14px;
+            font-size: 0.8rem;
+            color: var(--cyan);
+            background: var(--cyan-soft);
+            border: 1px solid var(--cyan-glow);
+            border-radius: var(--r-md);
+            text-align: center;
+            opacity: 0;
+            transform: translateY(2px);
+            transition: opacity var(--t-base), transform var(--t-base);
+            pointer-events: none;
+        }
+        #drop-hint.show {
+            display: block;
+            opacity: 1;
+            transform: translateY(0);
+        }
+
         /* ── MOBILE ── */
         #sidebar-overlay {
             display: none;
@@ -1979,9 +2010,12 @@
             <!-- IMAGE PREVIEW -->
             <div id="image-preview">
                 <img id="preview-img" src="" alt="preview" />
-                <span style="font-size:0.8rem;color:var(--text-dim);flex:1;">Image prête à envoyer</span>
+                <span id="image-ready-label" style="font-size:0.8rem;color:var(--text-dim);flex:1;">Image prête à envoyer</span>
                 <button id="remove-image" onclick="removeImage()">✕</button>
             </div>
+
+            <!-- DROP HINT -->
+            <div id="drop-hint" aria-hidden="true">Dépose l'image ici</div>
 
             <!-- INPUT -->
             <input type="file" id="image-input" accept="image/*" style="display:none" onchange="handleImageSelect(event)" />
@@ -2366,6 +2400,8 @@
             account_user_label: "Connecté en tant que",
             account_logout_title: "Se déconnecter",
             account_logout_hint: "Met fin à la session sur cet appareil.",
+            image_ready: "Image prête à envoyer",
+            drop_hint: "Dépose l'image ici",
         },
         en: {
             never_checked: "Never checked",
@@ -2453,6 +2489,8 @@
             account_user_label: "Signed in as",
             account_logout_title: "Sign out",
             account_logout_hint: "End the current session on this device.",
+            image_ready: "Image ready to send",
+            drop_hint: "Drop the image here",
         }
     };
 
@@ -2475,6 +2513,8 @@
 
         // Input
         document.getElementById("user-input").placeholder = t("placeholder");
+        _setText("image-ready-label", t("image_ready"));
+        _setText("drop-hint", t("drop_hint"));
         const sendBtn = document.getElementById("send-btn");
         if (sendBtn) {
             sendBtn.textContent = isThinking ? t("stop") : t("send");
@@ -2713,19 +2753,40 @@
         card.style.display = "flex";
     }
 
+    // Shared loader used by the file picker, drag-and-drop, and clipboard
+    // paste paths so all three feed into the same preview state. We only
+    // accept image/* — anything else is ignored silently to avoid noisy
+    // errors when users drop arbitrary files near the composer.
+    function loadImageFile(file) {
+        if (!file || typeof file.type !== "string" || !file.type.startsWith("image/")) {
+            return false;
+        }
+        try {
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                const result = e.target && e.target.result;
+                if (typeof result !== "string") return;
+                const comma = result.indexOf(",");
+                if (comma < 0) return;
+                currentImage = result.slice(comma + 1);
+                document.getElementById("preview-img").src = result;
+                document.getElementById("image-preview").classList.add("show");
+                document.getElementById("image-btn").classList.add("active");
+            };
+            reader.onerror = () => {
+                // Graceful fallback: leave existing preview untouched and
+                // do not throw so the composer stays usable.
+            };
+            reader.readAsDataURL(file);
+            return true;
+        } catch (_) {
+            return false;
+        }
+    }
+
     function handleImageSelect(event) {
         const file = event.target.files[0];
-        if (!file) return;
-
-        const reader = new FileReader();
-        reader.onload = (e) => {
-            const base64 = e.target.result.split(",")[1];
-            currentImage = base64;
-            document.getElementById("preview-img").src = e.target.result;
-            document.getElementById("image-preview").classList.add("show");
-            document.getElementById("image-btn").classList.add("active");
-        };
-        reader.readAsDataURL(file);
+        loadImageFile(file);
         event.target.value = "";
     }
 
@@ -2735,6 +2796,99 @@
         document.getElementById("image-btn").classList.remove("active");
         document.getElementById("preview-img").src = "";
     }
+
+    // ── DRAG & DROP ──
+    // We attach to #input-area only (not the whole window) so dragging
+    // files over the message list or sidebar doesn't hijack the cursor.
+    // A small enter/leave counter prevents flicker when the pointer
+    // crosses child elements inside the composer.
+    (function setupComposerDnD() {
+        const dropTarget = document.getElementById("input-area");
+        const hint = document.getElementById("drop-hint");
+        if (!dropTarget) return;
+
+        let dragDepth = 0;
+
+        const hasImageFile = (dt) => {
+            if (!dt) return false;
+            if (dt.items && dt.items.length) {
+                for (const item of dt.items) {
+                    if (item.kind === "file" && (item.type || "").startsWith("image/")) return true;
+                }
+                return false;
+            }
+            // Some browsers expose only types[] during dragover.
+            return Array.from(dt.types || []).includes("Files");
+        };
+
+        const showDrag = () => {
+            dropTarget.classList.add("drag-over");
+            if (hint) hint.classList.add("show");
+        };
+        const hideDrag = () => {
+            dropTarget.classList.remove("drag-over");
+            if (hint) hint.classList.remove("show");
+        };
+
+        dropTarget.addEventListener("dragenter", (e) => {
+            if (!hasImageFile(e.dataTransfer)) return;
+            e.preventDefault();
+            dragDepth += 1;
+            showDrag();
+        });
+
+        dropTarget.addEventListener("dragover", (e) => {
+            if (!hasImageFile(e.dataTransfer)) return;
+            e.preventDefault();
+            if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
+        });
+
+        dropTarget.addEventListener("dragleave", (e) => {
+            if (!dropTarget.classList.contains("drag-over")) return;
+            e.preventDefault();
+            dragDepth = Math.max(0, dragDepth - 1);
+            if (dragDepth === 0) hideDrag();
+        });
+
+        dropTarget.addEventListener("drop", (e) => {
+            if (!hasImageFile(e.dataTransfer)) return;
+            e.preventDefault();
+            dragDepth = 0;
+            hideDrag();
+            const files = e.dataTransfer && e.dataTransfer.files;
+            if (!files || !files.length) return;
+            for (const f of files) {
+                if (loadImageFile(f)) break;
+            }
+        });
+
+        // Ignore stray drops elsewhere on the page so the browser doesn't
+        // navigate away from the app when a user misses the composer.
+        window.addEventListener("dragover", (e) => {
+            if (hasImageFile(e.dataTransfer)) e.preventDefault();
+        });
+        window.addEventListener("drop", (e) => {
+            if (hasImageFile(e.dataTransfer)) e.preventDefault();
+        });
+    })();
+
+    // ── CLIPBOARD PASTE ──
+    // Listen on the textarea so screenshots from Cmd/Ctrl+V land in the
+    // composer. We don't preventDefault for non-image pastes so plain
+    // text paste keeps its native behavior.
+    document.getElementById("user-input").addEventListener("paste", (e) => {
+        const items = e.clipboardData && e.clipboardData.items;
+        if (!items || !items.length) return;
+        for (const item of items) {
+            if (item.kind === "file" && (item.type || "").startsWith("image/")) {
+                const file = item.getAsFile();
+                if (file && loadImageFile(file)) {
+                    e.preventDefault();
+                    return;
+                }
+            }
+        }
+    });
 
     function toggleSearch() {
         searchEnabled = !searchEnabled;
