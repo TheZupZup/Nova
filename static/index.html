@@ -687,6 +687,59 @@
             box-shadow: 0 0 0 3px var(--cyan-soft);
         }
 
+        /* ── SESSION CONTINUITY ── */
+        /* A calm, low-contrast informational card. Lives above the
+           empty-state suggestion chips, dismissable, never modal. */
+        #continuity-card {
+            width: 100%;
+            max-width: 620px;
+            margin: 18px auto 0;
+            padding: 12px 14px;
+            background: rgba(124, 197, 212, 0.04);
+            border: 1px solid var(--border-soft);
+            border-radius: var(--r-md);
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+            color: var(--text-mid);
+            font-size: 0.84rem;
+            line-height: 1.5;
+            opacity: 0;
+            transform: translateY(-4px);
+            transition: opacity var(--t-slow), transform var(--t-slow);
+        }
+        #continuity-card.visible {
+            opacity: 1;
+            transform: translateY(0);
+        }
+        #continuity-card .continuity-icon {
+            flex-shrink: 0;
+            color: var(--cyan-dim);
+            font-size: 0.78rem;
+            line-height: 1.5;
+            letter-spacing: 0.06em;
+        }
+        #continuity-card .continuity-text {
+            flex: 1;
+            color: var(--text-mid);
+        }
+        #continuity-card .continuity-dismiss {
+            flex-shrink: 0;
+            background: transparent;
+            border: none;
+            color: var(--text-dim);
+            font-size: 0.95rem;
+            line-height: 1;
+            cursor: pointer;
+            padding: 2px 6px;
+            border-radius: var(--r-sm);
+            transition: color var(--t-base), background var(--t-base);
+        }
+        #continuity-card .continuity-dismiss:hover {
+            color: var(--text);
+            background: rgba(255, 255, 255, 0.04);
+        }
+
         /* ── MODE SELECTOR ── */
         #mode-bar, #input-area { width: 100%; }
         #mode-bar {
@@ -2149,6 +2202,7 @@
                     <h2>⬡ NOVA</h2>
                     <span id="empty-state-title">Commence une nouvelle conversation</span>
                     <span id="empty-state-hint">Choisis une suggestion ou écris ta question</span>
+                    <div id="continuity-slot"></div>
                     <div id="suggestion-chips"></div>
                 </div>
             </div>
@@ -3322,6 +3376,10 @@
         if (currentConvId === null && allConversations.length > 0) {
             const sorted = [...allConversations].sort((a, b) => b.id - a.id);
             openConversation(sorted[0].id, sorted[0].title);
+        } else if (currentConvId === null) {
+            // No conversation auto-opened — surface the continuity hint
+            // on the empty-state landing pad.
+            renderSessionContinuity();
         }
     }
 
@@ -3420,10 +3478,86 @@
                 <h2>⬡ NOVA</h2>
                 <span id="empty-state-title">${t("empty_state")}</span>
                 <span id="empty-state-hint">${t("empty_state_hint")}</span>
+                <div id="continuity-slot"></div>
                 <div id="suggestion-chips"></div>
             </div>
         `;
         renderSuggestionChips();
+        renderSessionContinuity();
+    }
+
+    // ── SESSION CONTINUITY ──
+    // The dismissed-fingerprint is stored in localStorage so a calm
+    // "you were working on X" hint stops repeating once the user has
+    // acknowledged it. A new fingerprint (different recent titles)
+    // makes the banner eligible to reappear, which is the whole point.
+    const CONTINUITY_DISMISS_KEY = "nova_continuity_dismissed";
+
+    function readDismissedFingerprint() {
+        try { return localStorage.getItem(CONTINUITY_DISMISS_KEY) || ""; }
+        catch { return ""; }
+    }
+
+    function writeDismissedFingerprint(value) {
+        try { localStorage.setItem(CONTINUITY_DISMISS_KEY, value || ""); }
+        catch {}
+    }
+
+    async function renderSessionContinuity() {
+        const slot = document.getElementById("continuity-slot");
+        if (!slot) return;
+        slot.innerHTML = "";
+        // Only show on the empty / pre-conversation surface. Once the
+        // user is in a thread, the banner would be in the way.
+        if (currentConvId !== null) return;
+
+        let data = null;
+        try {
+            const res = await fetch("/session-continuity", {
+                headers: { "Authorization": `Bearer ${token}` }
+            });
+            if (!res.ok) return;
+            data = await res.json();
+        } catch { return; }
+
+        if (!data || !data.has_continuity) return;
+        if (!data.summary) return;
+        if (data.fingerprint && data.fingerprint === readDismissedFingerprint()) {
+            return;
+        }
+
+        const card = document.createElement("div");
+        card.id = "continuity-card";
+        card.setAttribute("role", "status");
+        card.setAttribute("aria-live", "polite");
+
+        const icon = document.createElement("span");
+        icon.className = "continuity-icon";
+        icon.textContent = "↻";
+        card.appendChild(icon);
+
+        const text = document.createElement("span");
+        text.className = "continuity-text";
+        text.textContent = data.summary;
+        card.appendChild(text);
+
+        const dismiss = document.createElement("button");
+        dismiss.type = "button";
+        dismiss.className = "continuity-dismiss";
+        dismiss.setAttribute("aria-label", "Dismiss");
+        dismiss.textContent = "✕";
+        dismiss.addEventListener("click", () => {
+            writeDismissedFingerprint(data.fingerprint || "");
+            card.classList.remove("visible");
+            // Wait for the fade-out before removing the node from the
+            // layout so the surrounding chips don't snap upward.
+            setTimeout(() => { card.remove(); }, 320);
+        });
+        card.appendChild(dismiss);
+
+        slot.appendChild(card);
+        // Trigger the fade-in on the next frame so the transition runs.
+        requestAnimationFrame(() => card.classList.add("visible"));
     }
 
     function newConversation() {

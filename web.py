@@ -20,6 +20,7 @@ from core.learner import learn_from_feeds
 from core.updater import check_and_update_models
 from core.chat import chat
 from core.memory_command import handle_manual_memory_command
+from core.session_continuity import build_session_continuity
 from core.memory import (
     initialize_db, load_memories, save_memory,
     create_conversation, load_conversations,
@@ -373,6 +374,21 @@ def login(request: LoginRequest, _: None = Depends(check_login_rate_limit)):
 @app.get("/conversations")
 def get_conversations(user: CurrentUser = Depends(get_current_user)):
     return load_conversations(user.id)
+
+
+@app.get("/session-continuity")
+def get_session_continuity(
+    exclude: int | None = None,
+    user: CurrentUser = Depends(get_current_user),
+):
+    """Return a small, deterministic summary of recent local activity.
+
+    See ``core/session_continuity.py`` for the design notes. The
+    endpoint never invents content: if there is nothing meaningful in
+    the user's recent conversations, ``has_continuity`` is False and
+    the UI shows nothing.
+    """
+    return build_session_continuity(user.id, exclude_conversation_id=exclude)
 
 
 @app.post("/conversations")
