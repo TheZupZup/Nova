@@ -157,14 +157,23 @@ per key, depending on SilentGuard version. The Nova-side parser must
 tolerate both, and treat anything it cannot decode as "absent" rather
 than raising.
 
-### 3.3 No local HTTP API
+### 3.3 Optional local HTTP API
 
-SilentGuard does **not** expose a local REST server. That is fine for
-Phase 1: the file-based contract is enough, and not requiring
-SilentGuard to ship a server keeps the two projects independent.
+Stock SilentGuard does **not** require a local REST server. The
+file-based contract above is enough for Phase 1 and lets the two
+projects ship independently.
 
-A future phase *may* propose a tiny loopback-only read API on the
-SilentGuard side (see §12), but Nova's design must work without it.
+Some SilentGuard builds may additionally expose a *loopback-only,
+read-only* JSON API on a port the operator chooses
+(`http://127.0.0.1:<port>`). When `NOVA_SILENTGUARD_API_URL` is set,
+Nova's `SilentGuardProvider` probes that endpoint via the small
+`SilentGuardClient` in `core/security/silentguard_client.py` instead
+of stat'ing the on-disk file. The client only ever issues `GET`
+requests against a fixed path list (`/status`, `/connections`,
+`/blocked`, `/trusted`, `/alerts`); there are no write helpers, no
+shell calls, and no firewall actions. Any transport, decode, or HTTP
+failure maps to the same calm `available=False` snapshot the file
+probe produces, so Nova's design still works without the API.
 
 ---
 

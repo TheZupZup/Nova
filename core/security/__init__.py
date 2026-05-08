@@ -16,7 +16,9 @@ such tools safely:
   * a ``NullSecurityProvider`` default so Nova works normally when
     nothing is configured.
   * a ``SilentGuardProvider`` that probes SilentGuard's local
-    presence (file-based today; ready for a future local read API).
+    presence — the on-disk memory file by default, or, when
+    ``NOVA_SILENTGUARD_API_URL`` is configured, SilentGuard's optional
+    loopback ``/status`` endpoint via :class:`SilentGuardClient`.
 
 Higher layers — the existing per-user gate in
 ``core.integrations.silentguard`` and the chat-side summariser in
@@ -38,17 +40,20 @@ from core.security.provider import (
     now_iso,
 )
 from core.security.silentguard import SilentGuardProvider
+from core.security.silentguard_client import SilentGuardClient
 
 __all__ = [
     "NullSecurityProvider",
     "SecurityProvider",
     "SecurityStatus",
+    "SilentGuardClient",
     "SilentGuardProvider",
     "STATE_AVAILABLE",
     "STATE_OFFLINE",
     "STATE_UNAVAILABLE",
     "default_provider",
     "get_security_context_summary",
+    "get_security_context_text",
     "now_iso",
 ]
 
@@ -76,3 +81,39 @@ def get_security_context_summary(
     """
     active = provider if provider is not None else default_provider()
     return active.get_status().as_dict()
+
+
+def get_security_context_text(
+    provider: SecurityProvider | None = None,
+) -> str:
+    """Return a one-line, deterministic text summary of provider state.
+
+    Examples::
+
+        "No security provider is configured."
+        "SilentGuard is unavailable."
+        "SilentGuard read-only API is available."
+        "SilentGuard reports 0 alerts and 0 blocked items."
+
+    Falls back to the safe default provider when no argument is
+    supplied. The text is **not** auto-injected anywhere; this helper
+    exists so a future, explicit prompt site can opt in without
+    having to re-derive the wording. Read-only.
+    """
+    active = provider if provider is not None else default_provider()
+    summariser = getattr(active, "get_summary_text", None)
+    if callable(summariser):
+        try:
+            text = summariser()
+        except Exception:  # pragma: no cover — defensive
+            text = ""
+        if isinstance(text, str) and text:
+            return text
+    status = active.get_status()
+    label = (status.service or "security provider").strip() or "security provider"
+    label_pretty = label if label != "none" else "Security provider"
+    if not status.available:
+        if status.service == "none":
+            return "No security provider is configured."
+        return f"{label_pretty.capitalize()} is unavailable."
+    return f"{label_pretty.capitalize()} is available."

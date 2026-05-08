@@ -294,6 +294,8 @@ For the longer-term direction — turning Nova into a local-first cognitive copi
 
 For the read-only, opt-in integration with SilentGuard (the dedicated network monitoring tool) — including the connector abstraction, JSON contract, and Phase 1 scope — see [docs/silentguard-integration-roadmap.md](docs/silentguard-integration-roadmap.md). Nova reads SilentGuard's local state and explains it; SilentGuard remains the security/enforcement layer.
 
+The integration is **optional** and **off by default**. Nova works normally whether SilentGuard is installed or not. The security provider in `core/security/` probes SilentGuard's on-disk memory file; if `NOVA_SILENTGUARD_API_URL` is set, it instead probes SilentGuard's optional **read-only loopback API** (`GET /status` and a small fixed endpoint list — no writes, no firewall actions, no shell calls). Either way, a missing, unreachable, or malformed response maps to a calm `available=False` snapshot.
+
 ## License
 
 [Mozilla Public License 2.0](LICENSE)

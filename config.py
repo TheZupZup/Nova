@@ -19,12 +19,29 @@ GITHUB_OAUTH_REDIRECT_URI = os.getenv("GITHUB_OAUTH_REDIRECT_URI", "")
 
 # ── Optional integrations (passive bridges) ─────────────────────────
 # SilentGuard is read from a JSON file on disk; the path is overridable
-# via NOVA_SILENTGUARD_PATH (used by core.security_feed). NexaNote is
-# reached over HTTP. All integration switches are per-user and default
-# to disabled; nothing is contacted until the user opts in.
+# via NOVA_SILENTGUARD_PATH (used by core.security_feed). Recent
+# SilentGuard builds may also expose an optional loopback-only read
+# API; setting NOVA_SILENTGUARD_API_URL switches the read-only security
+# provider to probe that endpoint instead. Both transports remain
+# read-only and the integration stays off until the user opts in.
+# NexaNote is reached over HTTP. All integration switches are per-user
+# and default to disabled; nothing is contacted until the user opts in.
 NEXANOTE_API_URL = os.getenv("NEXANOTE_API_URL", "").strip().rstrip("/")
 NEXANOTE_API_TOKEN = os.getenv("NEXANOTE_API_TOKEN", "").strip()
 NEXANOTE_TIMEOUT_SECONDS = float(os.getenv("NEXANOTE_TIMEOUT_SECONDS", "3.0"))
+
+# SilentGuard local read-only HTTP API (optional; off by default).
+# An empty value keeps the file-based probe in place. Setting a URL
+# (typically loopback, e.g. http://127.0.0.1:8765) enables the HTTP
+# probe in core.security.SilentGuardProvider. The transport stays
+# read-only — only GET against a fixed path list is ever issued.
+NOVA_SILENTGUARD_API_URL = os.getenv("NOVA_SILENTGUARD_API_URL", "").strip().rstrip("/")
+try:
+    NOVA_SILENTGUARD_API_TIMEOUT_SECONDS = float(
+        os.getenv("NOVA_SILENTGUARD_API_TIMEOUT_SECONDS", "2.0")
+    )
+except ValueError:
+    NOVA_SILENTGUARD_API_TIMEOUT_SECONDS = 2.0
 
 # ── Optional local TTS: Piper ─────────────────────────────────────────
 # Browser speechSynthesis remains the safe default. Piper is an opt-in
