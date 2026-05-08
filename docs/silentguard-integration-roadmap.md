@@ -127,6 +127,75 @@ commands.
 (state, detail, enabled flag). The settings panel surfaces a single
 on/off toggle for SilentGuard.
 
+### 2.4.bis `core/security/lifecycle.py` (opt-in non-privileged starter)
+
+A small, narrowly scoped helper that lets Nova *optionally* start
+SilentGuard's local read-only API service. Every gate defaults off,
+so unconfigured Nova installs never try to spawn anything.
+
+The helper is the **only** module in the security package allowed to
+import :mod:`subprocess` and :mod:`shutil`. The forbidden-imports
+test continues to pin every other file in the package to read-only.
+
+Configuration (env vars, all defaulting to safe values):
+
+  * ``NOVA_SILENTGUARD_ENABLED`` — host-level switch for the
+    lifecycle helper. Per-user ``silentguard_enabled`` still gates
+    whether SilentGuard data is surfaced to a given user.
+  * ``NOVA_SILENTGUARD_AUTO_START`` — when both this and the host
+    switch are true, the helper may spawn the configured start
+    command after a failed reachability probe. Defaults to off.
+  * ``NOVA_SILENTGUARD_API_BASE_URL`` — accepted as a synonym of the
+    pre-existing ``NOVA_SILENTGUARD_API_URL``. Loopback-only, e.g.
+    ``http://127.0.0.1:8767``.
+  * ``NOVA_SILENTGUARD_START_MODE`` — selects the start backend.
+    ``"systemd-user"`` is the only allowed non-disabled value, on
+    purpose: it pins Nova to ``systemctl --user start <unit>``.
+    Anything else (including typos) normalises to ``"disabled"``.
+  * ``NOVA_SILENTGUARD_SYSTEMD_UNIT`` — the user-level unit name to
+    start. Validated against ``^[a-z0-9][a-z0-9._-]*\.service$`` and
+    a forbidden-substring list (``..``, path separators, shell
+    metacharacters, whitespace, control characters); rejected
+    configurations surface as ``state="could_not_start"`` *before*
+    any spawn.
+
+Behaviour, in order:
+
+  1. If integration is disabled → ``state="disabled"``.
+  2. Probe :class:`SilentGuardProvider` once. If reachable →
+     ``state="connected"``.
+  3. If auto-start is off, or start-mode is not ``"systemd-user"``,
+     or the unit name fails validation → ``state="unavailable"`` /
+     ``state="could_not_start"`` as appropriate, with no spawn.
+  4. Otherwise spawn ``systemctl --user start <unit>`` with strict
+     argv (``shell=False``, no inherited stdin, captured stderr,
+     short timeout). If the spawn itself fails →
+     ``state="could_not_start"``. If it succeeds, wait one bounded
+     delay and re-probe once. Connected → ``state="connected"``;
+     still unreachable → ``state="starting"`` (the unit was
+     accepted but has not bound its socket yet).
+
+Hard guarantees, asserted in code and tests:
+
+  * No ``sudo`` / ``pkexec`` / ``doas`` / ``su`` / ``runuser``.
+  * No system-level ``systemctl`` — only ``systemctl --user``.
+  * No firewall command (``iptables`` / ``nftables`` / ``ufw`` …).
+  * No shell interpretation; argv list only.
+  * No command sourced from chat input or remote URLs.
+  * No background polling, no retry loop, no notifications.
+  * Single-pass and synchronous; never raises into chat or web.
+  * If SilentGuard is not installed / not configured, Nova continues
+    working normally — every gate falls back to a calm
+    ``state="disabled"`` / ``state="unavailable"`` snapshot.
+
+The helper is wired into the web layer via
+``GET /integrations/silentguard/lifecycle``, gated by the per-user
+``silentguard_enabled`` setting, and surfaced in the same calm
+``state`` vocabulary the Settings card renders. There is no
+auto-start on Nova boot, on session resume, or on tab focus — the
+helper runs only when the user (or operator-driven UI) explicitly
+asks for the lifecycle status.
+
 ### 2.5 `core/security/context.py` (read-only chat context)
 
 A small builder that produces the per-turn "Security context:" block

@@ -32,16 +32,59 @@ NEXANOTE_TIMEOUT_SECONDS = float(os.getenv("NEXANOTE_TIMEOUT_SECONDS", "3.0"))
 
 # SilentGuard local read-only HTTP API (optional; off by default).
 # An empty value keeps the file-based probe in place. Setting a URL
-# (typically loopback, e.g. http://127.0.0.1:8765) enables the HTTP
+# (typically loopback, e.g. http://127.0.0.1:8767) enables the HTTP
 # probe in core.security.SilentGuardProvider. The transport stays
 # read-only — only GET against a fixed path list is ever issued.
-NOVA_SILENTGUARD_API_URL = os.getenv("NOVA_SILENTGUARD_API_URL", "").strip().rstrip("/")
+# ``NOVA_SILENTGUARD_API_BASE_URL`` is accepted as a synonym for the
+# original ``NOVA_SILENTGUARD_API_URL`` so the documented config name
+# matches the SilentGuard service contract.
+NOVA_SILENTGUARD_API_URL = (
+    os.getenv("NOVA_SILENTGUARD_API_BASE_URL")
+    or os.getenv("NOVA_SILENTGUARD_API_URL", "")
+).strip().rstrip("/")
 try:
     NOVA_SILENTGUARD_API_TIMEOUT_SECONDS = float(
         os.getenv("NOVA_SILENTGUARD_API_TIMEOUT_SECONDS", "2.0")
     )
 except ValueError:
     NOVA_SILENTGUARD_API_TIMEOUT_SECONDS = 2.0
+
+# ── SilentGuard host-level lifecycle (optional auto-start) ──────────
+# Server-level switches that gate Nova's optional, *non-privileged*
+# starter for SilentGuard's local read-only API. Every switch defaults
+# to "off" so unconfigured Nova installs never try to spawn anything.
+#
+# ``NOVA_SILENTGUARD_ENABLED``     — host-wide opt-in for the
+#   integration's lifecycle helper. The per-user
+#   ``silentguard_enabled`` setting still gates whether SilentGuard
+#   data is surfaced to that user; this flag governs whether the
+#   lifecycle helper may probe / auto-start at all.
+# ``NOVA_SILENTGUARD_AUTO_START``  — when both this and the host-level
+#   switch are true, the lifecycle helper may spawn the configured
+#   start command after a failed probe. Defaults to off.
+# ``NOVA_SILENTGUARD_START_MODE``  — selects the start backend.
+#   ``"systemd-user"`` is the only allowed non-disabled value, on
+#   purpose: it pins Nova to ``systemctl --user start <unit>``, which
+#   never escalates privilege and never touches firewall config.
+# ``NOVA_SILENTGUARD_SYSTEMD_UNIT`` — the user-level unit name to
+#   start. Validated against a strict ``[a-z0-9._-]+\.service``
+#   pattern; anything else is rejected before any spawn.
+#
+# See ``docs/silentguard-integration-roadmap.md`` for the safety
+# rationale and the explicit non-goals (no sudo, no firewall, no
+# system-level systemctl, no background polling).
+NOVA_SILENTGUARD_ENABLED = (
+    os.getenv("NOVA_SILENTGUARD_ENABLED", "false").strip().lower() == "true"
+)
+NOVA_SILENTGUARD_AUTO_START = (
+    os.getenv("NOVA_SILENTGUARD_AUTO_START", "false").strip().lower() == "true"
+)
+NOVA_SILENTGUARD_START_MODE = (
+    os.getenv("NOVA_SILENTGUARD_START_MODE", "disabled").strip().lower()
+)
+NOVA_SILENTGUARD_SYSTEMD_UNIT = (
+    os.getenv("NOVA_SILENTGUARD_SYSTEMD_UNIT", "silentguard-api.service").strip()
+)
 
 # ── Optional local TTS: Piper ─────────────────────────────────────────
 # Browser speechSynthesis remains the safe default. Piper is an opt-in

@@ -42,8 +42,17 @@ from core.security.provider import (
 from core.security.silentguard import SilentGuardProvider
 from core.security.silentguard_client import SilentGuardClient
 from core.security.context import build_security_context_block
+# Lifecycle helper is the only file in this package permitted to import
+# ``subprocess`` / ``shutil``. It is exposed here so the web layer can
+# call it without reaching into a private submodule, but the read-only
+# provider, client, and context block remain unaffected.
+from core.security.lifecycle import (
+    LifecycleStatus,
+    ensure_running as ensure_silentguard_running,
+)
 
 __all__ = [
+    "LifecycleStatus",
     "NullSecurityProvider",
     "SecurityProvider",
     "SecurityStatus",
@@ -54,6 +63,7 @@ __all__ = [
     "STATE_UNAVAILABLE",
     "build_security_context_block",
     "default_provider",
+    "ensure_silentguard_running",
     "get_security_context_summary",
     "get_security_context_text",
     "now_iso",

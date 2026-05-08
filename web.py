@@ -56,6 +56,8 @@ from core import local_models as _local_models
 from core.ollama_client import OllamaUnavailable
 from core.integrations import silentguard as _silentguard_integration
 from core.integrations import nexanote as _nexanote_integration
+from core.security import ensure_silentguard_running as _ensure_silentguard_running
+from core.security import lifecycle as _silentguard_lifecycle
 from core import voice as _voice
 import sqlite3 as _sqlite3
 from core import users as _users_mod
@@ -701,6 +703,29 @@ def integrations_status(user: CurrentUser = Depends(get_current_user)):
             "write_enabled": _nexanote_integration.is_write_enabled(user.id),
         },
     }
+
+
+@app.get("/integrations/silentguard/lifecycle")
+def silentguard_lifecycle(user: CurrentUser = Depends(get_current_user)):
+    """SilentGuard read-only API lifecycle state for the caller.
+
+    Surfaces — and, when the operator has explicitly opted in via
+    ``NOVA_SILENTGUARD_AUTO_START`` *and* a ``systemd-user`` start
+    mode, may attempt to start — the local SilentGuard read-only API
+    service. The endpoint is gated by the per-user
+    ``silentguard_enabled`` setting; users who have not opted in see
+    a ``state="disabled"`` payload and no spawn is attempted.
+
+    Read-only with one narrow exception: when every gate is on, the
+    helper may run a single ``systemctl --user start <unit>`` against
+    the configured unit. No ``sudo``, no firewall command, no shell
+    interpretation, no remote URLs, no input from chat. See
+    :mod:`core.security.lifecycle` and the SilentGuard roadmap for
+    the full safety contract.
+    """
+    if not _silentguard_integration.is_enabled(user.id):
+        return _silentguard_lifecycle.disabled_status().as_dict()
+    return _ensure_silentguard_running().as_dict()
 
 
 # ── VOICE / TTS ─────────────────────────────────────────────────────
