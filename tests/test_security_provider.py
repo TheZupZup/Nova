@@ -18,7 +18,6 @@ These tests pin the contract:
 from __future__ import annotations
 
 import ast
-import os
 from pathlib import Path
 
 import pytest
