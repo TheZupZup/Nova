@@ -292,6 +292,8 @@ The following are areas of active interest, not commitments:
 
 For the longer-term direction — turning Nova into a local-first cognitive copilot with semantic memory, temporal awareness, and Git-aware workflows — see the design document in [docs/cognitive-copilot-roadmap.md](docs/cognitive-copilot-roadmap.md). Like the multi-user plan, it is a design document only; nothing in it is implemented yet.
 
+For the read-only, opt-in integration with SilentGuard (the dedicated network monitoring tool) — including the connector abstraction, JSON contract, and Phase 1 scope — see [docs/silentguard-integration-roadmap.md](docs/silentguard-integration-roadmap.md). Nova reads SilentGuard's local state and explains it; SilentGuard remains the security/enforcement layer.
+
 ## License
 
 [Mozilla Public License 2.0](LICENSE)
