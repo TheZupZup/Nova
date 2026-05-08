@@ -44,8 +44,8 @@ for _mod in ("ddgs", "ollama", "sgmllib", "feedparser"):
     if _mod not in sys.modules:
         sys.modules[_mod] = MagicMock()
 
-from core.security import lifecycle as lifecycle_module
-from core.security.lifecycle import (
+from core.security import lifecycle as lifecycle_module  # noqa: E402
+from core.security.lifecycle import (  # noqa: E402
     DEFAULT_SYSTEMD_UNIT,
     LifecycleStatus,
     STATE_CONNECTED,
@@ -59,7 +59,7 @@ from core.security.lifecycle import (
     ensure_running,
     validate_unit_name,
 )
-from core.security.provider import (
+from core.security.provider import (  # noqa: E402
     STATE_AVAILABLE,
     STATE_OFFLINE,
     STATE_UNAVAILABLE as PROVIDER_STATE_UNAVAILABLE,
@@ -419,7 +419,7 @@ class TestValidateUnitName:
         "/etc/silentguard.service",    # absolute path
         "silentguard.service\n",       # newline
         "silentguard.service;rm -rf",  # shell metachar
-        "silentguard.service & sleep", # shell metachar
+        "silentguard.service & sleep",  # shell metachar
         "silentguard.service|cat",     # pipe
         "$(whoami).service",           # command substitution
         "`id`.service",                # backtick
