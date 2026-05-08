@@ -13,9 +13,17 @@
 > **Scope guards.** This is a plan for a **read-only, opt-in, local-host
 > integration**. It is explicitly *not* a plan for Nova to act on the
 > network, manage rules, push firewall changes, or run autonomous defence
-> loops. Nova is the cognitive layer; SilentGuard remains the
+> loops. The one carefully scoped carve-out — described in detail below —
+> is that Nova may probe whether the SilentGuard read-only API is
+> reachable, and, on an explicit user click, run a *user-configured,
+> non-privileged* command to start it. That carve-out never runs sudo,
+> never modifies firewall rules, and never happens without a visible
+> user action. Nova is the cognitive layer; SilentGuard remains the
 > security/network layer. Any proposal that blurs that line should be
 > rejected.
+>
+> **Posture, in one line.** Transparency, safety, local-first design,
+> and user control over automatic behaviour beat convenience every time.
 
 ---
 
@@ -54,9 +62,18 @@ rules into SilentGuard. SilentGuard remains independently usable
 (GTK/TUI today) whether Nova is running or not. Nova remains
 independently usable whether SilentGuard is installed or not.
 
+The integration also has a small **presence** responsibility. When the
+user has flipped the "Enable SilentGuard integration" switch, Nova
+should make it obvious whether SilentGuard is running, and — only if
+the user has configured a start command — offer a visible button to
+start it. Nova never starts SilentGuard silently, never starts it with
+elevated privileges, and never keeps trying to start it in the
+background. Presence is *shown*; presence is not *enforced*.
+
 Phase 1 cashes that vision in for a small, honest set of capabilities:
-read SilentGuard's existing on-disk state, expose it as a calm read-only
-slice in Nova's UI and chat, and stop there.
+read SilentGuard's existing on-disk state, surface a calm read-only
+slice of it in Nova's UI and chat, and offer the user a transparent,
+opt-in way to keep SilentGuard available — and stop there.
 
 ---
 
@@ -89,7 +106,10 @@ A per-user gate over `security_feed`.
 
 - `is_enabled(user_id)` reads `silentguard_enabled` from
   `user_settings`; default is `false`.
-- `status(user_id)` returns `disabled` / `connected` / `not_found`.
+- `status(user_id)` today returns `disabled` / `connected` /
+  `not_found`. Phase 1 splits `not_found` into the more honest
+  `offline` (configured but unreachable) and `not_configured`
+  (nothing to reach), see §7.1.
 - `recent_events(...)` and `recent_events_summary(...)` short-circuit
   to `[]` / `None` when the user has not opted in.
 
@@ -122,8 +142,15 @@ on/off toggle for SilentGuard.
 - **No connector abstraction.** All paths read the file directly.
   Swapping in an HTTP transport later (if SilentGuard ever ships a
   loopback REST API) would require touching every call site.
+- **No reachability / lifecycle surface.** Today the integration has
+  two states from the user's point of view (`enabled` and the data
+  Nova managed to read), and no concept of "SilentGuard is
+  installed but not currently running." The Settings card cannot
+  distinguish *offline* from *not configured*, and there is no
+  user-visible affordance to start SilentGuard from Nova when the
+  user is the one who decides to.
 
-Phase 1 is exactly the set of changes that closes those four gaps.
+Phase 1 is exactly the set of changes that closes those five gaps.
 
 ---
 
@@ -157,23 +184,37 @@ per key, depending on SilentGuard version. The Nova-side parser must
 tolerate both, and treat anything it cannot decode as "absent" rather
 than raising.
 
-### 3.3 Optional local HTTP API
+### 3.3 Recommended SilentGuard service / daemon model
 
-Stock SilentGuard does **not** require a local REST server. The
-file-based contract above is enough for Phase 1 and lets the two
-projects ship independently.
+Going forward, the integration *prefers* the **service / daemon
+shape** of SilentGuard: SilentGuard runs as a long-lived, user-level
+process and exposes a *loopback-only, read-only* JSON API on a port
+the operator chooses (`http://127.0.0.1:<port>`). On Linux, the
+recommended deployment is a `systemd --user` unit
+(e.g. `silentguard.service`) that the user enables and starts in
+their own session — never a system-level unit, never a setuid
+wrapper. The file-based contract in §3.1 / §3.2 remains a supported
+fallback for legacy installs that do not run the daemon, but the
+API is the contract Nova's reachability probe, Settings status
+card, and "Start SilentGuard" action are designed around.
 
-Some SilentGuard builds may additionally expose a *loopback-only,
-read-only* JSON API on a port the operator chooses
-(`http://127.0.0.1:<port>`). When `NOVA_SILENTGUARD_API_URL` is set,
-Nova's `SilentGuardProvider` probes that endpoint via the small
-`SilentGuardClient` in `core/security/silentguard_client.py` instead
-of stat'ing the on-disk file. The client only ever issues `GET`
-requests against a fixed path list (`/status`, `/connections`,
-`/blocked`, `/trusted`, `/alerts`); there are no write helpers, no
-shell calls, and no firewall actions. Any transport, decode, or HTTP
-failure maps to the same calm `available=False` snapshot the file
-probe produces, so Nova's design still works without the API.
+When `NOVA_SILENTGUARD_API_URL` is set, Nova's `SilentGuardProvider`
+probes that endpoint via the small `SilentGuardClient` in
+`core/security/silentguard_client.py` instead of stat'ing the on-disk
+file. The client only ever issues `GET` requests against a fixed path
+list (`/status`, `/connections`, `/blocked`, `/trusted`, `/alerts`);
+there are no write helpers, no shell calls, and no firewall actions.
+Any transport, decode, or HTTP failure maps to the same calm
+`available=False` snapshot the file probe produces, so Nova's design
+still works without the API.
+
+Nova surfaces the recommended setup (the `systemd --user` unit, the
+loopback port, the read-only flag) via a "View setup instructions"
+link in the Settings card. Nova does **not** install the unit, write
+to `~/.config/systemd/user/`, or invoke any system-level
+`systemctl`. The user is the one who installs SilentGuard; Nova just
+explains what good looks like and offers to run a start command if
+the user has explicitly configured one.
 
 ---
 
@@ -186,7 +227,8 @@ These restate Nova's existing principles in the SilentGuard context.
 Every byte read or written by this integration stays on the user's
 host. No outbound calls. No telemetry. No "anonymous usage" reporting.
 If SilentGuard is on this machine, Nova talks to it; if not, the
-integration reports `not_found` and Nova continues working.
+integration reports `offline` or `not_configured` and Nova continues
+working.
 
 ### 4.2 Read-only by default — and probably forever
 
@@ -232,6 +274,32 @@ Nova does not poll SilentGuard in the background. The data is read
 security-shaped question, or when the UI panel is open. There are no
 loops, no schedulers, no notifications pushed at the user. This is a
 pull model on purpose.
+
+### 4.8 Transparent presence
+
+When the integration is enabled, Nova always shows the user whether
+SilentGuard is reachable. There is no hidden retry, no quiet
+auto-start, no "we'll keep trying in the background." The Settings
+card has three honest states — *connected*, *offline*, *not
+configured* — and they always reflect the most recent on-demand
+probe. If the user has not configured a start command, the "Start
+SilentGuard" button is *absent*, not greyed-out and unexplained;
+"View setup instructions" takes its place. The user always knows
+what Nova is about to do before Nova does it.
+
+### 4.9 No privilege escalation, ever
+
+Nova never elevates privilege on the user's behalf. The "Start
+SilentGuard" action runs the configured command as the *Nova process
+user*, with no `sudo`, no `pkexec`, no `doas`, no `su`, no `runuser`,
+no setuid wrapper, and no system-level `systemctl`. If running
+SilentGuard as a system service is the operator's preferred
+deployment, the in-Nova start action is simply not offered, and the
+setup instructions point at the operator's own `systemctl` workflow.
+Nova does not try to do it for them. The same rule applies to
+firewall managers (`iptables`, `nftables`, `firewalld`, `ufw`, `pf`,
+`ipfw`): Nova never invokes them, and the start-command validator
+rejects argv lists that look like they would.
 
 ---
 
@@ -326,17 +394,73 @@ plugin loaders, or registry patterns; those are §12 problems at best.
 
 ### 5.4 Failure modes and what they map to
 
-| Condition                                         | `get_status` reports | Read methods return |
-| ------------------------------------------------- | -------------------- | ------------------- |
-| User has not opted in                             | `disabled`           | `[]`                |
-| Opted in, but no SilentGuard files on disk        | `not_found`          | `[]`                |
-| Opted in, file present, file empty/malformed      | `connected`          | `[]` (logged at debug) |
-| Opted in, file present, valid                     | `connected`          | parsed records      |
-| Opted in, file too large (>5 MB)                  | `connected`          | `[]` (logged at warn)  |
+| Condition                                                       | `get_status` reports | Read methods return    |
+| --------------------------------------------------------------- | -------------------- | ---------------------- |
+| User has not opted in                                           | `disabled`           | `[]`                   |
+| Opted in, no API URL set, no SilentGuard files on disk          | `not_configured`     | `[]`                   |
+| Opted in, API URL set but probe fails (refused / timeout)       | `offline`            | `[]`                   |
+| Opted in, file path expected but file missing                   | `offline`            | `[]`                   |
+| Opted in, source reachable, file empty/malformed                | `connected`          | `[]` (logged at debug) |
+| Opted in, source reachable, valid records                       | `connected`          | parsed records         |
+| Opted in, file present, file too large (>5 MB)                  | `connected`          | `[]` (logged at warn)  |
 
 Nothing in this column is an exception. The chat surface, the web
 surface, and any future caller can rely on "this never throws on the
 absence path."
+
+### 5.5 Reachability and lifecycle
+
+Reachability is a **separate concern** from the connector. The
+connector answers "given that SilentGuard is here, what does it
+say?". The reachability probe answers "is SilentGuard here at all,
+right now?". Mixing them was tempting and we resisted it: the
+connector stays pure, and lifecycle gets its own narrowly scoped
+file.
+
+A new module, `core/integrations/silentguard/lifecycle.py`, owns
+exactly two operations:
+
+- `probe_reachable(timeout: float) -> ReachabilityResult` — performs
+  one `GET /status` against the configured loopback URL (or one
+  `os.stat` against the file fallback) with a short timeout (default
+  1.5 s) and returns the result as a calm dataclass. **No retry. No
+  fallback re-probe in a loop.** The probe runs when the Settings
+  card mounts, when the user clicks "Refresh," or as a single
+  post-spawn check after `start_silentguard`. That is the entire
+  trigger set.
+- `start_silentguard(user_id: str) -> StartResult` — only callable
+  when the user has explicitly configured `silentguard_start_command`
+  in their settings *and* clicked the "Start SilentGuard" button.
+  Spawns the configured command via `subprocess.Popen` with
+  `shell=False`, `start_new_session=True`, no inherited stdin, and
+  detached stdout/stderr piped to a small ring buffer. After the
+  spawn it runs one post-start `probe_reachable` and returns a
+  `StartResult` summarising whether the spawn succeeded *and*
+  whether SilentGuard is now reachable. A spawn that "succeeds" but
+  whose API never comes up is reported honestly, not papered over.
+
+`lifecycle.py` is the only file in this integration permitted to
+import `subprocess`. Every other file (`connector.py`,
+`file_connector.py`, `http_connector.py`, `summaries.py`,
+`silentguard.py`) keeps the existing forbidden-imports assertion.
+That keeps the privilege of "spawning a process" pinned to a single
+50-line file the reviewer can read end-to-end.
+
+### 5.6 What lifecycle is not
+
+- It is **not** a service supervisor. There is no restart policy,
+  no health-check loop, no "if the probe fails three times, try
+  again." A failed probe surfaces as `offline` and stays that way
+  until the user takes action.
+- It is **not** an installer. Nova does not deploy
+  `silentguard.service`, write to `~/.config/systemd/user/`, or
+  invoke `systemctl daemon-reload`. The "View setup instructions"
+  link is text, not action.
+- It is **not** a privileged helper. There is no companion daemon
+  Nova ships, no `nova-helper` setuid binary, no DBus polkit prompt.
+  If running SilentGuard requires root in your environment, the
+  in-Nova start button is simply not the right tool — use your
+  system's own service manager.
 
 ---
 
@@ -349,14 +473,16 @@ core/
   security_feed.py                  (existing — keep, narrow over time)
   integrations/
     silentguard.py                  (existing — keep, becomes the gate +
-                                     summariser facade)
+                                     summariser + lifecycle facade)
     silentguard/                    (NEW package, Phase 1)
       __init__.py
       connector.py                  (Protocol + dataclasses)
       file_connector.py             (default impl, reads JSON files)
+      http_connector.py             (loopback-only, read-only API client)
+      lifecycle.py                  (reachability probe + opt-in start;
+                                     ONLY file allowed to import subprocess)
       summaries.py                  (pure functions: events → summary,
                                      rules → counts, alerts heuristic)
-      # http_connector.py           (NOT in Phase 1; placeholder reserved)
 ```
 
 The existing `core/integrations/silentguard.py` becomes a thin facade:
@@ -406,18 +532,35 @@ SilentGuard is on disk.
 
 ```jsonc
 {
-  "available": true,                  // file readable / API reachable
-  "source": "file",                   // "file" | "http" (future)
-  "detail": "/home/user/.silentguard_memory.json",
-  "version": null                     // SilentGuard self-reported version, if any
+  "state": "connected",               // "connected" | "offline" | "not_configured"
+  "source": "http",                   // "file" | "http"
+  "detail": "http://127.0.0.1:8765",  // path or loopback URL probed
+  "version": "0.4.2",                 // SilentGuard self-reported version, if any
+  "probed_at": "2026-05-08T14:19:02Z" // ISO-8601 of the most recent probe
 }
 ```
 
-`available=false` means "the underlying tool is not present here."
+`state` semantics (these are the *only* three values, by design):
+
+- `connected` — the API is reachable (or the file is present and
+  parseable for the file fallback). The Settings card shows
+  *"SilentGuard connected in read-only mode."*
+- `offline` — the integration is configured (an API URL is set, or
+  the default file path applies on this OS) but the probe failed:
+  the socket refused, the HTTP call timed out, or the file is
+  missing. The Settings card shows *"SilentGuard is not running"*
+  and offers the "Start SilentGuard" button **only if** a start
+  command is configured.
+- `not_configured` — neither an API URL nor a recognisable file path
+  is configured for this user / host. The Settings card shows
+  *"SilentGuard not configured"* with a "View setup instructions"
+  link, and no Start button.
+
 The per-user `enabled` flag is layered on top by `silentguard.py`,
-yielding the existing `IntegrationStatus` shape (`disabled` /
-`connected` / `not_found`). The connector itself does not know about
-users — that gate lives one layer up.
+yielding the user-facing `IntegrationStatus` shape with values
+`disabled` / `connected` / `offline` / `not_configured`. The
+connector itself does not know about users — that gate lives one
+layer up.
 
 ### 7.2 `ConnectionRecord`
 
@@ -490,7 +633,56 @@ place for ML-based anomaly detection. The numbers in the rules are
 visible in the code, the user can read them, and they can be tuned
 without retraining anything.
 
-### 7.5 What the contract does not include
+### 7.5 `ReachabilityResult`
+
+```jsonc
+{
+  "reachable": false,
+  "state": "offline",                 // matches ConnectorStatus.state
+  "source": "http",
+  "detail": "Connection refused on 127.0.0.1:8765",
+  "elapsed_ms": 14,
+  "probed_at": "2026-05-08T14:19:02Z"
+}
+```
+
+Returned by `lifecycle.probe_reachable`. Always returns a value;
+never raises. `detail` is a short human-readable string (no stack
+trace, no full URL beyond the loopback host:port the user already
+configured) and is safe to display in the Settings card verbatim.
+
+### 7.6 `StartResult`
+
+```jsonc
+{
+  "spawned": true,
+  "post_probe_state": "connected",    // re-uses the ConnectorStatus state vocabulary
+  "exit_code": null,                  // null while the process is alive
+  "tail": ["listening on 127.0.0.1:8765"],
+  "started_at": "2026-05-08T14:19:02Z",
+  "summary": "SilentGuard started; API reachable."
+}
+```
+
+Returned by `lifecycle.start_silentguard`. `tail` carries at most
+the last 20 lines of the spawned process's stderr/stdout, so a
+configuration error can be shown to the user without sending them to
+syslog. `tail` entries are character-set sanitised
+(`[A-Za-z0-9._:/ -]` + length cap per line) before being returned to
+the UI, so a hostile log line cannot smuggle markup or escape
+sequences into the Settings card.
+
+A `StartResult` with `spawned: false` is the normal return when:
+
+- The user has not configured a start command.
+- The configured command failed validation (see §10.10).
+- The current state is already `connected` (the call is a no-op).
+- The spawn itself raised (binary missing, permission denied, etc.).
+
+In every one of those cases the UI receives a calm `StartResult`
+and surfaces the `summary`. `start_silentguard` itself never raises.
+
+### 7.7 What the contract does not include
 
 - No raw process command lines, environment variables, or arguments —
   even if SilentGuard later exposes them — until a separate review
@@ -514,13 +706,14 @@ respect the per-user `silentguard_enabled` gate.
 
 ### 8.1 Endpoints
 
-| Method | Path                                       | Returns                            |
-| ------ | ------------------------------------------ | ---------------------------------- |
-| GET    | `/integrations/silentguard/status`         | `IntegrationStatus` JSON           |
-| GET    | `/integrations/silentguard/connections`    | `{items: ConnectionRecord[]}`      |
-| GET    | `/integrations/silentguard/blocked`        | `{items: IPRule[]}`                |
-| GET    | `/integrations/silentguard/trusted`        | `{items: IPRule[]}`                |
-| GET    | `/integrations/silentguard/alerts`         | `{items: AlertRecord[]}`           |
+| Method | Path                                       | Returns                              |
+| ------ | ------------------------------------------ | ------------------------------------ |
+| GET    | `/integrations/silentguard/status`         | `IntegrationStatus` JSON             |
+| GET    | `/integrations/silentguard/connections`    | `{items: ConnectionRecord[]}`        |
+| GET    | `/integrations/silentguard/blocked`        | `{items: IPRule[]}`                  |
+| GET    | `/integrations/silentguard/trusted`        | `{items: IPRule[]}`                  |
+| GET    | `/integrations/silentguard/alerts`         | `{items: AlertRecord[]}`             |
+| POST   | `/integrations/silentguard/start`          | `StartResult` (only when configured) |
 
 (`/integrations/status` stays as the single-call snapshot for the
 settings panel.)
@@ -530,13 +723,20 @@ settings panel.)
 - **Disabled user → empty list, 200 OK.** Returning 200 with `items:
   []` and a `state: "disabled"` field is calmer than a 403 here. The
   user has not done anything wrong; they have just not opted in.
-- **Not found → empty list, 200 OK, `state: "not_found"`.**
+- **Offline → empty list, 200 OK, `state: "offline"`.** The
+  integration is enabled and configured, but SilentGuard is not
+  reachable. The Settings card will surface "SilentGuard is not
+  running" and (if configured) the Start button.
+- **Not configured → empty list, 200 OK, `state: "not_configured"`.**
 - **Limit query param.** `?limit=N` on `/connections` and `/alerts`,
   defaulting to 50, capped at e.g. 500. `/blocked` and `/trusted` do
   not paginate in Phase 1; the SilentGuard rules file is small.
-- **No write endpoints.** `POST`/`PUT`/`DELETE` against any of these
-  paths returns 405. There is no `/integrations/silentguard/block`
-  in Phase 1, by design.
+- **No data-write endpoints.** `POST` / `PUT` / `DELETE` against any
+  of the read paths returns 405. There is no
+  `/integrations/silentguard/block` in Phase 1, by design.
+  `POST /integrations/silentguard/start` is the only mutating
+  endpoint, and it does not write to SilentGuard's data files
+  (see §8.4).
 - **No streaming, no websockets, no SSE.** A polled GET is enough for
   a panel that the user opens occasionally. A push channel would
   invite the "background tab pings forever" failure mode.
@@ -563,6 +763,55 @@ There is no "live tail," no auto-refresh on a timer, no notifications
 out of the chat tab. The user opens the panel; the panel renders
 once.
 
+### 8.4 The `/start` endpoint
+
+`POST /integrations/silentguard/start` is the **only** mutating
+endpoint in the integration. Its mutation is exactly: spawn the
+user's configured `silentguard_start_command`, wait for a short
+post-spawn probe (default 2 s) to give the process time to bind its
+socket, and return the `StartResult`. Gating, in order:
+
+1. The request must be from an authenticated user.
+2. That user's `silentguard_enabled` must be `true`.
+3. That user's `silentguard_start_command` must be set and pass the
+   validator in §10.10 (no `sudo` / `pkexec` / `doas` / `su`, no
+   shell metacharacters, no firewall paths, argv list only).
+4. The current `ConnectorStatus.state` must be `offline`. Calling
+   `/start` when SilentGuard is already `connected` is a no-op that
+   re-probes and returns the current status. Calling `/start` from
+   `not_configured` returns a `StartResult` with `spawned: false`
+   and an instructive `summary`.
+
+If any gate fails, the endpoint returns **200 OK** with a
+`StartResult` shape carrying `spawned: false` and a human-readable
+`summary` ("Start command not configured", "Start command rejected:
+contains sudo", etc.). It does not return 4xx on the absence path,
+for the same reason the read endpoints don't: the user has not done
+anything wrong.
+
+There is **no** `/stop` endpoint, no `/restart`, no `/reload`.
+Stopping SilentGuard is the user's responsibility via SilentGuard's
+own UI or `systemctl --user stop silentguard.service`. Nova does
+not offer to stop a security tool. There is also no auto-call to
+`/start` on Nova boot, on session resume, on tab focus, or on any
+other event — only the user clicking the button triggers it.
+
+### 8.5 The Settings status card
+
+The Settings card's contract with the user is exactly:
+
+| `state`           | Headline                                  | Action                                            |
+| ----------------- | ----------------------------------------- | ------------------------------------------------- |
+| `disabled`        | "SilentGuard integration is off."         | Show the on/off toggle.                           |
+| `connected`       | "SilentGuard connected in read-only mode." | Refresh button. (Read-only is stated explicitly.) |
+| `offline`         | "SilentGuard is not running."             | Refresh; *Start SilentGuard* if configured; setup link otherwise. |
+| `not_configured`  | "SilentGuard is not configured here."     | "View setup instructions" link.                   |
+
+The card carries one line of subtext under each headline making the
+read-only nature explicit (e.g. *"Nova reads from SilentGuard. Nova
+does not enforce rules."*) so a user who scrolls into the card
+cannot mistake it for a control surface.
+
 ---
 
 ## 9. Conversational shapes
@@ -581,9 +830,10 @@ short prose answer:
 > connections, all `Local`. Nothing in the recent window is marked
 > Unknown. Want the full list?"
 
-If the integration is `disabled` or `not_found`, Nova says so
-plainly: *"SilentGuard isn't connected here, so I don't have visibility
-into network activity."* No fabrication.
+If the integration is `disabled`, `offline`, or `not_configured`,
+Nova says so plainly: *"SilentGuard isn't connected here, so I don't
+have visibility into network activity."* No fabrication, and no
+suggestion that Nova will try to bring it up on its own.
 
 ### 9.2 "Explain this suspicious connection."
 
@@ -644,14 +894,23 @@ This integration reads from a file under the user's home directory.
 That is a small surface, but it carries real privacy weight. The
 constraints below are commitments.
 
-### 10.1 No write paths
+### 10.1 No write paths to SilentGuard data
 
 Phase 1 ships zero `os.open(..., 'w')` calls against any SilentGuard
 file. The connector exposes no write methods. The HTTP surface
-exposes no mutating verbs. The test suite continues to assert that
-`silentguard.py` does not import `subprocess`, `socket`, `shutil`,
-`ctypes`, or `signal`, and the new connector files inherit the same
-assertion.
+exposes no mutating verbs against SilentGuard's *data*
+(`/connections`, `/blocked`, `/trusted`, `/alerts` are GET-only).
+
+The forbidden-imports test continues to assert that
+`silentguard.py`, `connector.py`, `file_connector.py`,
+`http_connector.py`, and `summaries.py` do not import
+`subprocess`, `socket` (beyond what `urllib` pulls in for HTTP),
+`shutil`, `ctypes`, or `signal`. **The single, narrow exception** is
+`lifecycle.py`, which is permitted to import `subprocess` and only
+that — it is forbidden from importing `os.system`, `pty`, `ctypes`,
+or `signal`, and the test enforces the import allowlist explicitly
+(*"if a new import lands in lifecycle.py, this test must be updated
+on purpose"*).
 
 ### 10.2 Path safety
 
@@ -730,6 +989,84 @@ calls). However, the per-user `silentguard_enabled` switch is the
 authoritative gate for restricted users too — an admin cannot flip
 it on behalf of a household member.
 
+The `/start` endpoint and the `silentguard_start_command` setting
+inherit the same gating: a restricted user with
+`silentguard_enabled=false` cannot trigger a spawn even if a start
+command happens to be configured for them.
+
+### 10.10 No privileged or firewall actions
+
+Nova never invokes `iptables`, `nftables`, `firewalld`, `ufw`, `pf`,
+or `ipfw`. Nova never invokes `sudo`, `pkexec`, `doas`, `su`, or
+`runuser`. Nova never calls system-level `systemctl` (only,
+optionally, `systemctl --user`, and only if that is exactly what the
+user's configured start command literally is).
+
+The `silentguard_start_command` validator enforces this in code
+*before* any spawn:
+
+- Argv must be a non-empty list of strings, not a single string. A
+  string-form command is rejected outright (no shell interpretation
+  by Python or by the OS).
+- The first element is rejected if it is, or its basename is, one
+  of: `sudo`, `pkexec`, `doas`, `su`, `runuser`, `setpriv`,
+  `chroot`, `unshare`, `nsenter`. Aliases via path component
+  (`/usr/bin/sudo`, etc.) are caught by basename comparison.
+- Any element containing a shell metacharacter is rejected:
+  `;`, `&`, `|`, `` ` ``, `$`, `<`, `>`, `(`, `)`, `{`, `}`,
+  `\\`, `\n`, `\r`. Configured commands must be plain argv, not a
+  shell pipeline. The validator does **not** try to "quote" or
+  "escape" them; it rejects.
+- Any element whose path resolves under a firewall configuration
+  directory (`/etc/iptables`, `/etc/nftables`, `/etc/firewalld`,
+  `/etc/ufw`, `/etc/pf*`) is rejected.
+- The first element must be either an absolute path that exists and
+  is executable by the Nova process user, **or** the literal
+  invocation `systemctl --user <verb> <unit>` where `<verb>` is one
+  of `start` / `restart` and `<unit>` matches `[a-z0-9._-]+\.service`.
+
+A rejected command surfaces in the Settings card as
+`state: "not_configured"` with a `detail` naming the rule that
+failed. Rejection is never silent.
+
+### 10.11 Reachability probe triggers, exhaustively listed
+
+The reachability probe runs:
+
+- Once when the Settings card mounts.
+- Once when the user clicks "Refresh" on the card.
+- Once after a `POST /start` call, ~2 s later, to give the spawned
+  process time to bind its socket.
+
+That is the full list. There is no timer. There is no
+`setInterval`. There is no server-side scheduler. There is no
+"check every minute" in the chat process. The card displays a
+*"checked N seconds ago"* label rather than re-probing on its own;
+if the user wants a fresh probe they click Refresh.
+
+### 10.12 No cloud calls and no telemetry
+
+The lifecycle module performs exactly one outbound network call: an
+HTTP `GET` against `127.0.0.1` (or `::1`) on the user-configured
+port. The validator rejects any `NOVA_SILENTGUARD_API_URL` whose
+host is not a loopback address. There is **no** usage reporting, no
+error reporting, no "anonymous start success rate" counter, no
+Sentry, no analytics, no crash reporter. A failed start stays on
+the user's machine.
+
+### 10.13 Graceful fallback if start fails
+
+A failed start surfaces as a `StartResult` with `spawned: false`
+(when validation, exec, or fork fails) or `spawned: true` paired
+with a post-probe `state: "offline"` (when the process started but
+the API never came up). The Settings card shows the failure mode
+and the captured `tail`. Nova continues to function: the chat layer
+keeps using the file fallback if it is available, or simply tells
+the user "SilentGuard isn't connected here" if it is not. A failed
+start never raises into the chat path, never disables the
+integration toggle, never blocks unrelated requests, and never
+auto-retries. The user retries by clicking the button again.
+
 ---
 
 ## 11. Phase 1 scope (and what is *not* in it)
@@ -739,30 +1076,76 @@ it on behalf of a household member.
 - The `SilentGuardConnector` Protocol and dataclasses.
 - A `FileConnector` reading both `~/.silentguard_memory.json` and
   `~/.silentguard_rules.json`.
+- An `HttpConnector` that performs read-only `GET`s against the
+  loopback API (`/status`, `/connections`, `/blocked`, `/trusted`,
+  `/alerts`) when `NOVA_SILENTGUARD_API_URL` is set.
 - `silentguard.py` facade additions: `recent_connections`,
   `blocked_ips`, `trusted_ips`, `recent_alerts`. Existing helpers
   preserved.
-- The five Nova-side HTTP endpoints listed in §8.
-- A settings-panel "SilentGuard" tab, read-only, four lists, four
-  "explain" buttons that seed the chat composer.
-- Test coverage: connector parses both files, gate honours the user
-  switch, HTTP endpoints return correct shapes for
-  disabled/not-found/connected, prompt-injection sanitisation works,
-  the read-only ast assertion grows to cover the new files.
+- The "Enable SilentGuard integration" per-user setting
+  (`silentguard_enabled`, default `false`) — already exists; Phase 1
+  re-affirms it as the single authoritative gate.
+- A new per-user setting `silentguard_start_command` (argv list,
+  optional, default empty). When empty, the Start button is absent.
+- The lifecycle module: `probe_reachable` and `start_silentguard`,
+  with the validator described in §10.10.
+- The six Nova-side HTTP endpoints listed in §8 (five GETs plus
+  `POST /start`).
+- A Settings status card with the four states described in §8.5,
+  the read-only subtext, the optional Start button, and the "View
+  setup instructions" link. The existing read-only data tab (four
+  lists with "explain" buttons) is added under the same panel.
+- Test coverage:
+  - Setting disabled means Nova issues *zero* calls to SilentGuard
+    (asserted with a fake connector that records call counts and a
+    fake lifecycle that records spawn attempts).
+  - Setting enabled triggers exactly one probe per card mount and
+    per refresh click — no extra background calls.
+  - Missing SilentGuard surfaces `offline` calmly through both file
+    and HTTP transports.
+  - Start action is hidden when `silentguard_start_command` is
+    unset; the `/start` endpoint returns `spawned: false` for any
+    request that bypasses the UI gating.
+  - Start command validator rejects each forbidden shape (`sudo`,
+    pipe, firewall path, string-form command, missing binary,
+    system-level `systemctl`).
+  - Failed start does not crash Nova: the chat path, the read
+    endpoints, and the rest of the Settings page keep working.
+  - Existing chat / prompt behaviour (`is_security_query` injection,
+    `SECURITY_SYSTEM_PROMPT`) is byte-identical when the
+    integration is disabled.
+  - Forbidden-imports test grows to cover all new files in the
+    `silentguard/` sub-package, with `lifecycle.py` allowlisted
+    only for `subprocess`.
 
 ### 11.2 Explicitly *not* in Phase 1
 
 - Any write to SilentGuard's files. (No "block this IP" button.)
-- Any subprocess execution against SilentGuard or `iptables` /
-  `nftables` / `firewalld`.
-- Any background polling, watcher, inotify, or scheduler.
-- Any HTTP client to SilentGuard. (SilentGuard has no server.)
-- Any cross-user / admin "see other users' SilentGuard data" surface.
+- Any privileged subprocess (`sudo`, `pkexec`, `doas`, `su`,
+  `runuser`), or any subprocess against `iptables` / `nftables` /
+  `firewalld` / `ufw`. The lifecycle module runs *one* configured
+  non-privileged user-level command on explicit user click, and
+  only that.
+- Any system-level (non-`--user`) `systemctl` invocation.
+- Any "auto-start on Nova boot" behaviour. Nova does not start
+  SilentGuard at process startup, on session resume, on tab focus,
+  or on any event other than the user pressing the Start button.
+- Any retry loop after a failed start. The user retries by clicking
+  the button again.
+- Any `/stop`, `/restart`, `/reload` endpoint or button.
+- Any background polling, watcher, inotify, or scheduler. The probe
+  triggers in §10.11 are the complete list.
+- Any modification of `~/.config/systemd/user/*.service` units, or
+  any other system or user unit file. Nova explains; Nova does not
+  install.
+- Any cross-user / admin "see other users' SilentGuard data or
+  start commands" surface.
 - Any GeoIP, reputation lookup, or other remote enrichment.
-- Any LLM-driven anomaly classification. The alert kinds in §7.4 are
-  the entire heuristic set.
+- Any LLM-driven anomaly classification. The alert kinds in §7.4
+  are the entire heuristic set.
 - Any push notifications, toast popups, or "you have alerts" badges
   outside the integration's tab.
+- Any cloud calls or telemetry. The probe is loopback-only.
 
 ---
 
@@ -853,6 +1236,41 @@ on its own.
 9. **AST assertions.** Extend the existing forbidden-imports test in
    `test_integrations_silentguard.py` to cover all new files in the
    `silentguard/` sub-package.
+10. **HTTP connector.** Add `http_connector.py` (loopback-only,
+    `GET`-only, fixed path list) and route the facade through it
+    when `NOVA_SILENTGUARD_API_URL` is set. Same dataclasses, same
+    callers; the file connector remains the default.
+11. **Reachability probe.** Add `lifecycle.py` with
+    `probe_reachable` only. Update the facade and
+    `/integrations/silentguard/status` to return
+    `state ∈ {connected, offline, not_configured}` based on the
+    probe result. The Settings card grows the four-state surface
+    described in §8.5.
+12. **Start command validator.** Add the argv validator in §10.10
+    as a pure function in `lifecycle.py`. Test every rejection
+    case explicitly: `sudo`, `pkexec`, `doas`, pipe / redirect /
+    `$(...)`, string-form command, firewall path, system-level
+    `systemctl`, missing binary. Validator success returns the
+    normalised argv list; everything else returns a typed reason.
+13. **Start action and button.** Add `start_silentguard` to
+    `lifecycle.py` and `POST /integrations/silentguard/start`. The
+    Settings card grows the *Start SilentGuard* button, visible
+    **only** when `silentguard_start_command` is configured *and*
+    the current state is `offline`. Failed starts surface the
+    captured `tail`. The forbidden-imports test now allowlists
+    `subprocess` for `lifecycle.py` only — and asserts that no
+    other file in the package imports it.
+14. **No-polling assertion.** Add a UI test asserting that the
+    SilentGuard settings panel registers no `setInterval`,
+    `setTimeout`-loop, or `requestAnimationFrame` polling, and a
+    server-side test asserting that `lifecycle.probe_reachable` is
+    never called from a thread, scheduler, or background task.
+15. **Disabled-means-silent test.** A regression test that, with
+    `silentguard_enabled=false`, exercises every public Nova path
+    (chat turn, settings page load, `/integrations/status` poll,
+    explicit hits against every `/integrations/silentguard/*`
+    endpoint) and asserts the connector and lifecycle layers
+    receive *zero* calls.
 
 A reasonable ratio: each step ≤ ~150 net lines of new code, each
 with focused tests, none of them touching `core/chat.py` or the
@@ -866,14 +1284,32 @@ To save reviewers a scroll: this integration does not propose any of
 the following, and proposals that require them should be rejected.
 
 - Nova writing to SilentGuard's files.
-- Nova running `iptables` / `nftables` / `firewalld` / `systemctl` /
-  any subprocess against the host.
+- Nova running `iptables` / `nftables` / `firewalld` / `ufw` / `pf`,
+  or any system-level `systemctl`, or any privileged subprocess
+  (`sudo` / `pkexec` / `doas` / `su` / `runuser`), under any setting,
+  ever. The lifecycle module's narrow exception runs *one* configured
+  non-privileged user-level command on explicit user click, validated
+  against §10.10, and only that.
+- Nova auto-starting SilentGuard. Not on Nova boot, not on session
+  resume, not on tab focus, not on `/integrations/status` poll, not
+  on any event other than the user pressing the *Start SilentGuard*
+  button. Auto-start is the whole thing this design is set up to
+  prevent.
+- Nova retrying a failed start in the background. A failed start
+  shows the failure; the user retries by clicking again.
+- Nova modifying firewall rules, network routes, DNS settings,
+  `/etc/hosts`, or any other host configuration as a side effect of
+  any setting toggle in this integration.
+- Nova installing or modifying systemd unit files. Setup
+  instructions are *text*. The user runs `systemctl --user enable`
+  themselves.
 - A background polling loop that reads SilentGuard data without the
-  user asking.
-- Any remote API call (GeoIP, reputation, threat-intel feeds) for
-  "enrichment."
-- Any cross-user visibility into SilentGuard data, including for
-  admins.
+  user asking. The probe triggers in §10.11 are exhaustive.
+- Any remote API call (GeoIP, reputation, threat-intel feeds, crash
+  reporters, telemetry) for "enrichment" or for monitoring this
+  feature's adoption. Loopback only.
+- Any cross-user visibility into SilentGuard data or start commands,
+  including for admins.
 - An LLM-driven anomaly engine. The alert kinds are explicit and
   numeric.
 - An on-by-default integration. The per-user toggle stays the gate
