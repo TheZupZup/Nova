@@ -11,6 +11,7 @@ from core.settings import get_personalization
 from core.router import route
 from core.search import web_search, should_search
 from core.security_feed import is_security_query
+from core.security import SilentGuardProvider, build_security_context_block
 from core.integrations import silentguard as silentguard_integration
 from core.time_context import format_time_context
 from core.weather import detect_weather_city, get_weather
@@ -122,6 +123,18 @@ def build_messages(
     if pers_block:
         parts.append(pers_block)
     parts.append(format_time_context())
+
+    # Read-only SilentGuard context. Probes the local provider on
+    # demand (no background polling), produces a short bullet block,
+    # and never raises. The block always re-states that Nova may
+    # explain but must not perform security actions.
+    try:
+        sec_block = build_security_context_block(SilentGuardProvider())
+    except Exception:  # pragma: no cover — the helper is contract-bound to never raise
+        logger.debug("security context block raised; omitting", exc_info=True)
+        sec_block = ""
+    if sec_block:
+        parts.append(sec_block)
 
     messages = [{"role": "system", "content": "\n\n".join(parts)}]
     messages += history[-CHAT_HISTORY_LIMIT:]

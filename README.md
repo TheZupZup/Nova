@@ -296,6 +296,8 @@ For the read-only, opt-in integration with SilentGuard (the dedicated network mo
 
 The integration is **optional** and **off by default**. Nova works normally whether SilentGuard is installed or not. The security provider in `core/security/` probes SilentGuard's on-disk memory file; if `NOVA_SILENTGUARD_API_URL` is set, it instead probes SilentGuard's optional **read-only loopback API** (`GET /status` and a small fixed endpoint list — no writes, no firewall actions, no shell calls). Either way, a missing, unreachable, or malformed response maps to a calm `available=False` snapshot.
 
+Nova's chat layer surfaces the provider's state as a small **read-only "Security context:" block** appended to the system prompt (`core/security/context.py`). The block tells the model whether SilentGuard is *not configured*, *unavailable*, or *connected in read-only mode* — and, when the optional HTTP transport is responsive, summarises four counts (`alerts`, `blocked items`, `trusted items`, `active connections`). Every variant restates that Nova may **explain and summarize only**; it must not perform firewall or rule actions. There is no notification surface, no background polling, and no autonomous alerting attached to this — the block is built on demand from the same provider as the existing settings status.
+
 ## License
 
 [Mozilla Public License 2.0](LICENSE)

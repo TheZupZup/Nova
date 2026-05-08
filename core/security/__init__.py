@@ -41,6 +41,7 @@ from core.security.provider import (
 )
 from core.security.silentguard import SilentGuardProvider
 from core.security.silentguard_client import SilentGuardClient
+from core.security.context import build_security_context_block
 
 __all__ = [
     "NullSecurityProvider",
@@ -51,6 +52,7 @@ __all__ = [
     "STATE_AVAILABLE",
     "STATE_OFFLINE",
     "STATE_UNAVAILABLE",
+    "build_security_context_block",
     "default_provider",
     "get_security_context_summary",
     "get_security_context_text",

@@ -127,7 +127,41 @@ commands.
 (state, detail, enabled flag). The settings panel surfaces a single
 on/off toggle for SilentGuard.
 
-### 2.5 What is missing today
+### 2.5 `core/security/context.py` (read-only chat context)
+
+A small builder that produces the per-turn "Security context:" block
+appended to Nova's chat system prompt. The block is short,
+deterministic, read-only, and intentionally calm:
+
+- when nothing is configured → *"SilentGuard integration: not
+  configured."* + the read-only behaviour line.
+- when configured but unreachable → *"SilentGuard integration:
+  read-only API is unavailable."* + the same read-only line.
+- when reachable → *"SilentGuard integration: connected in read-only
+  mode."*, optionally followed by *"Current summary: N alerts, N
+  blocked items, N trusted items, N active connections."* (counts
+  appear only when the optional HTTP transport is configured and
+  responsive; the file fallback omits them).
+
+Every variant ends with the same fixed clause:
+*"Allowed behavior: explain and summarize only; do not perform
+firewall or rule actions."* So Nova always knows what state the
+provider is in **and** that it must not act on it.
+
+The block is built on every turn from the existing
+`core/security/SilentGuardProvider`. There is no background polling,
+no scheduled refresh, no notification. It is a pull, on the same
+trigger that already builds the time context. Failures inside the
+provider map to the calm "unavailable" wording; raw exception text,
+IPs, process names, and timestamps never enter the prompt.
+
+This is what *"surface SilentGuard read-only context"* ships as in
+this PR. It is **not** notification behaviour, **not** a firewall
+control surface, **not** an autonomous alerting layer. The
+"Capabilities" line in §11.1 above stays accurate: actions are still
+explicitly out of scope.
+
+### 2.6 What is missing today
 
 - **Trusted IPs and blocked IPs** are not exposed. SilentGuard persists
   them in `~/.silentguard_rules.json` (see §3); Nova does not read that
@@ -150,7 +184,12 @@ on/off toggle for SilentGuard.
   user-visible affordance to start SilentGuard from Nova when the
   user is the one who decides to.
 
-Phase 1 is exactly the set of changes that closes those five gaps.
+The chat-prompt presence gap (Nova not knowing whether SilentGuard
+exists at all) is closed by the read-only context block in §2.5.
+The remaining gaps below — rules, alerts, connector abstraction,
+HTTP surface, lifecycle — are still the Phase 1 scope.
+
+Phase 1 is exactly the set of changes that closes those gaps.
 
 ---
 

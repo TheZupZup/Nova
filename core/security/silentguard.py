@@ -297,6 +297,56 @@ class SilentGuardProvider:
             )
         return "SilentGuard read-only API is available."
 
+    # ── Optional structured counts ──────────────────────────────────
+
+    def get_summary_counts(self) -> Optional[dict]:
+        """Return read-only counts, or ``None`` when unavailable.
+
+        When the HTTP transport is configured *and* SilentGuard is
+        reachable, returns::
+
+            {"alerts": int, "blocked": int, "trusted": int, "connections": int}
+
+        Returns ``None`` in every other case:
+
+          * provider unavailable (file missing, API offline, …),
+          * no API client configured (file-only fallback),
+          * any read returned a non-list payload,
+          * any read raised (defensive — the client itself does not
+            raise, but a misbehaving substitute might).
+
+        Used by the prompt-injected security context block in
+        ``core.security.context``. Read-only — only ``GET`` calls are
+        ever issued, only against the fixed read-only path list.
+        """
+        status = self.get_status()
+        if not status.available:
+            return None
+        client = self._resolved_client()
+        if client is None:
+            return None
+        try:
+            alerts = client.get_alerts()
+            blocked = client.get_blocked()
+            trusted = client.get_trusted()
+            connections = client.get_connections()
+        except Exception:  # pragma: no cover — defensive belt-and-braces
+            logger.debug(
+                "SilentGuard summary count enrichment failed", exc_info=True,
+            )
+            return None
+        if not all(
+            isinstance(value, list)
+            for value in (alerts, blocked, trusted, connections)
+        ):
+            return None
+        return {
+            "alerts": len(alerts),
+            "blocked": len(blocked),
+            "trusted": len(trusted),
+            "connections": len(connections),
+        }
+
 
 def _normalise_url(value: str) -> str:
     """Trim whitespace and a trailing slash from an API base URL."""
