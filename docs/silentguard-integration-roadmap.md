@@ -196,6 +196,69 @@ auto-start on Nova boot, on session resume, or on tab focus — the
 helper runs only when the user (or operator-driven UI) explicitly
 asks for the lifecycle status.
 
+### 2.4.ter Settings status surface (visibility only)
+
+The Settings panel grows a small calm SilentGuard status row in the
+General pane. It is **not** a security dashboard, **not** an alert
+surface, and **not** a control surface — it is a single read-only
+card that tells the user, in one sentence, what the lifecycle helper
+believes the integration's current state is.
+
+The row is fed by ``GET /integrations/silentguard/summary``, a small
+endpoint that combines two existing read-only paths:
+
+  * the per-user gate + lifecycle state already returned by
+    ``/integrations/silentguard/lifecycle``, and
+  * the optional summary counts already produced by
+    :meth:`SilentGuardProvider.get_summary_counts` (alerts, blocked,
+    trusted, connections — only when the read-only HTTP transport is
+    configured *and* reachable).
+
+Stable response shape::
+
+    {
+      "lifecycle": {state, enabled, auto_start, start_mode, unit, message},
+      "counts": {"alerts", "blocked", "trusted", "connections"} | null
+    }
+
+The existing ``/integrations/silentguard/lifecycle`` and
+``/integrations/status`` endpoint shapes are unchanged — the summary
+endpoint is purely additive so the prompt-context, chat, and admin
+flows that already depend on those payloads keep working byte for byte.
+
+Headline mapping (state → calm sentence):
+
+  * ``disabled`` (per-user opt-in off, or host switch off) →
+    *"SilentGuard integration disabled"* (or *"SilentGuard not
+    configured"* when the user has opted in but the host has not).
+  * ``connected`` → *"SilentGuard connected in read-only mode"* with
+    a *"Read-only"* badge and, when counts are available, the line
+    *"N alerts · N blocked · N trusted · N connections"*.
+  * ``starting`` → *"Starting local SilentGuard API…"*.
+  * ``could_not_start`` → *"Could not start SilentGuard"*.
+  * ``unavailable`` → *"SilentGuard unavailable"*. When the operator
+    has integration on but auto-start off, the calm subtext
+    *"Auto-start disabled"* surfaces alongside it.
+
+The card carries one explicit *Refresh* button. There is **no**
+background polling, no ``setInterval``, no scheduler, no auto-refresh
+on tab focus — the only triggers are (1) opening the Settings
+overlay and (2) clicking *Refresh*. This honours the
+"reachability probe triggers" exhaust-list in §10.11: the summary
+endpoint runs ``ensure_running`` once per call, never on a timer.
+
+What the surface deliberately does **not** do:
+
+  * No firewall control, no block / unblock buttons, no rule editor.
+  * No notifications, toasts, or "you have alerts" badges.
+  * No remote / cloud / telemetry calls.
+  * No raw exception text in the UI; provider failures map to the
+    same calm "unavailable" wording the lifecycle helper already
+    uses.
+  * No Alpha-only state — the surface follows the same auth /
+    per-user / channel gates as every other ``/integrations/*``
+    endpoint.
+
 ### 2.5 `core/security/context.py` (read-only chat context)
 
 A small builder that produces the per-turn "Security context:" block

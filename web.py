@@ -58,6 +58,7 @@ from core.integrations import silentguard as _silentguard_integration
 from core.integrations import nexanote as _nexanote_integration
 from core.security import ensure_silentguard_running as _ensure_silentguard_running
 from core.security import lifecycle as _silentguard_lifecycle
+from core.security import SilentGuardProvider as _SilentGuardProvider
 from core import voice as _voice
 import sqlite3 as _sqlite3
 from core import users as _users_mod
@@ -726,6 +727,53 @@ def silentguard_lifecycle(user: CurrentUser = Depends(get_current_user)):
     if not _silentguard_integration.is_enabled(user.id):
         return _silentguard_lifecycle.disabled_status().as_dict()
     return _ensure_silentguard_running().as_dict()
+
+
+@app.get("/integrations/silentguard/summary")
+def silentguard_summary(user: CurrentUser = Depends(get_current_user)):
+    """SilentGuard Settings status summary for the caller.
+
+    One-call snapshot the Settings UI renders into a small calm status
+    card: the same lifecycle state surfaced by
+    ``/integrations/silentguard/lifecycle`` plus, when the read-only
+    API is reachable, the four optional summary counts produced by
+    :class:`SilentGuardProvider.get_summary_counts`.
+
+    Stable shape::
+
+        {
+            "lifecycle": LifecycleStatus.as_dict(),
+            "counts": {"alerts": int, "blocked": int,
+                       "trusted": int, "connections": int} | None,
+        }
+
+    ``counts`` is ``None`` whenever the lifecycle state is anything
+    other than ``connected``, when the HTTP transport is not
+    configured (file-only fallback), or when the optional count probe
+    fails. The endpoint never raises; every failure path maps to a
+    calm payload the UI renders without alarm.
+
+    Read-only and gated by the per-user ``silentguard_enabled``
+    setting, exactly like the lifecycle endpoint. No background
+    polling — the UI calls this once per Settings open / Refresh
+    click, mirroring the trigger set documented in the roadmap.
+    """
+    if not _silentguard_integration.is_enabled(user.id):
+        return {
+            "lifecycle": _silentguard_lifecycle.disabled_status().as_dict(),
+            "counts": None,
+        }
+    lifecycle_status = _ensure_silentguard_running()
+    counts = None
+    if lifecycle_status.state == _silentguard_lifecycle.STATE_CONNECTED:
+        try:
+            counts = _SilentGuardProvider().get_summary_counts()
+        except Exception:  # pragma: no cover — defensive belt-and-braces
+            counts = None
+    return {
+        "lifecycle": lifecycle_status.as_dict(),
+        "counts": counts,
+    }
 
 
 # ── VOICE / TTS ─────────────────────────────────────────────────────

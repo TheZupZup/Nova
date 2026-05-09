@@ -1554,6 +1554,48 @@
         .voice-status.is-visible { opacity: 1; }
         .voice-status.is-warn { color: var(--text-mid); }
 
+        /* SilentGuard status card — calm, read-only.
+           Colour shifts with state but never alarms. */
+        .silentguard-status-foot {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 8px 12px;
+            font-size: 0.74rem;
+            color: var(--text-dim);
+            min-height: 1em;
+        }
+        .silentguard-mode-badge {
+            font-size: 0.65rem;
+            color: var(--text-dim);
+            background: var(--bg-elev);
+            border: 1px solid var(--border);
+            border-radius: var(--r-pill);
+            padding: 2px 8px;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            white-space: nowrap;
+            font-weight: 500;
+        }
+        .silentguard-counts {
+            font-family: monospace;
+            color: var(--text-mid);
+        }
+        .silentguard-substatus { color: var(--text-dim); }
+        #silentguard-status-row[data-state="connected"] {
+            border-color: var(--cyan-glow);
+            background: var(--cyan-soft);
+        }
+        #silentguard-status-row[data-state="connected"] .silentguard-mode-badge {
+            color: var(--cyan);
+            border-color: var(--cyan-glow);
+            background: var(--cyan-soft);
+        }
+        #silentguard-status-row[data-state="starting"] .silentguard-substatus,
+        #silentguard-status-row[data-state="could_not_start"] .silentguard-substatus {
+            color: var(--text-mid);
+        }
+
         #mem-search {
             width: 100%;
             box-sizing: border-box;
@@ -2378,6 +2420,25 @@
                             </button>
                         </div>
                     </div>
+                    <!-- SilentGuard read-only status card. Calm by design:
+                         shows lifecycle state + optional summary counts, with
+                         a manual Refresh button. No background polling. -->
+                    <div class="settings-row" id="silentguard-status-row" data-state="loading">
+                        <div class="settings-row-head">
+                            <div class="settings-row-label">
+                                <span class="settings-row-title" id="settings-silentguard-title">SilentGuard</span>
+                                <span class="settings-row-hint" id="settings-silentguard-headline">Checking SilentGuard status…</span>
+                            </div>
+                            <button type="button" class="memory-btn" id="silentguard-refresh-btn" onclick="refreshSilentGuardStatus()" style="white-space:nowrap;">
+                                <span id="silentguard-refresh-label">Refresh</span>
+                            </button>
+                        </div>
+                        <div class="silentguard-status-foot">
+                            <span class="silentguard-mode-badge" id="silentguard-mode-badge" style="display:none;">Read-only</span>
+                            <span class="silentguard-counts" id="silentguard-counts" style="display:none;"></span>
+                            <span class="silentguard-substatus" id="silentguard-substatus" aria-live="polite"></span>
+                        </div>
+                    </div>
                 </section>
 
                 <!-- PERSONALIZATION -->
@@ -2654,6 +2715,19 @@
             ram_title: "Budget RAM",
             ram_hint: "Contrôle la taille de l'historique et des mémoires",
             update_title: "Mise à jour automatique des modèles",
+            silentguard_title: "SilentGuard",
+            silentguard_refresh: "Actualiser",
+            silentguard_mode_readonly: "Lecture seule",
+            silentguard_loading: "Vérification de SilentGuard…",
+            silentguard_disabled: "Intégration SilentGuard désactivée",
+            silentguard_not_configured: "SilentGuard n'est pas configuré",
+            silentguard_connected: "SilentGuard connecté en lecture seule",
+            silentguard_starting: "Démarrage de l'API locale SilentGuard…",
+            silentguard_could_not_start: "Impossible de démarrer SilentGuard",
+            silentguard_unavailable: "SilentGuard indisponible",
+            silentguard_autostart_off: "Démarrage automatique désactivé",
+            silentguard_check_failed: "Statut SilentGuard indisponible",
+            silentguard_counts_label: "{alerts} alertes · {blocked} bloqués · {trusted} approuvés · {connections} connexions",
             personalization_note: "Ces préférences ajusteront le ton de Nova dans tes conversations. Stockées par utilisateur, visibles uniquement par toi.",
             pers_style_title: "Style de réponse",
             pers_style_hint: "Niveau de détail des réponses de Nova.",
@@ -2774,6 +2848,19 @@
             ram_title: "RAM Budget",
             ram_hint: "Controls conversation history size and memory limits",
             update_title: "Auto-update models",
+            silentguard_title: "SilentGuard",
+            silentguard_refresh: "Refresh",
+            silentguard_mode_readonly: "Read-only",
+            silentguard_loading: "Checking SilentGuard status…",
+            silentguard_disabled: "SilentGuard integration disabled",
+            silentguard_not_configured: "SilentGuard not configured",
+            silentguard_connected: "SilentGuard connected in read-only mode",
+            silentguard_starting: "Starting local SilentGuard API…",
+            silentguard_could_not_start: "Could not start SilentGuard",
+            silentguard_unavailable: "SilentGuard unavailable",
+            silentguard_autostart_off: "Auto-start disabled",
+            silentguard_check_failed: "SilentGuard status unavailable",
+            silentguard_counts_label: "{alerts} alerts · {blocked} blocked · {trusted} trusted · {connections} connections",
             personalization_note: "These preferences will shape Nova's tone in your conversations. Saved per-user; visible only to you.",
             pers_style_title: "Response style",
             pers_style_hint: "How detailed Nova's answers should be.",
@@ -2925,6 +3012,14 @@
         _setText("settings-ram-title", t("ram_title"));
         _setText("settings-ram-hint", t("ram_hint"));
         _setText("settings-update-title", t("update_title"));
+
+        _setText("settings-silentguard-title", t("silentguard_title"));
+        _setText("silentguard-refresh-label", t("silentguard_refresh"));
+        // Re-render the status card so headline / counts pick up the new
+        // language without re-issuing the network call.
+        if (typeof applySilentGuardSummaryUI === "function" && lastSilentGuardSummary) {
+            applySilentGuardSummaryUI(lastSilentGuardSummary);
+        }
 
         _setText("settings-personalization-note", t("personalization_note"));
         _setText("pers-style-title", t("pers_style_title"));
@@ -4758,6 +4853,120 @@
         applyPersonalizationUI(data);
     }
 
+    // ── SILENTGUARD STATUS CARD ──
+    // Read-only Settings surface for the SilentGuard integration. The
+    // backend at /integrations/silentguard/summary already gates on the
+    // per-user setting, runs the lifecycle helper, and (when reachable)
+    // attaches the optional summary counts. The UI just renders the
+    // calm result. There is no background polling: refresh runs once
+    // when Settings opens and once per Refresh-button click.
+    let lastSilentGuardSummary = null;
+    let silentGuardRefreshInFlight = false;
+
+    function setSilentGuardCardState(state) {
+        const row = document.getElementById("silentguard-status-row");
+        if (row) row.dataset.state = state;
+    }
+
+    function applySilentGuardSummaryUI(payload) {
+        const row = document.getElementById("silentguard-status-row");
+        const headline = document.getElementById("settings-silentguard-headline");
+        const badge = document.getElementById("silentguard-mode-badge");
+        const counts = document.getElementById("silentguard-counts");
+        const sub = document.getElementById("silentguard-substatus");
+        if (!row || !headline || !badge || !counts || !sub) return;
+
+        const lifecycle = (payload && payload.lifecycle) || {};
+        const state = lifecycle.state || "unavailable";
+        const enabled = !!lifecycle.enabled;
+        const autoStart = !!lifecycle.auto_start;
+        const summaryCounts = (payload && payload.counts) || null;
+
+        // Reset slot defaults so a re-render of a different state never
+        // leaves stale text behind.
+        badge.style.display = "none";
+        counts.style.display = "none";
+        counts.textContent = "";
+        sub.textContent = "";
+
+        // Pick the calm headline. ``state="disabled"`` covers both the
+        // host-level switch and the per-user opt-in being off; the same
+        // wording is fine for both since the user's path forward (the
+        // per-user toggle / operator config) is the same.
+        let headlineKey;
+        if (state === "connected") {
+            headlineKey = "silentguard_connected";
+        } else if (state === "starting") {
+            headlineKey = "silentguard_starting";
+        } else if (state === "could_not_start") {
+            headlineKey = "silentguard_could_not_start";
+        } else if (state === "disabled") {
+            headlineKey = enabled ? "silentguard_not_configured" : "silentguard_disabled";
+        } else {
+            // STATE_UNAVAILABLE or any unknown future state.
+            headlineKey = "silentguard_unavailable";
+        }
+        headline.textContent = t(headlineKey);
+        setSilentGuardCardState(state);
+
+        if (state === "connected") {
+            // Make read-only mode explicit, per the UX brief.
+            badge.textContent = t("silentguard_mode_readonly");
+            badge.style.display = "";
+            if (summaryCounts && typeof summaryCounts === "object") {
+                counts.textContent = t("silentguard_counts_label")
+                    .replace("{alerts}", String(summaryCounts.alerts ?? 0))
+                    .replace("{blocked}", String(summaryCounts.blocked ?? 0))
+                    .replace("{trusted}", String(summaryCounts.trusted ?? 0))
+                    .replace("{connections}", String(summaryCounts.connections ?? 0));
+                counts.style.display = "";
+            }
+        } else if (state === "unavailable" && enabled && !autoStart) {
+            // Per the UX brief: when integration is on but auto-start is
+            // off, surface that calmly so the operator knows why nothing
+            // is being started in the background.
+            sub.textContent = t("silentguard_autostart_off");
+        }
+    }
+
+    function applySilentGuardCheckFailedUI() {
+        // Network / parse failure: render the same calm shape as a
+        // disabled snapshot so the user never sees a raw error.
+        applySilentGuardSummaryUI({
+            lifecycle: { state: "unavailable", enabled: false, auto_start: false },
+            counts: null,
+        });
+        const sub = document.getElementById("silentguard-substatus");
+        if (sub) sub.textContent = t("silentguard_check_failed");
+    }
+
+    async function refreshSilentGuardStatus() {
+        if (silentGuardRefreshInFlight) return;
+        const btn = document.getElementById("silentguard-refresh-btn");
+        const headline = document.getElementById("settings-silentguard-headline");
+        silentGuardRefreshInFlight = true;
+        if (btn) btn.disabled = true;
+        if (headline) headline.textContent = t("silentguard_loading");
+        setSilentGuardCardState("loading");
+        try {
+            const res = await fetch("/integrations/silentguard/summary", {
+                headers: { "Authorization": `Bearer ${token}` },
+            });
+            if (!res.ok) {
+                applySilentGuardCheckFailedUI();
+                return;
+            }
+            const data = await res.json();
+            lastSilentGuardSummary = data;
+            applySilentGuardSummaryUI(data);
+        } catch (e) {
+            applySilentGuardCheckFailedUI();
+        } finally {
+            silentGuardRefreshInFlight = false;
+            if (btn) btn.disabled = false;
+        }
+    }
+
     // ── PERSONALIZATION ──
     // Maps each /settings field to the DOM control that surfaces it. The
     // map is the single source of truth for both the load and save paths.
@@ -4898,6 +5107,10 @@
         // load that first, then render. The browser-only case hides the
         // row entirely, so this is also free in the common path.
         loadVoiceConfig().then(() => renderVoiceEngineSelect()).catch(() => {});
+        // Refresh the SilentGuard status card on every Settings open. No
+        // background polling — the card stays fresh because every open
+        // re-pulls and the Refresh button is the only other trigger.
+        refreshSilentGuardStatus().catch(() => {});
         await loadSystemSettings();
         await loadMemories();
     }
