@@ -38,9 +38,7 @@ for _mod in ("ddgs", "ollama", "sgmllib", "feedparser"):
 
 from core.security.lifecycle import (  # noqa: E402
     STATE_CONNECTED,
-    STATE_COULD_NOT_START,
     STATE_DISABLED,
-    STATE_STARTING,
     STATE_UNAVAILABLE,
 )
 from core.security.provider import (  # noqa: E402
