@@ -298,6 +298,8 @@ The integration is **optional** and **off by default**. Nova works normally whet
 
 Nova's chat layer surfaces the provider's state as a small **read-only "Security context:" block** appended to the system prompt (`core/security/context.py`). The block tells the model whether SilentGuard is *not configured*, *unavailable*, or *connected in read-only mode* — and, when the optional HTTP transport is responsive, summarises four counts (`alerts`, `blocked items`, `trusted items`, `active connections`). Every variant restates that Nova may **explain and summarize only**; it must not perform firewall or rule actions. There is no notification surface, no background polling, and no autonomous alerting attached to this — the block is built on demand from the same provider as the existing settings status.
 
+For the operator-facing walkthrough — running SilentGuard's loopback, read-only API as a `systemctl --user` background service so Nova can probe it — see [docs/silentguard-background-service.md](docs/silentguard-background-service.md). The example unit lives at [`deploy/systemd/silentguard-api.service`](deploy/systemd/silentguard-api.service); it binds to `127.0.0.1`, runs without sudo, and is disabled by default.
+
 ## License
 
 [Mozilla Public License 2.0](LICENSE)

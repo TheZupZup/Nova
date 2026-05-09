@@ -29,6 +29,15 @@ this hardening to the container/VM host as well.
 
 - `nova.service` — the hardened example unit. Ships with `USERNAME` and
   `/path/to/Nova` placeholders so it cannot accidentally be used unedited.
+- `silentguard-api.service` — an optional user-level unit for running
+  SilentGuard's loopback, **read-only** HTTP API as a background
+  service. Used only by hosts that want to wire the optional Nova
+  ↔ SilentGuard integration end-to-end. The unit binds to
+  `127.0.0.1`, runs under `systemctl --user` (no sudo, no root), and
+  is **disabled by default**. See
+  [`docs/silentguard-background-service.md`](../../docs/silentguard-background-service.md)
+  for the install / enable / disable walkthrough and the security
+  notes (read-only only, no firewall changes, no telemetry).
 
 ## What stays the same
 

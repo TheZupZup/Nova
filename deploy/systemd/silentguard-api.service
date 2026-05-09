@@ -1,0 +1,107 @@
+# SilentGuard read-only loopback API — example systemd USER unit (optional)
+#
+# This is an OPTIONAL example unit for running SilentGuard's read-only,
+# loopback-only HTTP API as a long-lived background service inside the
+# user's own session. Its purpose is Nova-integration readiness: when
+# the API is reachable on 127.0.0.1, Nova's SilentGuardProvider can
+# probe `GET /status` (and the rest of the fixed read-only path list)
+# to surface a calm "connected in read-only mode" snapshot.
+#
+# SilentGuard is a SEPARATE project. Nova does not ship it, does not
+# install it, and does not own its lifecycle. This unit only describes
+# how to RUN SilentGuard's existing read-only API once it is installed
+# locally. Nova reads from the API; Nova never modifies firewall rules,
+# never blocks/unblocks IPs, never escalates privilege, and never makes
+# remote calls on behalf of this unit.
+#
+# Properties of this example unit:
+#   * USER unit. Install under ~/.config/systemd/user/, never under
+#     /etc/systemd/system/. No sudo, no system-level systemctl, no root.
+#   * Loopback only. Binds to 127.0.0.1; do NOT change the host without
+#     reading the security note in
+#     docs/silentguard-background-service.md — exposing the API on a
+#     non-loopback interface is explicitly an unsafe / advanced choice.
+#   * Read-only. Runs SilentGuard's existing read-only API command. The
+#     unit must NOT be repurposed to spawn a write surface or a
+#     firewall control surface; Nova's integration is read-only by
+#     contract.
+#   * Disabled by default. Shipped with [Install]/WantedBy so the user
+#     can `systemctl --user enable` it intentionally; nothing is
+#     started until they do.
+#
+# Before installing:
+#   1. Install SilentGuard locally per its own documentation.
+#   2. Confirm the EXACT read-only API command shipped by your version
+#      of SilentGuard, and replace the placeholder ExecStart= line
+#      below. If the binary is not on PATH, use an absolute path.
+#   3. Keep the bind host at 127.0.0.1 and pick a free local port
+#      (8767 is the value Nova's documentation uses as an example).
+#
+# See deploy/systemd/README.md and docs/silentguard-background-service.md
+# for the full guide, including how to point Nova at the running API.
+
+[Unit]
+Description=SilentGuard read-only loopback API (user)
+Documentation=https://github.com/TheZupZup/Nova/blob/main/docs/silentguard-background-service.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+# Replace this line with the actual read-only API command documented by
+# your SilentGuard install. The shape below is illustrative — your
+# version may use a different binary name or flag set. Whatever you
+# use, keep the bind host at 127.0.0.1 so the API stays loopback-only,
+# and keep it in read-only mode so Nova's integration contract holds.
+ExecStart=/usr/bin/silentguard-api --host 127.0.0.1 --port 8767 --read-only
+
+Restart=on-failure
+RestartSec=5
+
+# ── Sandbox hardening (safe defaults for a USER unit) ──────────────
+# These directives restrict what the SilentGuard API process can see
+# and do on the host. They do not change SilentGuard's behavior; they
+# constrain the kernel surface available to it. None of them require
+# root — they are valid for `systemctl --user` units.
+
+# Refuse to gain new privileges (e.g. via setuid binaries) for the
+# lifetime of the process and any children it spawns.
+NoNewPrivileges=true
+
+# Give the unit a private /tmp and /var/tmp that disappear on stop.
+PrivateTmp=true
+
+# Lock the personality(2) syscall so the process cannot switch to a
+# legacy execution domain at runtime.
+LockPersonality=true
+
+# Refuse memory mappings that are simultaneously writable and
+# executable; blocks a common in-memory code-injection class.
+MemoryDenyWriteExecute=true
+
+# Reject syscalls compiled for non-native architectures (e.g. i386 /
+# x32 on x86_64).
+SystemCallArchitectures=native
+
+# Block creation of SUID/SGID files and prevent the process from
+# acquiring those bits on exec.
+RestrictSUIDSGID=true
+
+# /proc/sys, /sys, /proc/sysrq-trigger and related kernel tunables
+# become read-only or invisible.
+ProtectKernelTunables=true
+
+# Disallow loading or unloading kernel modules from this unit.
+ProtectKernelModules=true
+
+# Make the cgroup hierarchy read-only so the unit cannot rewrite or
+# escape its own resource limits.
+ProtectControlGroups=true
+
+# Loopback + UNIX sockets are enough for a localhost-only HTTP API.
+# Blocks raw sockets, netlink, packet sockets, etc.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=default.target
