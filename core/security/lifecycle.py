@@ -169,6 +169,17 @@ def _resolve_enabled() -> bool:
     return bool(NOVA_SILENTGUARD_ENABLED)
 
 
+def host_enabled() -> bool:
+    """Public read of the host-level ``NOVA_SILENTGUARD_ENABLED`` switch.
+
+    Re-evaluated on every call so a systemd-provided env var that is
+    set when the process starts (the documented setup) and a value
+    flipped via ``monkeypatch.setenv`` in tests both resolve correctly.
+    Read-only — never mutates state, never spawns anything.
+    """
+    return _resolve_enabled()
+
+
 def _resolve_auto_start() -> bool:
     """Whether Nova may spawn the configured start command."""
     raw = os.environ.get("NOVA_SILENTGUARD_AUTO_START")
@@ -473,5 +484,6 @@ __all__ = [
     "START_MODE_SYSTEMD_USER",
     "disabled_status",
     "ensure_running",
+    "host_enabled",
     "validate_unit_name",
 ]

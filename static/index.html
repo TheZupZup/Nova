@@ -2422,16 +2422,23 @@
                     </div>
                     <!-- SilentGuard read-only status card. Calm by design:
                          shows lifecycle state + optional summary counts, with
-                         a manual Refresh button. No background polling. -->
+                         a per-user on/off toggle and a manual Refresh button.
+                         No background polling. -->
                     <div class="settings-row" id="silentguard-status-row" data-state="loading">
                         <div class="settings-row-head">
                             <div class="settings-row-label">
                                 <span class="settings-row-title" id="settings-silentguard-title">SilentGuard</span>
                                 <span class="settings-row-hint" id="settings-silentguard-headline">Checking SilentGuard status…</span>
                             </div>
-                            <button type="button" class="memory-btn" id="silentguard-refresh-btn" style="white-space:nowrap;">
-                                <span id="silentguard-refresh-label">Refresh</span>
-                            </button>
+                            <div style="display:flex;gap:8px;align-items:center;">
+                                <button type="button" id="silentguard-toggle-btn"
+                                    style="font-family:monospace;font-size:0.75rem;padding:4px 12px;border-radius:6px;cursor:pointer;border:1px solid var(--border);background:var(--bg);color:var(--text-dim);min-width:52px;">
+                                    OFF
+                                </button>
+                                <button type="button" class="memory-btn" id="silentguard-refresh-btn" style="white-space:nowrap;">
+                                    <span id="silentguard-refresh-label">Refresh</span>
+                                </button>
+                            </div>
                         </div>
                         <div class="silentguard-status-foot">
                             <span class="silentguard-mode-badge" id="silentguard-mode-badge" style="display:none;">Read-only</span>
@@ -2720,6 +2727,8 @@
             silentguard_mode_readonly: "Lecture seule",
             silentguard_loading: "Vérification de SilentGuard…",
             silentguard_disabled: "Intégration SilentGuard désactivée",
+            silentguard_disabled_host_off: "Intégration SilentGuard désactivée dans la configuration du serveur",
+            silentguard_disabled_user_off: "Activez SilentGuard dans Paramètres pour l'utiliser",
             silentguard_not_configured: "SilentGuard n'est pas configuré",
             silentguard_connected: "SilentGuard connecté en lecture seule",
             silentguard_starting: "Démarrage de l'API locale SilentGuard…",
@@ -2853,6 +2862,8 @@
             silentguard_mode_readonly: "Read-only",
             silentguard_loading: "Checking SilentGuard status…",
             silentguard_disabled: "SilentGuard integration disabled",
+            silentguard_disabled_host_off: "SilentGuard integration disabled in server config",
+            silentguard_disabled_user_off: "Turn on SilentGuard in Settings to use it",
             silentguard_not_configured: "SilentGuard not configured",
             silentguard_connected: "SilentGuard connected in read-only mode",
             silentguard_starting: "Starting local SilentGuard API…",
@@ -4850,6 +4861,10 @@
         if (nameInput && data.nova_model_name) {
             nameInput.value = data.nova_model_name;
         }
+        // Reflect the saved per-user SilentGuard toggle in the button
+        // before any user interaction, so the visible state matches
+        // what the backend will report on the summary call.
+        applySilentGuardToggleUI(!!data.silentguard_enabled);
         applyPersonalizationUI(data);
     }
 
@@ -4858,14 +4873,27 @@
     // backend at /integrations/silentguard/summary already gates on the
     // per-user setting, runs the lifecycle helper, and (when reachable)
     // attaches the optional summary counts. The UI just renders the
-    // calm result. There is no background polling: refresh runs once
-    // when Settings opens and once per Refresh-button click.
+    // calm result and exposes a per-user on/off toggle so a user can
+    // opt in once the operator has configured the host-level env vars.
+    // There is no background polling: refresh runs once when Settings
+    // opens, once per Refresh-button click, and once per toggle change.
     let lastSilentGuardSummary = null;
+    let lastSilentGuardUserEnabled = false;
     let silentGuardRefreshInFlight = false;
+    let silentGuardToggleInFlight = false;
 
     function setSilentGuardCardState(state) {
         const row = document.getElementById("silentguard-status-row");
         if (row) row.dataset.state = state;
+    }
+
+    function applySilentGuardToggleUI(enabled) {
+        const btn = document.getElementById("silentguard-toggle-btn");
+        if (!btn) return;
+        lastSilentGuardUserEnabled = !!enabled;
+        btn.textContent = enabled ? "ON" : "OFF";
+        btn.style.color = enabled ? "var(--cyan)" : "var(--text-dim)";
+        btn.style.borderColor = enabled ? "var(--cyan)" : "var(--border)";
     }
 
     function applySilentGuardSummaryUI(payload) {
@@ -4878,7 +4906,15 @@
 
         const lifecycle = (payload && payload.lifecycle) || {};
         const state = lifecycle.state || "unavailable";
-        const enabled = !!lifecycle.enabled;
+        // ``lifecycle.enabled`` is the host-level switch as the
+        // lifecycle helper saw it; for the per-user-disabled path the
+        // backend's ``host_enabled`` top-level field is the honest
+        // signal because ``disabled_status()`` always sets
+        // ``lifecycle.enabled = False``.
+        const lifecycleEnabled = !!lifecycle.enabled;
+        const hostEnabled = (payload && typeof payload.host_enabled === "boolean")
+            ? payload.host_enabled
+            : lifecycleEnabled;
         const autoStart = !!lifecycle.auto_start;
         const summaryCounts = (payload && payload.counts) || null;
 
@@ -4889,10 +4925,13 @@
         counts.textContent = "";
         sub.textContent = "";
 
-        // Pick the calm headline. ``state="disabled"`` covers both the
-        // host-level switch and the per-user opt-in being off; the same
-        // wording is fine for both since the user's path forward (the
-        // per-user toggle / operator config) is the same.
+        // Pick the calm headline. The disabled state has two distinct
+        // sub-cases the user needs to be able to tell apart:
+        //   * host config off  → operator must set NOVA_SILENTGUARD_*;
+        //   * host config on, per-user off → user must flip the toggle.
+        // Conflating them (the previous behaviour) made the card
+        // misleading: an operator who had correctly set the env vars
+        // saw the same "disabled" text as one who had not.
         let headlineKey;
         if (state === "connected") {
             headlineKey = "silentguard_connected";
@@ -4901,7 +4940,15 @@
         } else if (state === "could_not_start") {
             headlineKey = "silentguard_could_not_start";
         } else if (state === "disabled") {
-            headlineKey = enabled ? "silentguard_not_configured" : "silentguard_disabled";
+            if (hostEnabled) {
+                // Host operator enabled the integration; this user
+                // hasn't flipped their per-user toggle yet.
+                headlineKey = "silentguard_disabled_user_off";
+            } else {
+                // Host config is off; setting the per-user toggle
+                // alone won't help.
+                headlineKey = "silentguard_disabled_host_off";
+            }
         } else {
             // STATE_UNAVAILABLE or any unknown future state.
             headlineKey = "silentguard_unavailable";
@@ -4921,10 +4968,10 @@
                     .replace("{connections}", String(summaryCounts.connections ?? 0));
                 counts.style.display = "";
             }
-        } else if (state === "unavailable" && enabled && !autoStart) {
-            // Per the UX brief: when integration is on but auto-start is
-            // off, surface that calmly so the operator knows why nothing
-            // is being started in the background.
+        } else if (state === "unavailable" && lifecycleEnabled && !autoStart) {
+            // Per the UX brief: when integration is on but auto-start
+            // is off, surface that calmly so the operator knows why
+            // nothing is being started in the background.
             sub.textContent = t("silentguard_autostart_off");
         }
     }
@@ -4935,6 +4982,7 @@
         applySilentGuardSummaryUI({
             lifecycle: { state: "unavailable", enabled: false, auto_start: false },
             counts: null,
+            host_enabled: false,
         });
         const sub = document.getElementById("silentguard-substatus");
         if (sub) sub.textContent = t("silentguard_check_failed");
@@ -4971,23 +5019,67 @@
         }
     }
 
-    // Wire the Refresh button explicitly once the script runs (the
-    // script tag sits at the end of <body>, so the button already
-    // exists in the DOM at this point). An inline ``onclick=...``
-    // would be silently dropped by any future stricter CSP, and made
-    // the click handler invisible to test fixtures that load this
-    // page without executing inline attributes — the explicit listener
-    // makes the wiring testable and CSP-safe. Errors inside the click
-    // handler are surfaced through the card's failure UI instead of
-    // being swallowed by the event-dispatch path.
-    (function wireSilentGuardRefreshButton() {
-        const btn = document.getElementById("silentguard-refresh-btn");
+    async function toggleSilentGuardEnabled() {
+        // Per-user opt-in. Persists ``silentguard_enabled`` via the
+        // shared /settings endpoint and then re-renders the status
+        // card so the user immediately sees the new state. Errors fall
+        // through into the visible failure UI instead of vanishing.
+        if (silentGuardToggleInFlight) return;
+        const btn = document.getElementById("silentguard-toggle-btn");
         if (!btn) return;
-        btn.addEventListener("click", () => {
-            refreshSilentGuardStatus().catch(() => {
-                applySilentGuardCheckFailedUI();
+        silentGuardToggleInFlight = true;
+        btn.disabled = true;
+        const newVal = !lastSilentGuardUserEnabled;
+        try {
+            const res = await fetch("/settings", {
+                method: "POST",
+                credentials: "include",
+                headers: {
+                    "Content-Type": "application/json",
+                    "Authorization": `Bearer ${token}`,
+                },
+                body: JSON.stringify({ silentguard_enabled: newVal }),
             });
-        });
+            if (!res.ok) {
+                applySilentGuardCheckFailedUI();
+                return;
+            }
+            applySilentGuardToggleUI(newVal);
+            await refreshSilentGuardStatus();
+        } catch (e) {
+            applySilentGuardCheckFailedUI();
+        } finally {
+            silentGuardToggleInFlight = false;
+            btn.disabled = false;
+        }
+    }
+
+    // Wire the Refresh and Toggle buttons explicitly once the script
+    // runs (the script tag sits at the end of <body>, so the buttons
+    // already exist in the DOM at this point). An inline
+    // ``onclick=...`` would be silently dropped by any future stricter
+    // CSP, and makes the click handler invisible to test fixtures that
+    // load this page without executing inline attributes — the
+    // explicit listener makes the wiring testable and CSP-safe. Errors
+    // inside the click handlers are surfaced through the card's
+    // failure UI instead of being swallowed by the event-dispatch path.
+    (function wireSilentGuardButtons() {
+        const refreshBtn = document.getElementById("silentguard-refresh-btn");
+        if (refreshBtn) {
+            refreshBtn.addEventListener("click", () => {
+                refreshSilentGuardStatus().catch(() => {
+                    applySilentGuardCheckFailedUI();
+                });
+            });
+        }
+        const toggleBtn = document.getElementById("silentguard-toggle-btn");
+        if (toggleBtn) {
+            toggleBtn.addEventListener("click", () => {
+                toggleSilentGuardEnabled().catch(() => {
+                    applySilentGuardCheckFailedUI();
+                });
+            });
+        }
     })();
 
     // ── PERSONALIZATION ──

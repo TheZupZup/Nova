@@ -185,6 +185,9 @@ class TestDisabledStates:
         # Even if the host operator turned the host-level switch on, a
         # user who has not opted in must still see ``state="disabled"``
         # and ``counts=None``. The provider must not be instantiated.
+        # The new ``host_enabled`` top-level field still surfaces the
+        # honest host-level state so the UI can tell the operator that
+        # only the per-user toggle is missing.
         monkeypatch.setenv("NOVA_SILENTGUARD_ENABLED", "true")
 
         instantiated: list[int] = []
@@ -205,10 +208,14 @@ class TestDisabledStates:
         )
         assert resp.status_code == 200
         body = resp.json()
-        assert set(body.keys()) == {"lifecycle", "counts"}
+        assert set(body.keys()) == {"lifecycle", "counts", "host_enabled"}
         assert body["lifecycle"]["state"] == STATE_DISABLED
         assert body["lifecycle"]["enabled"] is False
         assert body["counts"] is None
+        # ``host_enabled`` reflects the env var, not the per-user
+        # toggle — it tells the UI "the host config is on; the user
+        # just hasn't flipped their toggle".
+        assert body["host_enabled"] is True
         # Defence-in-depth: confirm no provider was instantiated.
         assert instantiated == []
 
@@ -226,6 +233,8 @@ class TestDisabledStates:
         body = resp.json()
         assert body["lifecycle"]["state"] == STATE_DISABLED
         assert body["counts"] is None
+        # No env var set, so the host-level switch reads as off.
+        assert body["host_enabled"] is False
 
 
 # ── Unavailable state ───────────────────────────────────────────────
@@ -409,19 +418,26 @@ class TestAuthAndShape:
     def test_response_keys_are_stable(
         self, web_client, _spawn_disabled,
     ):
-        # The Settings UI relies on exactly two keys at the top level.
+        # The Settings UI relies on a fixed top-level key set:
+        # ``lifecycle`` (the full LifecycleStatus), ``counts`` (the
+        # optional summary numbers), and ``host_enabled`` (the
+        # operator-level switch the UI uses to distinguish a host-off
+        # disabled state from a per-user-off disabled state).
         headers = _login(web_client)
         resp = web_client.get(
             "/integrations/silentguard/summary", headers=headers,
         )
         assert resp.status_code == 200
         body = resp.json()
-        assert set(body.keys()) == {"lifecycle", "counts"}
+        assert set(body.keys()) == {"lifecycle", "counts", "host_enabled"}
         # Lifecycle must carry the full LifecycleStatus shape so the UI
         # can render any state without checking for missing keys.
         assert set(body["lifecycle"].keys()) == {
             "state", "enabled", "auto_start", "start_mode", "unit", "message",
         }
+        # ``host_enabled`` is always a bool (never null / missing) so
+        # the UI never has to defend against an undefined value.
+        assert isinstance(body["host_enabled"], bool)
 
     def test_existing_lifecycle_endpoint_shape_unchanged(
         self, web_client, _spawn_disabled,
@@ -438,3 +454,242 @@ class TestAuthAndShape:
         assert set(body.keys()) == {
             "state", "enabled", "auto_start", "start_mode", "unit", "message",
         }
+
+
+# ── Real failure mode: env says enabled but UI says disabled ────────
+#
+# The bug report: an operator sets every host-level env var, sees the
+# SilentGuard API responding to ``curl /status``, and still gets
+# "SilentGuard integration disabled" in Settings. The previous summary
+# response could not tell the UI *why* the integration was disabled —
+# was the host config off, or just the per-user toggle? The new
+# ``host_enabled`` field plus the per-user opt-in path together let
+# the UI render the right calm message and let the user fix it from
+# the Settings card alone.
+
+
+class TestEnvSaysEnabledButUserSeesDisabled:
+    def test_env_enabled_per_user_off_surfaces_host_enabled_true(
+        self, web_client, _spawn_disabled, monkeypatch,
+    ):
+        # The exact failure mode from the bug report. ``NOVA_SILENTGUARD_ENABLED``
+        # is "true", a SilentGuard API would be reachable, but Alice
+        # has not flipped her per-user toggle. The endpoint must:
+        #   * still return ``state="disabled"`` (the per-user gate is
+        #     authoritative for this user), and
+        #   * surface ``host_enabled=True`` so the UI can show "Turn
+        #     on SilentGuard in Settings to use it" instead of the
+        #     misleading "integration disabled" headline.
+        monkeypatch.setenv("NOVA_SILENTGUARD_ENABLED", "true")
+        headers = _login(web_client)
+        # NOTE: deliberately do NOT call _enable_for_alice — Alice is
+        # the operator who set env vars but hasn't found the UI toggle.
+        resp = web_client.get(
+            "/integrations/silentguard/summary", headers=headers,
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["lifecycle"]["state"] == STATE_DISABLED
+        assert body["host_enabled"] is True
+        assert body["counts"] is None
+
+    def test_env_disabled_surfaces_host_enabled_false(
+        self, web_client, _spawn_disabled,
+    ):
+        # The other half of the same disambiguation: when the host
+        # config is off, ``host_enabled`` must be False so the UI can
+        # tell the user the *server* config needs changing, not just
+        # the toggle.
+        headers = _login(web_client)
+        resp = web_client.get(
+            "/integrations/silentguard/summary", headers=headers,
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["lifecycle"]["state"] == STATE_DISABLED
+        assert body["host_enabled"] is False
+        assert body["counts"] is None
+
+    def test_env_accepts_string_true_lowercase_uppercase_and_aliases(
+        self, web_client, _spawn_disabled, monkeypatch,
+    ):
+        # The bug report flagged boolean parsing as a possible cause.
+        # Confirm the lifecycle helper accepts the documented set of
+        # truthy values surfaced by every common env-var convention.
+        headers = _login(web_client)
+        for raw in ("true", "True", "TRUE", "1", "yes", "on"):
+            monkeypatch.setenv("NOVA_SILENTGUARD_ENABLED", raw)
+            resp = web_client.get(
+                "/integrations/silentguard/summary", headers=headers,
+            )
+            assert resp.status_code == 200, raw
+            body = resp.json()
+            assert body["host_enabled"] is True, (
+                f"NOVA_SILENTGUARD_ENABLED={raw!r} did not parse as truthy"
+            )
+
+    def test_env_enabled_plus_per_user_toggle_with_reachable_api_reports_connected(
+        self, web_client, _spawn_disabled, monkeypatch,
+    ):
+        # End-to-end happy path the bug report describes: env on, API
+        # reachable, user opted in → state="connected" with counts
+        # attached, ``host_enabled`` honest at True. This is the path
+        # the Settings card paints as "SilentGuard connected in
+        # read-only mode".
+        monkeypatch.setenv("NOVA_SILENTGUARD_ENABLED", "true")
+
+        from core.security import lifecycle as lc
+        import web as web_module
+
+        class _ReachableLifecycleProvider:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def get_status(self):
+                return _available()
+
+        class _CountingProvider:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def get_status(self):
+                return _available()
+
+            def get_summary_counts(self):
+                return {
+                    "alerts": 0,
+                    "blocked": 0,
+                    "trusted": 0,
+                    "connections": 0,
+                }
+
+        monkeypatch.setattr(lc, "SilentGuardProvider", _ReachableLifecycleProvider)
+        monkeypatch.setattr(web_module, "_SilentGuardProvider", _CountingProvider)
+
+        headers = _login(web_client)
+        _enable_for_alice(web_client, headers)
+        resp = web_client.get(
+            "/integrations/silentguard/summary", headers=headers,
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["lifecycle"]["state"] == STATE_CONNECTED
+        assert body["host_enabled"] is True
+        assert body["counts"] == {
+            "alerts": 0, "blocked": 0, "trusted": 0, "connections": 0,
+        }
+
+    def test_per_user_toggle_can_be_flipped_on_via_settings_endpoint(
+        self, web_client, _spawn_disabled, monkeypatch,
+    ):
+        # The fix for the bug also requires that a user actually has
+        # a way to opt in. The /settings endpoint already accepts
+        # ``silentguard_enabled``; this test pins that contract end-
+        # to-end so the new UI toggle has a backend it can call.
+        monkeypatch.setenv("NOVA_SILENTGUARD_ENABLED", "true")
+        headers = _login(web_client)
+
+        # Before opt-in: disabled.
+        before = web_client.get(
+            "/integrations/silentguard/summary", headers=headers,
+        ).json()
+        assert before["lifecycle"]["state"] == STATE_DISABLED
+
+        # Flip the per-user toggle via the same JSON endpoint the UI
+        # calls. The response is the standard ``{"ok": True}`` ack.
+        ack = web_client.post(
+            "/settings",
+            json={"silentguard_enabled": True},
+            headers=headers,
+        )
+        assert ack.status_code == 200, ack.text
+
+        # Read it back via GET /settings — the UI uses this to render
+        # the toggle's initial state on Settings open.
+        echoed = web_client.get("/settings", headers=headers).json()
+        assert echoed["silentguard_enabled"] is True
+
+        # Now the summary either reports ``connected``/``unavailable``
+        # depending on the API reachability stub; the key invariant is
+        # that the per-user gate no longer short-circuits to disabled.
+        after = web_client.get(
+            "/integrations/silentguard/summary", headers=headers,
+        ).json()
+        assert after["lifecycle"]["state"] != STATE_DISABLED
+
+    def test_host_enabled_field_is_a_bool_in_every_path(
+        self, web_client, _spawn_disabled, monkeypatch,
+    ):
+        # Defensive: the UI guards against ``host_enabled``
+        # disappearing or going non-bool. Verify that across the four
+        # major code paths (host off + user off, host off + user on,
+        # host on + user off, host on + user on) the field is always a
+        # plain Python bool — never null, never a string.
+        headers = _login(web_client)
+
+        # host off + user off
+        body = web_client.get(
+            "/integrations/silentguard/summary", headers=headers,
+        ).json()
+        assert isinstance(body["host_enabled"], bool)
+        assert body["host_enabled"] is False
+
+        # host off + user on
+        _enable_for_alice(web_client, headers)
+        body = web_client.get(
+            "/integrations/silentguard/summary", headers=headers,
+        ).json()
+        assert isinstance(body["host_enabled"], bool)
+        assert body["host_enabled"] is False
+
+        # host on + user on
+        monkeypatch.setenv("NOVA_SILENTGUARD_ENABLED", "true")
+        body = web_client.get(
+            "/integrations/silentguard/summary", headers=headers,
+        ).json()
+        assert isinstance(body["host_enabled"], bool)
+        assert body["host_enabled"] is True
+
+        # host on + user off
+        ack = web_client.post(
+            "/settings",
+            json={"silentguard_enabled": False},
+            headers=headers,
+        )
+        assert ack.status_code == 200
+        body = web_client.get(
+            "/integrations/silentguard/summary", headers=headers,
+        ).json()
+        assert isinstance(body["host_enabled"], bool)
+        assert body["host_enabled"] is True
+
+
+class TestHostEnabledHelper:
+    """Direct tests for the public ``host_enabled()`` helper.
+
+    The helper is the only sanctioned way to read the host-level
+    ``NOVA_SILENTGUARD_ENABLED`` switch outside the lifecycle module.
+    The summary endpoint depends on it; pinning the parsing rules here
+    catches regressions without having to spin up the full app.
+    """
+
+    def test_unset_env_returns_false(self, monkeypatch):
+        from core.security import lifecycle as lc
+        monkeypatch.delenv("NOVA_SILENTGUARD_ENABLED", raising=False)
+        # Also defang the config import path so a stray real .env
+        # cannot pollute the assertion.
+        import config as config_mod
+        monkeypatch.setattr(config_mod, "NOVA_SILENTGUARD_ENABLED", False)
+        assert lc.host_enabled() is False
+
+    def test_truthy_strings_resolve_true(self, monkeypatch):
+        from core.security import lifecycle as lc
+        for raw in ("1", "true", "True", "TRUE", "yes", "YES", "on", "ON"):
+            monkeypatch.setenv("NOVA_SILENTGUARD_ENABLED", raw)
+            assert lc.host_enabled() is True, raw
+
+    def test_falsy_strings_resolve_false(self, monkeypatch):
+        from core.security import lifecycle as lc
+        for raw in ("0", "false", "no", "off", "", "  ", "maybe"):
+            monkeypatch.setenv("NOVA_SILENTGUARD_ENABLED", raw)
+            assert lc.host_enabled() is False, raw

@@ -240,10 +240,20 @@ What each variable does:
 | `NOVA_SILENTGUARD_SYSTEMD_UNIT` | The user-level unit name to start. Validated against `^[a-z0-9][a-z0-9._-]*\.service$` and a forbidden-substring list before any spawn. |
 
 Restart Nova so it picks up the new variables, sign in, and turn on
-the per-user toggle in *Settings → Integrations → SilentGuard*. Nova
-will probe `127.0.0.1:8767`, surface a calm "connected in read-only
-mode" snapshot when it succeeds, and fall back to a calm "unavailable"
+the per-user toggle on the **SilentGuard** card in *Settings →
+General*. The toggle sits next to the **Refresh** button on the same
+status card; flipping it ON persists `silentguard_enabled` for your
+account and refreshes the status immediately. Nova will probe
+`127.0.0.1:8767`, surface a calm "connected in read-only mode"
+snapshot when it succeeds, and fall back to a calm "unavailable"
 snapshot otherwise.
+
+If the toggle is OFF *and* the host config is on, the card explicitly
+says **"Turn on SilentGuard in Settings to use it"** so it is clear
+that the env vars alone are not enough — flipping the toggle is the
+last step. If the host config is off, the card says **"SilentGuard
+integration disabled in server config"** instead, which means the env
+vars themselves still need attention.
 
 ---
 

@@ -48,6 +48,34 @@ def script(html: str) -> str:
     return max(blocks, key=len)
 
 
+def _function_body(script: str, name: str) -> str:
+    """Return the full source of a top-level JS function in ``script``.
+
+    Walks brace depth from the opening ``{`` so nested object literals
+    or try/catch blocks do not confuse the close. Asserts when the
+    function is missing — every caller treats absence as a hard fail.
+    """
+    decl = re.search(
+        r"(?:async\s+)?function\s+" + re.escape(name) + r"\s*\([^)]*\)\s*{",
+        script,
+    )
+    assert decl, f"function {name!r} not found in script"
+    start = decl.start()
+    open_brace = script.index("{", decl.end() - 1)
+    depth = 0
+    i = open_brace
+    while i < len(script):
+        ch = script[i]
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return script[start:i + 1]
+        i += 1
+    raise AssertionError(f"unterminated function body for {name!r}")
+
+
 # ── Button + listener wiring ────────────────────────────────────────
 
 
@@ -154,3 +182,129 @@ class TestRefreshFetchContract:
             "openSettings must call refreshSilentGuardStatus on every "
             "Settings open."
         )
+
+
+# ── Per-user toggle wiring ──────────────────────────────────────────
+#
+# The bug report's "env says enabled but UI says disabled" failure
+# mode hinged on the missing per-user toggle: the summary endpoint
+# requires ``silentguard_enabled`` to be true for a given user, the
+# /settings endpoint accepts that flag, but the UI never exposed a
+# control to flip it. Without this wiring, an operator who set every
+# host-level env var correctly would still see "disabled" forever.
+
+
+class TestPerUserToggleWiring:
+    def test_toggle_button_exists_with_documented_id(self, html: str) -> None:
+        # The JS queries the toggle by id; without it, the button is
+        # invisible to every code path and the bug returns.
+        assert 'id="silentguard-toggle-btn"' in html
+
+    def test_toggle_button_does_not_rely_on_inline_onclick(
+        self, html: str,
+    ) -> None:
+        # Same reasoning as the Refresh button: inline onclick is
+        # CSP-fragile and untestable.
+        toggle_match = re.search(
+            r'<button[^>]*id="silentguard-toggle-btn"[^>]*>',
+            html,
+        )
+        assert toggle_match, "Toggle button tag not found"
+        assert "onclick=" not in toggle_match.group(0), (
+            "Toggle button must use addEventListener, not inline onclick."
+        )
+
+    def test_toggle_listener_calls_async_handler(self, script: str) -> None:
+        assert 'getElementById("silentguard-toggle-btn")' in script
+        listener_block = re.search(
+            r'getElementById\("silentguard-toggle-btn"\)[\s\S]{0,400}?'
+            r'addEventListener\("click",[\s\S]{0,400}?'
+            r'toggleSilentGuardEnabled\(\)',
+            script,
+        )
+        assert listener_block, (
+            "Expected an explicit addEventListener('click', ...) that "
+            "calls toggleSilentGuardEnabled() on the toggle button."
+        )
+
+    def test_toggle_handler_posts_to_settings_with_credentials(
+        self, script: str,
+    ) -> None:
+        # The handler must POST to /settings with silentguard_enabled
+        # and ``credentials: "include"`` so the session cookie path
+        # works alongside the bearer token. Anything less and a flip
+        # silently drops the change.
+        body = _function_body(script, "toggleSilentGuardEnabled")
+        assert 'fetch("/settings"' in body, (
+            "toggleSilentGuardEnabled must POST to /settings."
+        )
+        assert 'method: "POST"' in body
+        assert 'credentials: "include"' in body
+        assert "silentguard_enabled" in body, (
+            "Toggle must persist the silentguard_enabled key."
+        )
+
+    def test_toggle_refreshes_status_after_save(self, script: str) -> None:
+        # After a successful flip, the card must re-pull so the user
+        # immediately sees the new state — otherwise they have to hunt
+        # for the Refresh button to confirm the change took effect.
+        body = _function_body(script, "toggleSilentGuardEnabled")
+        assert "refreshSilentGuardStatus(" in body, (
+            "toggleSilentGuardEnabled must call refreshSilentGuardStatus "
+            "after a successful save so the card paints the new state."
+        )
+
+    def test_initial_toggle_state_is_loaded_from_settings(
+        self, script: str,
+    ) -> None:
+        # Settings open calls loadSystemSettings which reads /settings
+        # and must paint the toggle's initial state. Without this, a
+        # user who has flipped the toggle in a previous session sees
+        # OFF until they trigger a refresh — a confusing regression.
+        body = _function_body(script, "loadSystemSettings")
+        assert "applySilentGuardToggleUI" in body, (
+            "loadSystemSettings must paint the SilentGuard toggle's "
+            "initial state from the saved setting."
+        )
+        assert "silentguard_enabled" in body, (
+            "loadSystemSettings must read silentguard_enabled from the "
+            "/settings payload."
+        )
+
+
+# ── Disabled-state UI text differentiation ──────────────────────────
+#
+# The bug's most visible symptom: the headline always said
+# "SilentGuard integration disabled", regardless of whether the
+# operator needed to set env vars or just flip a per-user toggle.
+# These tests pin the new headline behaviour: the UI renders distinct
+# text for the two cases, driven by the new ``host_enabled`` field.
+
+
+class TestDisabledHeadlineDifferentiation:
+    def test_host_enabled_drives_headline_choice(self, script: str) -> None:
+        # The render path must consult ``host_enabled`` (or fall back
+        # to lifecycle.enabled) to pick between the two distinct
+        # disabled headlines.
+        assert "host_enabled" in script, (
+            "Frontend must consume the new host_enabled field to pick "
+            "the right disabled headline."
+        )
+        # Both headline keys must be present in the render path.
+        assert "silentguard_disabled_user_off" in script
+        assert "silentguard_disabled_host_off" in script
+
+    def test_disabled_user_off_string_is_translated(self, html: str) -> None:
+        # The new keys must exist in both language packs so a French
+        # user does not see an English fallback. Spot-check both
+        # languages without coupling to the exact wording.
+        assert "silentguard_disabled_user_off:" in html, (
+            "silentguard_disabled_user_off must be defined in i18n."
+        )
+        assert "silentguard_disabled_host_off:" in html, (
+            "silentguard_disabled_host_off must be defined in i18n."
+        )
+        # Both languages should have at least one entry per key — the
+        # file currently contains EN + FR packs side by side.
+        assert html.count("silentguard_disabled_user_off:") >= 2
+        assert html.count("silentguard_disabled_host_off:") >= 2

@@ -745,6 +745,7 @@ def silentguard_summary(user: CurrentUser = Depends(get_current_user)):
             "lifecycle": LifecycleStatus.as_dict(),
             "counts": {"alerts": int, "blocked": int,
                        "trusted": int, "connections": int} | None,
+            "host_enabled": bool,
         }
 
     ``counts`` is ``None`` whenever the lifecycle state is anything
@@ -753,15 +754,26 @@ def silentguard_summary(user: CurrentUser = Depends(get_current_user)):
     fails. The endpoint never raises; every failure path maps to a
     calm payload the UI renders without alarm.
 
+    ``host_enabled`` mirrors the host-level
+    ``NOVA_SILENTGUARD_ENABLED`` switch *as Nova currently sees it*.
+    The Settings UI uses it to tell the user *why* the integration is
+    off when ``state="disabled"``: the host config is off, or the host
+    config is on but the per-user toggle is still off. Without this
+    hint the disabled headline conflates the two, and an operator who
+    has correctly set the env vars cannot tell that they only need to
+    flip their per-user toggle in Settings.
+
     Read-only and gated by the per-user ``silentguard_enabled``
     setting, exactly like the lifecycle endpoint. No background
     polling — the UI calls this once per Settings open / Refresh
     click, mirroring the trigger set documented in the roadmap.
     """
+    host_enabled = _silentguard_lifecycle.host_enabled()
     if not _silentguard_integration.is_enabled(user.id):
         return {
             "lifecycle": _silentguard_lifecycle.disabled_status().as_dict(),
             "counts": None,
+            "host_enabled": host_enabled,
         }
     lifecycle_status = _ensure_silentguard_running()
     counts = None
@@ -773,6 +785,7 @@ def silentguard_summary(user: CurrentUser = Depends(get_current_user)):
     return {
         "lifecycle": lifecycle_status.as_dict(),
         "counts": counts,
+        "host_enabled": host_enabled,
     }
 
 
