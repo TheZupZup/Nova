@@ -735,29 +735,46 @@ def _silentguard_summary_payload(user: CurrentUser) -> dict:
     Shared by the GET ``/summary`` read path and the POST
     ``/enable`` / ``/disable`` / ``/retry`` user-action endpoints so
     every caller surfaces the same shape (``lifecycle``, ``counts``,
-    ``host_enabled``) without re-deriving the gating logic. The
-    function is read-only with the single carve-out documented in
-    :func:`core.security.lifecycle.ensure_running` — when the host
-    operator has opted into ``systemd-user`` auto-start, the lifecycle
-    helper may run a single ``systemctl --user start <unit>``.
+    ``connection_summary``, ``host_enabled``) without re-deriving the
+    gating logic. The function is read-only with the single carve-out
+    documented in :func:`core.security.lifecycle.ensure_running` —
+    when the host operator has opted into ``systemd-user`` auto-start,
+    the lifecycle helper may run a single
+    ``systemctl --user start <unit>``.
+
+    ``connection_summary`` is the richer read-only aggregate produced
+    by SilentGuard's optional ``/connections/summary`` endpoint
+    (totals, local/known/unknown breakdown, top processes / remote
+    hosts). It is ``None`` whenever the endpoint is missing on the
+    SilentGuard side, the HTTP transport is not configured, or the
+    payload was malformed — the Settings card falls back to the
+    existing four basic counts in that case.
     """
     host_enabled = _silentguard_lifecycle.host_enabled()
     if not _silentguard_integration.is_enabled(user.id):
         return {
             "lifecycle": _silentguard_lifecycle.disabled_status().as_dict(),
             "counts": None,
+            "connection_summary": None,
             "host_enabled": host_enabled,
         }
     lifecycle_status = _ensure_silentguard_running()
     counts = None
+    connection_summary = None
     if lifecycle_status.state == _silentguard_lifecycle.STATE_CONNECTED:
+        provider = _SilentGuardProvider()
         try:
-            counts = _SilentGuardProvider().get_summary_counts()
+            counts = provider.get_summary_counts()
         except Exception:  # pragma: no cover — defensive belt-and-braces
             counts = None
+        try:
+            connection_summary = provider.get_connection_summary()
+        except Exception:  # pragma: no cover — defensive belt-and-braces
+            connection_summary = None
     return {
         "lifecycle": lifecycle_status.as_dict(),
         "counts": counts,
+        "connection_summary": connection_summary,
         "host_enabled": host_enabled,
     }
 
@@ -778,14 +795,25 @@ def silentguard_summary(user: CurrentUser = Depends(get_current_user)):
             "lifecycle": LifecycleStatus.as_dict(),
             "counts": {"alerts": int, "blocked": int,
                        "trusted": int, "connections": int} | None,
+            "connection_summary": {
+                "total": int, "local": int, "known": int,
+                "unknown": int,
+                "top_processes": [{"name": str, "count": int}, ...],
+                "top_remote_hosts": [{"host": str, "count": int}, ...],
+            } | None,
             "host_enabled": bool,
         }
 
     ``counts`` is ``None`` whenever the lifecycle state is anything
     other than ``connected``, when the HTTP transport is not
     configured (file-only fallback), or when the optional count probe
-    fails. The endpoint never raises; every failure path maps to a
-    calm payload the UI renders without alarm.
+    fails. ``connection_summary`` is additionally ``None`` whenever
+    SilentGuard does not expose ``/connections/summary`` (older
+    builds), when the response is not a JSON object, or when no field
+    survives normalisation. Every key inside ``connection_summary`` is
+    itself optional — Nova omits values it does not have rather than
+    inventing them. The endpoint never raises; every failure path
+    maps to a calm payload the UI renders without alarm.
 
     ``host_enabled`` mirrors the host-level
     ``NOVA_SILENTGUARD_ENABLED`` switch *as Nova currently sees it*.

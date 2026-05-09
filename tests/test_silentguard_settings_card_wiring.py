@@ -416,3 +416,62 @@ class TestRetryButtonWiring:
         assert html.count("silentguard_retry:") >= 2, (
             "silentguard_retry must be defined in both EN and FR packs."
         )
+
+
+# ── Rich /connections/summary surfacing ─────────────────────────────
+#
+# The richer summary endpoint is the next iteration of the card: when
+# SilentGuard exposes /connections/summary, the card optionally
+# renders a compact "N local · N known · N unknown" subtitle. The
+# tests below pin the wiring without coupling to exact wording so the
+# UI stays compact and back-compat with older SilentGuard builds.
+
+
+class TestConnectionSummaryWiring:
+    def test_connection_summary_span_exists_with_documented_id(
+        self, html: str,
+    ) -> None:
+        # The render path queries this id; without it the optional row
+        # never paints.
+        assert 'id="silentguard-connection-summary"' in html
+
+    def test_render_path_consumes_connection_summary_field(
+        self, script: str,
+    ) -> None:
+        # The render path must reach into the new top-level
+        # ``connection_summary`` field on the API payload.
+        body = _function_body(script, "applySilentGuardSummaryUI")
+        assert "connection_summary" in body, (
+            "applySilentGuardSummaryUI must consume the new "
+            "connection_summary field from /summary."
+        )
+
+    def test_render_path_uses_breakdown_label_key(self, script: str) -> None:
+        body = _function_body(script, "applySilentGuardSummaryUI")
+        assert "silentguard_connection_breakdown_label" in body, (
+            "applySilentGuardSummaryUI must use the i18n key for the "
+            "compact local/known/unknown breakdown."
+        )
+
+    def test_breakdown_label_key_is_translated(self, html: str) -> None:
+        # Both EN and FR packs must define the new key so the card
+        # never falls back to a missing string.
+        assert "silentguard_connection_breakdown_label:" in html
+        assert html.count("silentguard_connection_breakdown_label:") >= 2, (
+            "silentguard_connection_breakdown_label must be defined in "
+            "both EN and FR packs."
+        )
+
+    def test_render_path_only_renders_when_all_three_present(
+        self, script: str,
+    ) -> None:
+        # Compact-card invariant: a partial breakdown is misleading in
+        # one line, so the render path must require local/known/unknown
+        # to all parse as integers before painting the row. Spot-check
+        # the integer guard instead of pinning the exact phrasing.
+        body = _function_body(script, "applySilentGuardSummaryUI")
+        for key in ("local", "known", "unknown"):
+            assert f"richSummary.{key}" in body, (
+                f"render path must validate richSummary.{key} before "
+                f"painting the breakdown row."
+            )

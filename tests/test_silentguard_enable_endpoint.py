@@ -57,7 +57,7 @@ from core.security.provider import (  # noqa: E402
 )
 
 
-SUMMARY_KEYS = {"lifecycle", "counts", "host_enabled"}
+SUMMARY_KEYS = {"lifecycle", "counts", "connection_summary", "host_enabled"}
 LIFECYCLE_KEYS = {"state", "enabled", "auto_start", "start_mode", "unit", "message"}
 
 

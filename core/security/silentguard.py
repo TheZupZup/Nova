@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -73,6 +74,94 @@ DEFAULT_SILENTGUARD_PATH = Path.home() / ".silentguard_memory.json"
 # the provider behaves exactly like the previous file-only foundation.
 ENV_API_URL = "NOVA_SILENTGUARD_API_URL"
 ENV_API_TIMEOUT = "NOVA_SILENTGUARD_API_TIMEOUT_SECONDS"
+
+
+# ── Connection summary normalisation helpers ────────────────────────
+#
+# The richer ``/connections/summary`` endpoint yields strings (process
+# names, remote hosts) on top of the simple integer counts already
+# surfaced via :meth:`SilentGuardProvider.get_summary_counts`. Strings
+# from an external source must be sanitised before they enter Nova's
+# prompt or UI: the §10.6 deny-list rule in
+# ``docs/silentguard-integration-roadmap.md`` calls out exactly this
+# concern. The helpers below are the single place that work happens —
+# the context builder and the web layer just trust the provider's
+# return shape.
+
+# Keep the rendered summary line short and reviewable. SilentGuard may
+# legitimately return more entries; Nova never wants to splat an
+# unbounded list into a prompt or a Settings card.
+_MAX_TOP_ENTRIES = 5
+
+# Cap on the length of one process / host string. Real SilentGuard
+# values are well under this; the cap is belt-and-braces against a
+# hostile log line being smuggled through.
+_MAX_LABEL_LENGTH = 32
+
+# Whitelist of characters allowed in a sanitised label. Mirrors the
+# §10.6 character set: alnum + a small punctuation set that covers
+# realistic process names (``my-tool``, ``python3.11``) and IP /
+# hostname forms (``1.2.3.4``, ``api.example.com``, ``[::1]``).
+_LABEL_CHARS = re.compile(r"[^A-Za-z0-9._:/\-]")
+
+
+def _sanitise_label(value: object) -> Optional[str]:
+    """Return a short, prompt-safe string, or ``None`` on bad input.
+
+    Strips every character outside the §10.6 whitelist, trims leading
+    / trailing punctuation, caps length, and rejects anything that
+    reduces to empty. Non-strings always map to ``None``.
+    """
+    if not isinstance(value, str):
+        return None
+    cleaned = _LABEL_CHARS.sub("", value).strip("._:/-")
+    if not cleaned:
+        return None
+    return cleaned[:_MAX_LABEL_LENGTH]
+
+
+def _coerce_count(value: object) -> Optional[int]:
+    """Return a non-negative ``int``, or ``None`` if not coercible.
+
+    ``bool`` is a subclass of ``int`` in Python; we exclude it
+    explicitly so a payload claiming ``"unknown": true`` does not
+    silently render as ``1 unknown``.
+    """
+    if isinstance(value, bool):
+        return None
+    if not isinstance(value, int):
+        return None
+    if value < 0:
+        return None
+    return value
+
+
+def _normalise_top_list(value: object, label_key: str) -> list[dict]:
+    """Validate one of the ``top_*`` lists from ``/connections/summary``.
+
+    Accepts a list of dicts shaped like ``{label_key: str, "count": int}``.
+    Entries whose label fails sanitisation or whose count is not a
+    non-negative int are dropped silently. The result is capped at
+    :data:`_MAX_TOP_ENTRIES`.
+
+    Anything that is not a list, or yields zero valid entries, returns
+    an empty list — the caller drops the field rather than emitting
+    ``"Top processes: ."`` into a prompt.
+    """
+    if not isinstance(value, list):
+        return []
+    result: list[dict] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        label = _sanitise_label(item.get(label_key))
+        count = _coerce_count(item.get("count"))
+        if label is None or count is None:
+            continue
+        result.append({label_key: label, "count": count})
+        if len(result) >= _MAX_TOP_ENTRIES:
+            break
+    return result
 
 
 def _config_default_api_url() -> str:
@@ -298,6 +387,85 @@ class SilentGuardProvider:
         return "SilentGuard read-only API is available."
 
     # ── Optional structured counts ──────────────────────────────────
+
+    def get_connection_summary(self) -> Optional[dict]:
+        """Return a richer read-only connection summary, or ``None``.
+
+        Newer SilentGuard builds expose a compact aggregated view of
+        the live connection set at ``GET /connections/summary``. When
+        the HTTP transport is configured, SilentGuard is reachable,
+        and the endpoint returns a recognisable payload, this method
+        normalises it into a stable shape::
+
+            {
+                "total":    int,                       # optional
+                "local":    int,                       # optional
+                "known":    int,                       # optional
+                "unknown":  int,                       # optional
+                "top_processes":     [{"name": str, "count": int}, ...],   # optional
+                "top_remote_hosts":  [{"host": str, "count": int}, ...],   # optional
+            }
+
+        Each field is included only when SilentGuard supplied it *and*
+        it parses cleanly. Unknown extra keys in SilentGuard's payload
+        are dropped, not surfaced — Nova never invents data, and never
+        leaks raw payload shapes that have not been reviewed.
+
+        Returns ``None`` whenever:
+
+          * the provider is unavailable,
+          * the HTTP transport is not configured (file-only fallback),
+          * SilentGuard does not support the endpoint (older builds),
+          * the response is not a JSON object,
+          * the response is well-formed but contains no recognised
+            fields after normalisation (so callers can treat
+            "summary unavailable" and "summary present but empty"
+            identically).
+
+        Read-only — only a single ``GET /connections/summary`` call
+        is issued, against the fixed read-only path list. Strings are
+        character-set sanitised and length-capped before they leave
+        this layer; the caller (prompt context, Settings card) can
+        render them verbatim.
+        """
+        status = self.get_status()
+        if not status.available:
+            return None
+        client = self._resolved_client()
+        if client is None:
+            return None
+        getter = getattr(client, "get_connections_summary", None)
+        if not callable(getter):
+            return None
+        try:
+            payload = getter()
+        except Exception:  # pragma: no cover — defensive belt-and-braces
+            logger.debug(
+                "SilentGuard connection summary fetch failed", exc_info=True,
+            )
+            return None
+        if not isinstance(payload, dict):
+            return None
+
+        result: dict = {}
+        for key in ("total", "local", "known", "unknown"):
+            value = _coerce_count(payload.get(key))
+            if value is not None:
+                result[key] = value
+
+        top_processes = _normalise_top_list(
+            payload.get("top_processes"), "name",
+        )
+        if top_processes:
+            result["top_processes"] = top_processes
+
+        top_remote_hosts = _normalise_top_list(
+            payload.get("top_remote_hosts"), "host",
+        )
+        if top_remote_hosts:
+            result["top_remote_hosts"] = top_remote_hosts
+
+        return result or None
 
     def get_summary_counts(self) -> Optional[dict]:
         """Return read-only counts, or ``None`` when unavailable.

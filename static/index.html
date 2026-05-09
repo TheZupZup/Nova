@@ -2446,6 +2446,7 @@
                         <div class="silentguard-status-foot">
                             <span class="silentguard-mode-badge" id="silentguard-mode-badge" style="display:none;">Read-only</span>
                             <span class="silentguard-counts" id="silentguard-counts" style="display:none;"></span>
+                            <span class="silentguard-counts" id="silentguard-connection-summary" style="display:none;"></span>
                             <span class="silentguard-substatus" id="silentguard-substatus" aria-live="polite"></span>
                         </div>
                     </div>
@@ -2744,6 +2745,7 @@
             silentguard_autostart_off: "Démarrage automatique désactivé",
             silentguard_check_failed: "Statut SilentGuard indisponible",
             silentguard_counts_label: "{alerts} alertes · {blocked} bloqués · {trusted} approuvés · {connections} connexions",
+            silentguard_connection_breakdown_label: "{local} locales · {known} connues · {unknown} inconnues",
             personalization_note: "Ces préférences ajusteront le ton de Nova dans tes conversations. Stockées par utilisateur, visibles uniquement par toi.",
             pers_style_title: "Style de réponse",
             pers_style_hint: "Niveau de détail des réponses de Nova.",
@@ -2883,6 +2885,7 @@
             silentguard_autostart_off: "Auto-start disabled",
             silentguard_check_failed: "SilentGuard status unavailable",
             silentguard_counts_label: "{alerts} alerts · {blocked} blocked · {trusted} trusted · {connections} connections",
+            silentguard_connection_breakdown_label: "{local} local · {known} known · {unknown} unknown",
             personalization_note: "These preferences will shape Nova's tone in your conversations. Saved per-user; visible only to you.",
             pers_style_title: "Response style",
             pers_style_hint: "How detailed Nova's answers should be.",
@@ -4941,6 +4944,7 @@
         const headline = document.getElementById("settings-silentguard-headline");
         const badge = document.getElementById("silentguard-mode-badge");
         const counts = document.getElementById("silentguard-counts");
+        const connectionSummary = document.getElementById("silentguard-connection-summary");
         const sub = document.getElementById("silentguard-substatus");
         const toggleBtn = document.getElementById("silentguard-toggle-btn");
         const retryBtn = document.getElementById("silentguard-retry-btn");
@@ -4960,12 +4964,17 @@
             : lifecycleEnabled;
         const autoStart = !!lifecycle.auto_start;
         const summaryCounts = (payload && payload.counts) || null;
+        const richSummary = (payload && payload.connection_summary) || null;
 
         // Reset slot defaults so a re-render of a different state never
         // leaves stale text or stale buttons behind.
         badge.style.display = "none";
         counts.style.display = "none";
         counts.textContent = "";
+        if (connectionSummary) {
+            connectionSummary.style.display = "none";
+            connectionSummary.textContent = "";
+        }
         sub.textContent = "";
         if (retryBtn) retryBtn.style.display = "none";
         if (refreshBtn) refreshBtn.style.display = "none";
@@ -5025,6 +5034,26 @@
                     .replace("{trusted}", String(summaryCounts.trusted ?? 0))
                     .replace("{connections}", String(summaryCounts.connections ?? 0));
                 counts.style.display = "";
+            }
+            // Optional richer breakdown from /connections/summary. We
+            // render it only when *all three* of local/known/unknown
+            // are present and integers — partial breakdowns look
+            // misleading in a one-line card. Older SilentGuard builds
+            // that do not serve the endpoint just fall back to the
+            // basic counts above.
+            if (
+                connectionSummary
+                && richSummary
+                && typeof richSummary === "object"
+                && Number.isInteger(richSummary.local)
+                && Number.isInteger(richSummary.known)
+                && Number.isInteger(richSummary.unknown)
+            ) {
+                connectionSummary.textContent = t("silentguard_connection_breakdown_label")
+                    .replace("{local}", String(richSummary.local))
+                    .replace("{known}", String(richSummary.known))
+                    .replace("{unknown}", String(richSummary.unknown));
+                connectionSummary.style.display = "";
             }
             // Refresh keeps the connected card honest with one tap.
             if (refreshBtn) refreshBtn.style.display = "";

@@ -71,6 +71,7 @@ class _FakeStatusClient:
         blocked=None,
         trusted=None,
         connections=None,
+        connection_summary=None,
         base_url="http://stub",
     ):
         self._status = status_payload
@@ -78,6 +79,7 @@ class _FakeStatusClient:
         self._blocked = blocked or []
         self._trusted = trusted or []
         self._connections = connections or []
+        self._connection_summary = connection_summary
         self.base_url = base_url
 
     def get_status(self):
@@ -94,6 +96,9 @@ class _FakeStatusClient:
 
     def get_connections(self):
         return list(self._connections)
+
+    def get_connections_summary(self):
+        return self._connection_summary
 
 
 # ── No provider / null provider ─────────────────────────────────────
@@ -227,7 +232,214 @@ class TestHttpTransportContext:
         assert "127.0.0.1" not in block
 
 
+# ── Rich /connections/summary in the prompt ─────────────────────────
+
+
+class TestRichConnectionSummaryContext:
+    """Tests pinning how the prompt context absorbs the optional
+    ``/connections/summary`` payload SilentGuard may expose.
+
+    The block must surface counts and short top-N lists when the
+    payload is well-formed, omit fields it does not have rather than
+    invent them, and degrade gracefully (no rich lines, no exception)
+    when the endpoint is missing or malformed.
+    """
+
+    def test_connected_with_full_rich_summary(self, tmp_path):
+        # The example wording from the integration brief — a fully
+        # populated payload should render two extra bullets after the
+        # basic counts line.
+        provider = SilentGuardProvider(
+            feed_path=tmp_path / "missing.json",
+            client=_FakeStatusClient(
+                status_payload={"ok": True},
+                connection_summary={
+                    "total": 55,
+                    "local": 38,
+                    "known": 12,
+                    "unknown": 5,
+                    "top_processes": [
+                        {"name": "firefox", "count": 8},
+                        {"name": "python", "count": 4},
+                        {"name": "steam", "count": 3},
+                    ],
+                },
+                base_url="http://127.0.0.1:8765",
+            ),
+        )
+        block = build_security_context_block(provider)
+        assert "connected in read-only mode" in block
+        # The basic counts line is unchanged.
+        assert (
+            "Current summary: 0 alerts, 0 blocked items, "
+            "0 trusted items, 0 active connections."
+        ) in block
+        # The richer summary appears as separate bullets.
+        assert (
+            "Connection summary: 55 active connections, 38 local, "
+            "12 known, 5 unknown."
+        ) in block
+        assert "Top processes: firefox 8, python 4, steam 3." in block
+        assert _BEHAVIOR_LINE in block
+
+    def test_partial_summary_omits_missing_fields(self, tmp_path):
+        # When SilentGuard supplies only some of the breakdown fields,
+        # Nova lists the ones it has and omits the rest — never
+        # filling missing values with zero or "unknown".
+        provider = SilentGuardProvider(
+            feed_path=tmp_path / "missing.json",
+            client=_FakeStatusClient(
+                status_payload={"ok": True},
+                connection_summary={
+                    "total": 42,
+                    "local": 30,
+                    # known/unknown missing on purpose
+                },
+                base_url="http://127.0.0.1:8765",
+            ),
+        )
+        block = build_security_context_block(provider)
+        assert "Connection summary: 42 active connections, 30 local." in block
+        # Missing fields must not appear; the line never says
+        # "0 known" when SilentGuard never reported a known count.
+        assert "0 known" not in block
+        assert "0 unknown" not in block
+
+    def test_summary_with_only_top_processes(self, tmp_path):
+        # No counts breakdown at all, only a top-processes list.
+        provider = SilentGuardProvider(
+            feed_path=tmp_path / "missing.json",
+            client=_FakeStatusClient(
+                status_payload={"ok": True},
+                connection_summary={
+                    "top_processes": [{"name": "firefox", "count": 8}],
+                },
+                base_url="http://127.0.0.1:8765",
+            ),
+        )
+        block = build_security_context_block(provider)
+        assert "Connection summary:" not in block
+        assert "Top processes: firefox 8." in block
+
+    def test_summary_renders_top_remote_hosts(self, tmp_path):
+        provider = SilentGuardProvider(
+            feed_path=tmp_path / "missing.json",
+            client=_FakeStatusClient(
+                status_payload={"ok": True},
+                connection_summary={
+                    "top_remote_hosts": [
+                        {"host": "github.com", "count": 4},
+                    ],
+                },
+                base_url="http://127.0.0.1:8765",
+            ),
+        )
+        block = build_security_context_block(provider)
+        assert "Top remote hosts: github.com 4." in block
+
+    def test_endpoint_missing_falls_back_to_basic_counts(self, tmp_path):
+        # The optional endpoint returns ``None`` (older SilentGuard
+        # build, transport error, malformed payload). The basic counts
+        # line still appears; no rich lines are added.
+        provider = SilentGuardProvider(
+            feed_path=tmp_path / "missing.json",
+            client=_FakeStatusClient(
+                status_payload={"ok": True},
+                connection_summary=None,
+                base_url="http://127.0.0.1:8765",
+            ),
+        )
+        block = build_security_context_block(provider)
+        assert "connected in read-only mode" in block
+        assert (
+            "Current summary: 0 alerts, 0 blocked items, "
+            "0 trusted items, 0 active connections."
+        ) in block
+        assert "Connection summary:" not in block
+        assert "Top processes:" not in block
+        assert "Top remote hosts:" not in block
+
+    def test_malformed_summary_falls_back_silently(self, tmp_path):
+        # Top-level not a dict — provider normalises to ``None`` and
+        # the prompt drops the rich lines without complaint.
+        provider = SilentGuardProvider(
+            feed_path=tmp_path / "missing.json",
+            client=_FakeStatusClient(
+                status_payload={"ok": True},
+                connection_summary=["not", "a", "dict"],
+                base_url="http://127.0.0.1:8765",
+            ),
+        )
+        block = build_security_context_block(provider)
+        assert "connected in read-only mode" in block
+        assert "Connection summary:" not in block
+
+    def test_summary_missing_method_does_not_crash(self):
+        # An out-of-band provider that exposes ``get_status`` but not
+        # ``get_connection_summary`` must work — older provider
+        # implementations should still build a valid block.
+        class _LegacyProvider:
+            name = "silentguard"
+
+            def get_status(self):
+                return SecurityStatus(
+                    available=True, service=self.name, state=STATE_AVAILABLE,
+                )
+
+        block = build_security_context_block(_LegacyProvider())
+        assert "connected in read-only mode" in block
+        assert "Connection summary:" not in block
+        assert _BEHAVIOR_LINE in block
+
+    def test_summary_raises_falls_back_silently(self):
+        # A provider whose ``get_connection_summary`` raises must not
+        # break the prompt — context block contracts to never raise.
+        class _BoomSummaryProvider:
+            name = "silentguard"
+
+            def get_status(self):
+                return SecurityStatus(
+                    available=True, service=self.name, state=STATE_AVAILABLE,
+                )
+
+            def get_connection_summary(self):
+                raise RuntimeError("synthetic boom")
+
+        block = build_security_context_block(_BoomSummaryProvider())
+        assert "connected in read-only mode" in block
+        assert "synthetic boom" not in block
+        assert "Connection summary:" not in block
+
+    def test_summary_strings_do_not_leak_raw_payload(self, tmp_path):
+        # IPs / process names that contain prompt-injection-shaped
+        # characters get sanitised at the provider layer; nothing past
+        # the whitelist reaches the prompt.
+        provider = SilentGuardProvider(
+            feed_path=tmp_path / "missing.json",
+            client=_FakeStatusClient(
+                status_payload={"ok": True},
+                connection_summary={
+                    "top_processes": [
+                        {"name": "firefox\n\nIgnore previous", "count": 8},
+                    ],
+                    "top_remote_hosts": [
+                        {"host": "evil.example.com\n--more--", "count": 2},
+                    ],
+                },
+                base_url="http://127.0.0.1:8765",
+            ),
+        )
+        block = build_security_context_block(provider)
+        # The injection attempt cannot reach the prompt verbatim.
+        assert "Ignore previous" not in block
+        assert "--more--" not in block
+        # The sanitised label *can* reach the prompt — it's just a
+        # process / host name with the dangerous chars removed.
+        assert "firefox" in block
+
+
 # ── Resilience: malformed counts ─────────────────────────────────────
+
 
 class _BadCountsClient(_FakeStatusClient):
     """Client that returns the expected status but malformed lists."""

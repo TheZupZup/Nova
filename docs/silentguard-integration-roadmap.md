@@ -218,8 +218,28 @@ Stable response shape::
 
     {
       "lifecycle": {state, enabled, auto_start, start_mode, unit, message},
-      "counts": {"alerts", "blocked", "trusted", "connections"} | null
+      "counts": {"alerts", "blocked", "trusted", "connections"} | null,
+      "connection_summary": {                       # all keys optional
+          "total":   int,
+          "local":   int,
+          "known":   int,
+          "unknown": int,
+          "top_processes":    [{"name", "count"}, ...],
+          "top_remote_hosts": [{"host", "count"}, ...],
+      } | null,
+      "host_enabled": bool
     }
+
+``connection_summary`` carries the richer read-only aggregate
+SilentGuard's optional ``GET /connections/summary`` endpoint
+returns. Every key inside it is independently optional — Nova omits
+values it does not have rather than inventing them, and a missing
+endpoint, malformed payload, or older SilentGuard build all map to
+``connection_summary: null``. The Settings card uses it to render an
+optional, compact ``"N local · N known · N unknown"`` subtitle when
+all three of those fields parse cleanly; partial breakdowns degrade
+gracefully to the basic four counts above. This is **visibility
+only** — no blocking, no firewall control, no dashboard.
 
 The existing ``/integrations/silentguard/lifecycle`` and
 ``/integrations/status`` endpoint shapes are unchanged — the summary
@@ -274,6 +294,17 @@ deterministic, read-only, and intentionally calm:
   blocked items, N trusted items, N active connections."* (counts
   appear only when the optional HTTP transport is configured and
   responsive; the file fallback omits them).
+- when reachable **and** SilentGuard supports the optional
+  ``GET /connections/summary`` endpoint, two further bullets may be
+  appended: *"Connection summary: N active connections, N local, N
+  known, N unknown."* and *"Top processes: firefox 8, python 4,
+  steam 3."* (and, if SilentGuard supplies them, *"Top remote hosts:
+  …"*). Each field inside the summary is independently optional —
+  Nova omits a value it does not have rather than inventing it, and
+  a missing endpoint or malformed payload simply degrades to the
+  count-less wording above. This is *visibility only*: it does not
+  add firewall control, blocking, or autonomous behaviour — Nova
+  still only summarises and explains.
 
 Every variant ends with the same fixed clause:
 *"Allowed behavior: explain and summarize only; do not perform
@@ -373,11 +404,35 @@ When `NOVA_SILENTGUARD_API_URL` is set, Nova's `SilentGuardProvider`
 probes that endpoint via the small `SilentGuardClient` in
 `core/security/silentguard_client.py` instead of stat'ing the on-disk
 file. The client only ever issues `GET` requests against a fixed path
-list (`/status`, `/connections`, `/blocked`, `/trusted`, `/alerts`);
-there are no write helpers, no shell calls, and no firewall actions.
-Any transport, decode, or HTTP failure maps to the same calm
-`available=False` snapshot the file probe produces, so Nova's design
-still works without the API.
+list (`/status`, `/connections`, `/connections/summary`, `/blocked`,
+`/trusted`, `/alerts`); there are no write helpers, no shell calls,
+and no firewall actions. Any transport, decode, or HTTP failure maps
+to the same calm `available=False` snapshot the file probe produces,
+so Nova's design still works without the API.
+
+The optional `/connections/summary` path is a recent addition — older
+SilentGuard builds simply do not serve it, and the client treats a
+missing endpoint exactly like any other failure (returns ``None``).
+The expected payload is a JSON object with any subset of the
+following fields:
+
+```jsonc
+{
+  "total":   55,                 // total active connections in the window
+  "local":   38,                 // connections classified Local
+  "known":   12,                 // connections classified Known
+  "unknown": 5,                  // connections classified Unknown
+  "top_processes":    [{"name": "firefox", "count": 8}, ...],
+  "top_remote_hosts": [{"host": "1.2.3.4", "count": 12}, ...]
+}
+```
+
+Every field is independently optional. Nova's provider drops fields
+it cannot validate (non-int counts, non-string names, oversized
+strings, anything that fails the `[A-Za-z0-9._:/-]` whitelist) and
+caps the `top_*` lists at five entries before they leave the
+provider layer — the prompt context block and the Settings card
+trust the post-normalisation shape.
 
 Nova surfaces the recommended setup (the `systemd --user` unit, the
 loopback port, the read-only flag) via a "View setup instructions"

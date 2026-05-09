@@ -65,6 +65,12 @@ _BEHAVIOR_LINE = (
 # leak them into the prompt.
 _REQUIRED_COUNT_KEYS = ("alerts", "blocked", "trusted", "connections")
 
+# Keys recognised in the optional rich connection summary. Anything
+# outside this allow-list is dropped before rendering — defence in
+# depth on top of the provider's own normalisation, so an unreviewed
+# field cannot reach a prompt by accident.
+_CONNECTION_SUMMARY_BREAKDOWN_KEYS = ("local", "known", "unknown")
+
 
 def _format_block(*lines: str) -> str:
     """Join ``Security context:`` + bullets into one block."""
@@ -112,6 +118,94 @@ def _safe_counts(provider) -> Optional[dict]:
     ):
         return None
     return {key: counts[key] for key in _REQUIRED_COUNT_KEYS}
+
+
+def _safe_connection_summary(provider) -> Optional[dict]:
+    """Return the rich connection summary, or ``None`` when unavailable.
+
+    A provider may optionally expose ``get_connection_summary`` returning
+    a dict with any subset of integer fields (``total`` / ``local`` /
+    ``known`` / ``unknown``) plus optional ``top_processes`` /
+    ``top_remote_hosts`` lists. Missing method, exception, wrong shape,
+    or an empty dict all map to ``None`` — the caller falls back to
+    the count-less wording rather than inventing missing values.
+
+    The provider is contractually responsible for sanitising any
+    strings (process names, hosts) before they reach this helper. This
+    function does **not** re-sanitise; it only filters by type and
+    drops unrecognised keys.
+    """
+    getter = getattr(provider, "get_connection_summary", None)
+    if not callable(getter):
+        return None
+    try:
+        summary = getter()
+    except Exception:  # pragma: no cover — defensive
+        logger.debug(
+            "security provider get_connection_summary raised", exc_info=True,
+        )
+        return None
+    if not isinstance(summary, dict):
+        return None
+    return summary or None
+
+
+def _format_connection_summary_lines(summary: dict) -> list[str]:
+    """Render the rich connection summary into 0-3 prompt bullets.
+
+    Lines are emitted only for the fields actually present in
+    ``summary``. Missing fields are silently omitted — Nova never
+    invents a number it does not have.
+
+    Possible bullets, in order:
+
+      * ``"Connection summary: 55 active connections, 38 local,
+        12 known, 5 unknown."`` — appears when at least one of
+        ``total`` / ``local`` / ``known`` / ``unknown`` is present.
+      * ``"Top processes: firefox 8, python 4, steam 3."`` — appears
+        when ``top_processes`` is a non-empty list.
+      * ``"Top remote hosts: 1.2.3.4 12, github.com 4."`` — appears
+        when ``top_remote_hosts`` is a non-empty list.
+    """
+    lines: list[str] = []
+
+    breakdown_parts: list[str] = []
+    if isinstance(summary.get("total"), int):
+        breakdown_parts.append(f"{summary['total']} active connections")
+    for key in _CONNECTION_SUMMARY_BREAKDOWN_KEYS:
+        value = summary.get(key)
+        if isinstance(value, int):
+            breakdown_parts.append(f"{value} {key}")
+    if breakdown_parts:
+        lines.append(f"Connection summary: {', '.join(breakdown_parts)}.")
+
+    top_processes = summary.get("top_processes")
+    if isinstance(top_processes, list) and top_processes:
+        rendered_processes: list[str] = []
+        for item in top_processes:
+            if not isinstance(item, dict):
+                continue
+            name = item.get("name")
+            count = item.get("count")
+            if isinstance(name, str) and isinstance(count, int):
+                rendered_processes.append(f"{name} {count}")
+        if rendered_processes:
+            lines.append(f"Top processes: {', '.join(rendered_processes)}.")
+
+    top_hosts = summary.get("top_remote_hosts")
+    if isinstance(top_hosts, list) and top_hosts:
+        rendered_hosts: list[str] = []
+        for item in top_hosts:
+            if not isinstance(item, dict):
+                continue
+            host = item.get("host")
+            count = item.get("count")
+            if isinstance(host, str) and isinstance(count, int):
+                rendered_hosts.append(f"{host} {count}")
+        if rendered_hosts:
+            lines.append(f"Top remote hosts: {', '.join(rendered_hosts)}.")
+
+    return lines
 
 
 def _is_null_provider(provider, name: str) -> bool:
@@ -190,24 +284,25 @@ def build_security_context_block(
         )
 
     # Available. Try to enrich with counts when the provider can supply
-    # them; fall back to the count-less wording otherwise.
+    # them; fall back to the count-less wording otherwise. The richer
+    # connection summary (totals, local/known/unknown, top processes /
+    # remote hosts) is appended on a separate set of bullets when the
+    # provider exposes ``get_connection_summary`` and SilentGuard's
+    # ``/connections/summary`` endpoint produced a recognisable shape.
+    bullets: list[str] = ["SilentGuard integration: connected in read-only mode."]
     counts = _safe_counts(provider)
-    if counts is None:
-        return _format_block(
-            "SilentGuard integration: connected in read-only mode.",
-            _BEHAVIOR_LINE,
-        )
-
-    return _format_block(
-        "SilentGuard integration: connected in read-only mode.",
-        (
+    if counts is not None:
+        bullets.append(
             f"Current summary: {counts['alerts']} alerts, "
             f"{counts['blocked']} blocked items, "
             f"{counts['trusted']} trusted items, "
             f"{counts['connections']} active connections."
-        ),
-        _BEHAVIOR_LINE,
-    )
+        )
+    connection_summary = _safe_connection_summary(provider)
+    if connection_summary is not None:
+        bullets.extend(_format_connection_summary_lines(connection_summary))
+    bullets.append(_BEHAVIOR_LINE)
+    return _format_block(*bullets)
 
 
 # Re-exports so the unused-import lints stay happy and so callers can

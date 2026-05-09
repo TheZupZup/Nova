@@ -208,7 +208,9 @@ class TestDisabledStates:
         )
         assert resp.status_code == 200
         body = resp.json()
-        assert set(body.keys()) == {"lifecycle", "counts", "host_enabled"}
+        assert set(body.keys()) == {
+            "lifecycle", "counts", "connection_summary", "host_enabled",
+        }
         assert body["lifecycle"]["state"] == STATE_DISABLED
         assert body["lifecycle"]["enabled"] is False
         assert body["counts"] is None
@@ -407,6 +409,170 @@ class TestConnectedWithCounts:
         assert body["counts"] is None
 
 
+# ── Rich /connections/summary surfacing ─────────────────────────────
+
+
+class TestConnectedWithRichConnectionSummary:
+    """The Settings UI calls one endpoint and expects the optional
+    ``connection_summary`` field alongside ``counts``. These tests pin
+    that wiring without changing the existing ``counts`` shape.
+    """
+
+    def test_connection_summary_attached_when_provider_exposes_it(
+        self, web_client, _spawn_disabled, monkeypatch,
+    ):
+        monkeypatch.setenv("NOVA_SILENTGUARD_ENABLED", "true")
+        from core.security import lifecycle as lc
+        import web as web_module
+
+        class _ReachableLifecycleProvider:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def get_status(self):
+                return _available()
+
+        class _RichProvider:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def get_status(self):
+                return _available()
+
+            def get_summary_counts(self):
+                return {
+                    "alerts": 0, "blocked": 0,
+                    "trusted": 0, "connections": 5,
+                }
+
+            def get_connection_summary(self):
+                return {
+                    "total": 55, "local": 38, "known": 12, "unknown": 5,
+                    "top_processes": [{"name": "firefox", "count": 8}],
+                }
+
+        monkeypatch.setattr(lc, "SilentGuardProvider", _ReachableLifecycleProvider)
+        monkeypatch.setattr(web_module, "_SilentGuardProvider", _RichProvider)
+
+        headers = _login(web_client)
+        _enable_for_alice(web_client, headers)
+        resp = web_client.get(
+            "/integrations/silentguard/summary", headers=headers,
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["lifecycle"]["state"] == STATE_CONNECTED
+        # Existing counts shape is unchanged — back-compat for the UI.
+        assert body["counts"] == {
+            "alerts": 0, "blocked": 0, "trusted": 0, "connections": 5,
+        }
+        # The new field carries the rich summary verbatim.
+        assert body["connection_summary"] == {
+            "total": 55, "local": 38, "known": 12, "unknown": 5,
+            "top_processes": [{"name": "firefox", "count": 8}],
+        }
+
+    def test_connection_summary_none_when_provider_returns_none(
+        self, web_client, _spawn_disabled, monkeypatch,
+    ):
+        # Older SilentGuard build / file-only fallback: the provider's
+        # ``get_connection_summary`` returns None. Endpoint surfaces
+        # ``connection_summary: null`` while counts still flow.
+        monkeypatch.setenv("NOVA_SILENTGUARD_ENABLED", "true")
+        from core.security import lifecycle as lc
+        import web as web_module
+
+        class _ReachableLifecycleProvider:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def get_status(self):
+                return _available()
+
+        class _NoRichSummaryProvider:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def get_status(self):
+                return _available()
+
+            def get_summary_counts(self):
+                return {
+                    "alerts": 0, "blocked": 0,
+                    "trusted": 0, "connections": 0,
+                }
+
+            def get_connection_summary(self):
+                return None
+
+        monkeypatch.setattr(lc, "SilentGuardProvider", _ReachableLifecycleProvider)
+        monkeypatch.setattr(web_module, "_SilentGuardProvider", _NoRichSummaryProvider)
+
+        headers = _login(web_client)
+        _enable_for_alice(web_client, headers)
+        resp = web_client.get(
+            "/integrations/silentguard/summary", headers=headers,
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["connection_summary"] is None
+        # Counts still come through — the two surfaces are independent.
+        assert body["counts"] == {
+            "alerts": 0, "blocked": 0, "trusted": 0, "connections": 0,
+        }
+
+    def test_connection_summary_none_when_probe_raises(
+        self, web_client, _spawn_disabled, monkeypatch,
+    ):
+        monkeypatch.setenv("NOVA_SILENTGUARD_ENABLED", "true")
+        from core.security import lifecycle as lc
+        import web as web_module
+
+        class _ReachableLifecycleProvider:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def get_status(self):
+                return _available()
+
+        class _BoomRichProvider:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def get_status(self):
+                return _available()
+
+            def get_summary_counts(self):
+                return {
+                    "alerts": 0, "blocked": 0,
+                    "trusted": 0, "connections": 0,
+                }
+
+            def get_connection_summary(self):
+                raise RuntimeError("rich-summary boom")
+
+        monkeypatch.setattr(lc, "SilentGuardProvider", _ReachableLifecycleProvider)
+        monkeypatch.setattr(web_module, "_SilentGuardProvider", _BoomRichProvider)
+
+        headers = _login(web_client)
+        _enable_for_alice(web_client, headers)
+        resp = web_client.get(
+            "/integrations/silentguard/summary", headers=headers,
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        # The summary call swallowed the failure, kept the lifecycle
+        # honest, and surfaced ``connection_summary: null`` so the UI
+        # falls back to the basic counts row.
+        assert body["lifecycle"]["state"] == STATE_CONNECTED
+        assert body["connection_summary"] is None
+        # The ``counts`` probe is independent from the rich-summary
+        # probe — a failure in one must not poison the other.
+        assert body["counts"] == {
+            "alerts": 0, "blocked": 0, "trusted": 0, "connections": 0,
+        }
+
+
 # ── Auth and shape ──────────────────────────────────────────────────
 
 
@@ -429,7 +595,9 @@ class TestAuthAndShape:
         )
         assert resp.status_code == 200
         body = resp.json()
-        assert set(body.keys()) == {"lifecycle", "counts", "host_enabled"}
+        assert set(body.keys()) == {
+            "lifecycle", "counts", "connection_summary", "host_enabled",
+        }
         # Lifecycle must carry the full LifecycleStatus shape so the UI
         # can render any state without checking for missing keys.
         assert set(body["lifecycle"].keys()) == {

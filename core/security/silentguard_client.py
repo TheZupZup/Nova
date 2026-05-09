@@ -47,6 +47,7 @@ DEFAULT_TIMEOUT_SECONDS = 2.0
 # review — callers cannot supply arbitrary endpoints.
 PATH_STATUS = "/status"
 PATH_CONNECTIONS = "/connections"
+PATH_CONNECTIONS_SUMMARY = "/connections/summary"
 PATH_BLOCKED = "/blocked"
 PATH_TRUSTED = "/trusted"
 PATH_ALERTS = "/alerts"
@@ -157,6 +158,19 @@ class SilentGuardClient:
     def get_connections(self) -> list[dict]:
         """Return the SilentGuard ``/connections`` list (may be empty)."""
         return self._list_endpoint(PATH_CONNECTIONS)
+
+    def get_connections_summary(self) -> Optional[dict]:
+        """Return the SilentGuard ``/connections/summary`` payload, or ``None``.
+
+        Newer SilentGuard builds expose a compact aggregated view of
+        the live connection set (totals, local/known/unknown breakdown,
+        top processes / remote hosts). Older builds simply do not
+        serve this path; the client treats a missing endpoint exactly
+        like any other failure and returns ``None`` rather than
+        raising. Callers must type-check the return value before use.
+        """
+        data = self._get_json(PATH_CONNECTIONS_SUMMARY)
+        return data if isinstance(data, dict) else None
 
     def get_blocked(self) -> list[dict]:
         """Return the SilentGuard ``/blocked`` list (may be empty)."""
