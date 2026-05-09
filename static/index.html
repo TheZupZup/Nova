@@ -2429,7 +2429,7 @@
                                 <span class="settings-row-title" id="settings-silentguard-title">SilentGuard</span>
                                 <span class="settings-row-hint" id="settings-silentguard-headline">Checking SilentGuard status…</span>
                             </div>
-                            <button type="button" class="memory-btn" id="silentguard-refresh-btn" onclick="refreshSilentGuardStatus()" style="white-space:nowrap;">
+                            <button type="button" class="memory-btn" id="silentguard-refresh-btn" style="white-space:nowrap;">
                                 <span id="silentguard-refresh-label">Refresh</span>
                             </button>
                         </div>
@@ -4949,7 +4949,11 @@
         if (headline) headline.textContent = t("silentguard_loading");
         setSilentGuardCardState("loading");
         try {
+            // ``credentials: "include"`` keeps the authenticated session
+            // attached on every refresh, including the cookie-only path,
+            // so the request can never fall back to anonymous and 401.
             const res = await fetch("/integrations/silentguard/summary", {
+                credentials: "include",
                 headers: { "Authorization": `Bearer ${token}` },
             });
             if (!res.ok) {
@@ -4966,6 +4970,25 @@
             if (btn) btn.disabled = false;
         }
     }
+
+    // Wire the Refresh button explicitly once the script runs (the
+    // script tag sits at the end of <body>, so the button already
+    // exists in the DOM at this point). An inline ``onclick=...``
+    // would be silently dropped by any future stricter CSP, and made
+    // the click handler invisible to test fixtures that load this
+    // page without executing inline attributes — the explicit listener
+    // makes the wiring testable and CSP-safe. Errors inside the click
+    // handler are surfaced through the card's failure UI instead of
+    // being swallowed by the event-dispatch path.
+    (function wireSilentGuardRefreshButton() {
+        const btn = document.getElementById("silentguard-refresh-btn");
+        if (!btn) return;
+        btn.addEventListener("click", () => {
+            refreshSilentGuardStatus().catch(() => {
+                applySilentGuardCheckFailedUI();
+            });
+        });
+    })();
 
     // ── PERSONALIZATION ──
     // Maps each /settings field to the DOM control that surfaces it. The
