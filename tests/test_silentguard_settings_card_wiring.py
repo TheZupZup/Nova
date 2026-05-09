@@ -308,3 +308,111 @@ class TestDisabledHeadlineDifferentiation:
         # file currently contains EN + FR packs side by side.
         assert html.count("silentguard_disabled_user_off:") >= 2
         assert html.count("silentguard_disabled_host_off:") >= 2
+
+
+# ── Enable/Disable/Retry endpoint wiring ────────────────────────────
+#
+# The Settings card's primary action is a state-driven button:
+#   * disabled → "Enable SilentGuard"  → POST /enable
+#   * connected/unavailable → "Disable" → POST /disable
+# A separate Retry button appears only when the integration is enabled
+# but unreachable, and POSTs to /retry. Each button surfaces the
+# response payload directly so the user sees the new state without a
+# follow-up Refresh round-trip.
+
+
+class TestEnableEndpointWiring:
+    def test_enable_label_keys_exist_in_i18n(self, html: str) -> None:
+        # The state-driven label needs a calm "Enable" verb in both
+        # language packs.
+        for key in ("silentguard_enable", "silentguard_disable"):
+            assert f"{key}:" in html, f"{key} must be defined in i18n."
+            assert html.count(f"{key}:") >= 2, (
+                f"{key} must be present in both EN and FR packs."
+            )
+
+    def test_toggle_handler_targets_dedicated_endpoint(
+        self, script: str,
+    ) -> None:
+        # The new dedicated path is the primary call; the older
+        # /settings POST is allowed as a fallback for forwards-compat.
+        body = _function_body(script, "toggleSilentGuardEnabled")
+        assert '"/integrations/silentguard/enable"' in body, (
+            "toggleSilentGuardEnabled must call the dedicated /enable "
+            "endpoint when opting in."
+        )
+        assert '"/integrations/silentguard/disable"' in body, (
+            "toggleSilentGuardEnabled must call the dedicated /disable "
+            "endpoint when opting out."
+        )
+
+    def test_toggle_handler_uses_credentials_include_on_dedicated_path(
+        self, script: str,
+    ) -> None:
+        # Both dedicated endpoints must be called with credentials so
+        # the cookie-only auth path stays attached.
+        body = _function_body(script, "toggleSilentGuardEnabled")
+        assert body.count('credentials: "include"') >= 1
+
+
+class TestRetryButtonWiring:
+    def test_retry_button_exists_with_documented_id(self, html: str) -> None:
+        assert 'id="silentguard-retry-btn"' in html, (
+            "Retry button must keep the documented id so the JS can "
+            "wire and toggle its visibility."
+        )
+
+    def test_retry_button_does_not_rely_on_inline_onclick(
+        self, html: str,
+    ) -> None:
+        retry_match = re.search(
+            r'<button[^>]*id="silentguard-retry-btn"[^>]*>',
+            html,
+        )
+        assert retry_match, "Retry button tag not found"
+        assert "onclick=" not in retry_match.group(0), (
+            "Retry button must use addEventListener, not inline onclick."
+        )
+
+    def test_retry_listener_calls_async_handler(self, script: str) -> None:
+        assert 'getElementById("silentguard-retry-btn")' in script
+        listener_block = re.search(
+            r'getElementById\("silentguard-retry-btn"\)[\s\S]{0,400}?'
+            r'addEventListener\("click",[\s\S]{0,400}?'
+            r'retrySilentGuardStartup\(\)',
+            script,
+        )
+        assert listener_block, (
+            "Expected an explicit addEventListener('click', ...) that "
+            "calls retrySilentGuardStartup() on the Retry button."
+        )
+
+    def test_retry_handler_posts_to_dedicated_endpoint(
+        self, script: str,
+    ) -> None:
+        body = _function_body(script, "retrySilentGuardStartup")
+        assert 'fetch("/integrations/silentguard/retry"' in body, (
+            "retrySilentGuardStartup must POST to the dedicated /retry "
+            "endpoint."
+        )
+        assert 'method: "POST"' in body
+        assert 'credentials: "include"' in body, (
+            "Retry fetch must pass credentials: 'include' so the "
+            "authenticated session is attached on every retry."
+        )
+
+    def test_retry_failure_path_surfaces_visible_card_state(
+        self, script: str,
+    ) -> None:
+        # Errors must land in the card, not in a swallowed promise.
+        body = _function_body(script, "retrySilentGuardStartup")
+        assert "applySilentGuardCheckFailedUI()" in body, (
+            "Retry handler must route errors through "
+            "applySilentGuardCheckFailedUI so failures stay visible."
+        )
+
+    def test_retry_label_key_exists_in_i18n(self, html: str) -> None:
+        assert "silentguard_retry:" in html
+        assert html.count("silentguard_retry:") >= 2, (
+            "silentguard_retry must be defined in both EN and FR packs."
+        )

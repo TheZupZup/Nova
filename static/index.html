@@ -2430,13 +2430,16 @@
                                 <span class="settings-row-title" id="settings-silentguard-title">SilentGuard</span>
                                 <span class="settings-row-hint" id="settings-silentguard-headline">Checking SilentGuard status…</span>
                             </div>
-                            <div style="display:flex;gap:8px;align-items:center;">
-                                <button type="button" id="silentguard-toggle-btn"
-                                    style="font-family:monospace;font-size:0.75rem;padding:4px 12px;border-radius:6px;cursor:pointer;border:1px solid var(--border);background:var(--bg);color:var(--text-dim);min-width:52px;">
-                                    OFF
+                            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:flex-end;">
+                                <button type="button" class="memory-btn" id="silentguard-retry-btn" style="white-space:nowrap;display:none;">
+                                    <span id="silentguard-retry-label">Retry</span>
                                 </button>
-                                <button type="button" class="memory-btn" id="silentguard-refresh-btn" style="white-space:nowrap;">
+                                <button type="button" class="memory-btn" id="silentguard-refresh-btn" style="white-space:nowrap;display:none;">
                                     <span id="silentguard-refresh-label">Refresh</span>
+                                </button>
+                                <button type="button" id="silentguard-toggle-btn" class="memory-btn"
+                                    style="white-space:nowrap;">
+                                    <span id="silentguard-toggle-label">Enable SilentGuard</span>
                                 </button>
                             </div>
                         </div>
@@ -2724,8 +2727,12 @@
             update_title: "Mise à jour automatique des modèles",
             silentguard_title: "SilentGuard",
             silentguard_refresh: "Actualiser",
+            silentguard_retry: "Réessayer",
+            silentguard_enable: "Activer SilentGuard",
+            silentguard_disable: "Désactiver",
             silentguard_mode_readonly: "Lecture seule",
             silentguard_loading: "Vérification de SilentGuard…",
+            silentguard_enabling: "Activation de SilentGuard…",
             silentguard_disabled: "Intégration SilentGuard désactivée",
             silentguard_disabled_host_off: "Intégration SilentGuard désactivée dans la configuration du serveur",
             silentguard_disabled_user_off: "Activez SilentGuard dans Paramètres pour l'utiliser",
@@ -2859,8 +2866,12 @@
             update_title: "Auto-update models",
             silentguard_title: "SilentGuard",
             silentguard_refresh: "Refresh",
+            silentguard_retry: "Retry",
+            silentguard_enable: "Enable SilentGuard",
+            silentguard_disable: "Disable",
             silentguard_mode_readonly: "Read-only",
             silentguard_loading: "Checking SilentGuard status…",
+            silentguard_enabling: "Enabling SilentGuard…",
             silentguard_disabled: "SilentGuard integration disabled",
             silentguard_disabled_host_off: "SilentGuard integration disabled in server config",
             silentguard_disabled_user_off: "Turn on SilentGuard in Settings to use it",
@@ -3026,8 +3037,11 @@
 
         _setText("settings-silentguard-title", t("silentguard_title"));
         _setText("silentguard-refresh-label", t("silentguard_refresh"));
-        // Re-render the status card so headline / counts pick up the new
-        // language without re-issuing the network call.
+        _setText("silentguard-retry-label", t("silentguard_retry"));
+        // Re-render the status card so headline / counts / action button
+        // labels pick up the new language without re-issuing the network
+        // call. The action button label is state-driven, so the summary
+        // re-render is the single owner of its text.
         if (typeof applySilentGuardSummaryUI === "function" && lastSilentGuardSummary) {
             applySilentGuardSummaryUI(lastSilentGuardSummary);
         }
@@ -4869,18 +4883,33 @@
     }
 
     // ── SILENTGUARD STATUS CARD ──
-    // Read-only Settings surface for the SilentGuard integration. The
-    // backend at /integrations/silentguard/summary already gates on the
-    // per-user setting, runs the lifecycle helper, and (when reachable)
-    // attaches the optional summary counts. The UI just renders the
-    // calm result and exposes a per-user on/off toggle so a user can
-    // opt in once the operator has configured the host-level env vars.
-    // There is no background polling: refresh runs once when Settings
-    // opens, once per Refresh-button click, and once per toggle change.
+    // Read-only Settings surface for the SilentGuard integration.
+    //
+    // The card is state-driven: a single primary action button changes
+    // its label between "Enable SilentGuard" and "Disable" based on
+    // the user's per-user opt-in, and a "Retry" button shows up only
+    // when the integration is enabled but unreachable. The Refresh
+    // button is the one tap that always re-pulls.
+    //
+    // Each user action calls a dedicated, auth-gated endpoint:
+    //   * POST /integrations/silentguard/enable   — persists user opt-in
+    //   * POST /integrations/silentguard/disable  — persists user opt-out
+    //   * POST /integrations/silentguard/retry    — re-runs the lifecycle
+    //   * GET  /integrations/silentguard/summary  — Refresh + initial paint
+    //
+    // The mutating endpoints reuse the same gating contract documented
+    // by ``core.security.lifecycle.ensure_running``: no sudo, no firewall
+    // command, no shell interpretation, no command sourced from chat
+    // input. Nova never stops the SilentGuard service from the UI.
+    //
+    // No background polling: every fetch is user-initiated (Settings
+    // open, Enable/Disable/Retry/Refresh click) so the card never spins
+    // a hidden timer.
     let lastSilentGuardSummary = null;
     let lastSilentGuardUserEnabled = false;
     let silentGuardRefreshInFlight = false;
     let silentGuardToggleInFlight = false;
+    let silentGuardRetryInFlight = false;
 
     function setSilentGuardCardState(state) {
         const row = document.getElementById("silentguard-status-row");
@@ -4888,12 +4917,23 @@
     }
 
     function applySilentGuardToggleUI(enabled) {
+        // The single primary action button is "Enable SilentGuard"
+        // when the user hasn't opted in yet, and "Disable" once they
+        // have. A summary re-render after every state change keeps
+        // visibility / wording consistent with what the backend
+        // actually reports, but we still paint here on initial load
+        // so the button never flashes the wrong label before the
+        // first /summary call returns.
         const btn = document.getElementById("silentguard-toggle-btn");
+        const label = document.getElementById("silentguard-toggle-label");
         if (!btn) return;
         lastSilentGuardUserEnabled = !!enabled;
-        btn.textContent = enabled ? "ON" : "OFF";
-        btn.style.color = enabled ? "var(--cyan)" : "var(--text-dim)";
-        btn.style.borderColor = enabled ? "var(--cyan)" : "var(--border)";
+        const text = enabled ? t("silentguard_disable") : t("silentguard_enable");
+        if (label) {
+            label.textContent = text;
+        } else {
+            btn.textContent = text;
+        }
     }
 
     function applySilentGuardSummaryUI(payload) {
@@ -4902,6 +4942,9 @@
         const badge = document.getElementById("silentguard-mode-badge");
         const counts = document.getElementById("silentguard-counts");
         const sub = document.getElementById("silentguard-substatus");
+        const toggleBtn = document.getElementById("silentguard-toggle-btn");
+        const retryBtn = document.getElementById("silentguard-retry-btn");
+        const refreshBtn = document.getElementById("silentguard-refresh-btn");
         if (!row || !headline || !badge || !counts || !sub) return;
 
         const lifecycle = (payload && payload.lifecycle) || {};
@@ -4919,11 +4962,21 @@
         const summaryCounts = (payload && payload.counts) || null;
 
         // Reset slot defaults so a re-render of a different state never
-        // leaves stale text behind.
+        // leaves stale text or stale buttons behind.
         badge.style.display = "none";
         counts.style.display = "none";
         counts.textContent = "";
         sub.textContent = "";
+        if (retryBtn) retryBtn.style.display = "none";
+        if (refreshBtn) refreshBtn.style.display = "none";
+
+        // ``state === "disabled"`` is authoritative for the per-user
+        // opt-in: the lifecycle helper short-circuits to it whenever
+        // the per-user gate is off, regardless of the host switch.
+        // We track the user-side bool so the Enable/Disable button
+        // label stays in sync without a follow-up /settings round-trip.
+        const userOptedIn = state !== "disabled";
+        applySilentGuardToggleUI(userOptedIn);
 
         // Pick the calm headline. The disabled state has two distinct
         // sub-cases the user needs to be able to tell apart:
@@ -4956,6 +5009,11 @@
         headline.textContent = t(headlineKey);
         setSilentGuardCardState(state);
 
+        // Action button visibility is state-driven so the user only ever
+        // sees the actions that make sense in the current context. The
+        // toggle button is always visible — the user must always be able
+        // to disable the integration even from a transient state.
+        if (toggleBtn) toggleBtn.style.display = "";
         if (state === "connected") {
             // Make read-only mode explicit, per the UX brief.
             badge.textContent = t("silentguard_mode_readonly");
@@ -4968,11 +5026,19 @@
                     .replace("{connections}", String(summaryCounts.connections ?? 0));
                 counts.style.display = "";
             }
-        } else if (state === "unavailable" && lifecycleEnabled && !autoStart) {
-            // Per the UX brief: when integration is on but auto-start
-            // is off, surface that calmly so the operator knows why
-            // nothing is being started in the background.
-            sub.textContent = t("silentguard_autostart_off");
+            // Refresh keeps the connected card honest with one tap.
+            if (refreshBtn) refreshBtn.style.display = "";
+        } else if (state === "unavailable" || state === "could_not_start") {
+            // Enabled but unreachable → offer Retry. The button hits
+            // /retry, which re-runs the lifecycle helper (probe + safe
+            // start when the operator has opted into systemd-user).
+            if (retryBtn) retryBtn.style.display = "";
+            if (state === "unavailable" && lifecycleEnabled && !autoStart) {
+                // Per the UX brief: when integration is on but auto-start
+                // is off, surface that calmly so the operator knows why
+                // nothing is being started in the background.
+                sub.textContent = t("silentguard_autostart_off");
+            }
         }
     }
 
@@ -5020,32 +5086,64 @@
     }
 
     async function toggleSilentGuardEnabled() {
-        // Per-user opt-in. Persists ``silentguard_enabled`` via the
-        // shared /settings endpoint and then re-renders the status
-        // card so the user immediately sees the new state. Errors fall
-        // through into the visible failure UI instead of vanishing.
+        // Per-user opt-in. Posts to the dedicated
+        // /integrations/silentguard/enable or /disable endpoint so the
+        // intent is explicit on the wire and the response carries the
+        // fresh status payload — saving a follow-up /summary call. The
+        // older /settings POST path is kept as a fallback for browsers
+        // that have a stale page open while the server is being
+        // updated; both endpoints are auth-gated and only mutate the
+        // per-user setting.
         if (silentGuardToggleInFlight) return;
         const btn = document.getElementById("silentguard-toggle-btn");
         if (!btn) return;
         silentGuardToggleInFlight = true;
         btn.disabled = true;
         const newVal = !lastSilentGuardUserEnabled;
+        const headline = document.getElementById("settings-silentguard-headline");
+        if (newVal && headline) {
+            headline.textContent = t("silentguard_enabling");
+        }
+        const path = newVal
+            ? "/integrations/silentguard/enable"
+            : "/integrations/silentguard/disable";
         try {
-            const res = await fetch("/settings", {
+            let res = await fetch(path, {
                 method: "POST",
                 credentials: "include",
-                headers: {
-                    "Content-Type": "application/json",
-                    "Authorization": `Bearer ${token}`,
-                },
-                body: JSON.stringify({ silentguard_enabled: newVal }),
+                headers: { "Authorization": `Bearer ${token}` },
             });
             if (!res.ok) {
-                applySilentGuardCheckFailedUI();
+                // Backwards-compatible fallback: older deploys may not
+                // have the dedicated endpoint yet. Persist via the
+                // shared /settings POST and then re-pull the summary.
+                res = await fetch("/settings", {
+                    method: "POST",
+                    credentials: "include",
+                    headers: {
+                        "Content-Type": "application/json",
+                        "Authorization": `Bearer ${token}`,
+                    },
+                    body: JSON.stringify({ silentguard_enabled: newVal }),
+                });
+                if (!res.ok) {
+                    applySilentGuardCheckFailedUI();
+                    return;
+                }
+                applySilentGuardToggleUI(newVal);
+                await refreshSilentGuardStatus();
                 return;
             }
-            applySilentGuardToggleUI(newVal);
-            await refreshSilentGuardStatus();
+            // Dedicated endpoints return the same payload shape as
+            // /summary, so we can paint without a second round-trip.
+            try {
+                const data = await res.json();
+                lastSilentGuardSummary = data;
+                applySilentGuardSummaryUI(data);
+            } catch (parseErr) {
+                applySilentGuardToggleUI(newVal);
+                await refreshSilentGuardStatus();
+            }
         } catch (e) {
             applySilentGuardCheckFailedUI();
         } finally {
@@ -5054,9 +5152,42 @@
         }
     }
 
-    // Wire the Refresh and Toggle buttons explicitly once the script
-    // runs (the script tag sits at the end of <body>, so the buttons
-    // already exist in the DOM at this point). An inline
+    async function retrySilentGuardStartup() {
+        // Re-probe (and, when safely configured, re-attempt the
+        // bounded systemctl --user start documented in the lifecycle
+        // helper). No-op silently if the user has not opted in — the
+        // backend already gates on that.
+        if (silentGuardRetryInFlight) return;
+        const btn = document.getElementById("silentguard-retry-btn");
+        const headline = document.getElementById("settings-silentguard-headline");
+        silentGuardRetryInFlight = true;
+        if (btn) btn.disabled = true;
+        if (headline) headline.textContent = t("silentguard_loading");
+        setSilentGuardCardState("loading");
+        try {
+            const res = await fetch("/integrations/silentguard/retry", {
+                method: "POST",
+                credentials: "include",
+                headers: { "Authorization": `Bearer ${token}` },
+            });
+            if (!res.ok) {
+                applySilentGuardCheckFailedUI();
+                return;
+            }
+            const data = await res.json();
+            lastSilentGuardSummary = data;
+            applySilentGuardSummaryUI(data);
+        } catch (e) {
+            applySilentGuardCheckFailedUI();
+        } finally {
+            silentGuardRetryInFlight = false;
+            if (btn) btn.disabled = false;
+        }
+    }
+
+    // Wire the Refresh, Retry, and Toggle buttons explicitly once the
+    // script runs (the script tag sits at the end of <body>, so the
+    // buttons already exist in the DOM at this point). An inline
     // ``onclick=...`` would be silently dropped by any future stricter
     // CSP, and makes the click handler invisible to test fixtures that
     // load this page without executing inline attributes — the
@@ -5076,6 +5207,14 @@
         if (toggleBtn) {
             toggleBtn.addEventListener("click", () => {
                 toggleSilentGuardEnabled().catch(() => {
+                    applySilentGuardCheckFailedUI();
+                });
+            });
+        }
+        const retryBtn = document.getElementById("silentguard-retry-btn");
+        if (retryBtn) {
+            retryBtn.addEventListener("click", () => {
+                retrySilentGuardStartup().catch(() => {
                     applySilentGuardCheckFailedUI();
                 });
             });

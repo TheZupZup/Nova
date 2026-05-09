@@ -973,15 +973,78 @@ The Settings card's contract with the user is exactly:
 
 | `state`           | Headline                                  | Action                                            |
 | ----------------- | ----------------------------------------- | ------------------------------------------------- |
-| `disabled`        | "SilentGuard integration is off."         | Show the on/off toggle.                           |
-| `connected`       | "SilentGuard connected in read-only mode." | Refresh button. (Read-only is stated explicitly.) |
-| `offline`         | "SilentGuard is not running."             | Refresh; *Start SilentGuard* if configured; setup link otherwise. |
+| `disabled`        | "SilentGuard integration is off."         | Show the *Enable SilentGuard* button.             |
+| `connected`       | "SilentGuard connected in read-only mode." | Refresh button + optional *Disable*. (Read-only is stated explicitly.) |
+| `offline`         | "SilentGuard is not running."             | *Retry* button; *Disable* button; setup link otherwise. |
 | `not_configured`  | "SilentGuard is not configured here."     | "View setup instructions" link.                   |
 
 The card carries one line of subtext under each headline making the
 read-only nature explicit (e.g. *"Nova reads from SilentGuard. Nova
 does not enforce rules."*) so a user who scrolls into the card
 cannot mistake it for a control surface.
+
+### 8.6 The Enable / Disable / Retry endpoints
+
+The Settings card's primary action is a state-driven button. Each
+state has a dedicated, auth-gated endpoint so the UI never has to
+guess what the next call should do, and so that an audit reading the
+HTTP log can tell *exactly* why a particular request happened.
+
+| Method | Path                                       | Effect                                                                                |
+| ------ | ------------------------------------------ | ------------------------------------------------------------------------------------- |
+| POST   | `/integrations/silentguard/enable`         | Persists per-user `silentguard_enabled = true`; runs the lifecycle helper once.       |
+| POST   | `/integrations/silentguard/disable`        | Persists per-user `silentguard_enabled = false`. Does **not** stop the SilentGuard service. |
+| POST   | `/integrations/silentguard/retry`          | Re-runs the lifecycle helper (probe, and — only when the operator opted into the safe `systemd-user` start mode — the same single `systemctl --user start <unit>` documented elsewhere). No setting is mutated. |
+
+All three endpoints return the same payload shape as
+`GET /integrations/silentguard/summary`:
+
+```json
+{
+  "lifecycle": { "state": "...", "enabled": true,
+                 "auto_start": false, "start_mode": "...",
+                 "unit": "...", "message": "..." },
+  "counts":    { "alerts": 0, "blocked": 0, "trusted": 0, "connections": 0 } | null,
+  "host_enabled": true
+}
+```
+
+So the UI can paint the new state in a single round-trip after the
+user clicks Enable / Disable / Retry — no follow-up `/summary` call
+is needed.
+
+Safety contract (unchanged):
+
+* Every endpoint requires an authenticated session.
+* Only the per-user `silentguard_enabled` setting is mutated, and
+  only by `/enable` and `/disable`. `/retry` mutates nothing.
+* The lifecycle helper is the only code path allowed to spawn a
+  process. It runs `systemctl --user start <validated-unit>` only
+  when the host operator opted in via `NOVA_SILENTGUARD_AUTO_START`
+  *and* `NOVA_SILENTGUARD_START_MODE=systemd-user`. No `sudo`, no
+  `pkexec`, no firewall command, no shell interpretation, no command
+  sourced from the request body.
+* The endpoints take no body. The frontend sends none, and any body
+  that is sent is silently ignored — there is nothing for an
+  attacker to smuggle in.
+* Disable does **not** stop the SilentGuard service. Stopping a
+  security tool is the user's responsibility through SilentGuard's
+  own UI or `systemctl --user stop <unit>`. Nova never offers that
+  affordance.
+
+The Settings card surfaces the state-driven actions like this:
+
+| `state`           | Headline                                  | Primary action            | Secondary actions       |
+| ----------------- | ----------------------------------------- | ------------------------- | ----------------------- |
+| `disabled`        | "SilentGuard integration disabled."       | *Enable SilentGuard*      | —                       |
+| `starting`        | "Starting SilentGuard…"                   | *Disable*                 | (button briefly busy)   |
+| `connected`       | "SilentGuard connected in read-only mode." | *Disable*                 | *Refresh*               |
+| `unavailable`     | "SilentGuard unavailable."                | *Disable*                 | *Retry*                 |
+| `could_not_start` | "Could not start SilentGuard."            | *Disable*                 | *Retry*                 |
+
+There is still no background polling. The fetch trigger set is
+exactly: opening Settings, clicking Enable/Disable/Retry, clicking
+Refresh. Nothing else.
 
 ---
 
@@ -1244,6 +1307,19 @@ auto-retries. The user retries by clicking the button again.
 
 ### 11.1 In scope
 
+- The user-facing **Enable / Disable / Retry flow in Nova Settings**
+  (see §8.6). The Settings card carries a calm, state-driven primary
+  action button — *Enable SilentGuard* when the user hasn't opted in,
+  *Disable* once they have — plus an optional *Retry* button when the
+  integration is enabled but unreachable. Each button posts to a
+  dedicated, auth-gated endpoint (`/enable`, `/disable`, `/retry`)
+  that returns the same `{lifecycle, counts, host_enabled}` payload
+  the existing `/summary` endpoint serves, so the UI repaints in a
+  single round-trip. Persistence rides the existing per-user
+  `silentguard_enabled` setting in `user_settings`, so the toggle
+  survives restarts. Disable does **not** stop the SilentGuard
+  service — Nova still does not offer a stop affordance for an
+  external security tool.
 - The `SilentGuardConnector` Protocol and dataclasses.
 - A `FileConnector` reading both `~/.silentguard_memory.json` and
   `~/.silentguard_rules.json`.

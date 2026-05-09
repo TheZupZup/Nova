@@ -729,6 +729,39 @@ def silentguard_lifecycle(user: CurrentUser = Depends(get_current_user)):
     return _ensure_silentguard_running().as_dict()
 
 
+def _silentguard_summary_payload(user: CurrentUser) -> dict:
+    """Build the SilentGuard Settings card payload for ``user``.
+
+    Shared by the GET ``/summary`` read path and the POST
+    ``/enable`` / ``/disable`` / ``/retry`` user-action endpoints so
+    every caller surfaces the same shape (``lifecycle``, ``counts``,
+    ``host_enabled``) without re-deriving the gating logic. The
+    function is read-only with the single carve-out documented in
+    :func:`core.security.lifecycle.ensure_running` — when the host
+    operator has opted into ``systemd-user`` auto-start, the lifecycle
+    helper may run a single ``systemctl --user start <unit>``.
+    """
+    host_enabled = _silentguard_lifecycle.host_enabled()
+    if not _silentguard_integration.is_enabled(user.id):
+        return {
+            "lifecycle": _silentguard_lifecycle.disabled_status().as_dict(),
+            "counts": None,
+            "host_enabled": host_enabled,
+        }
+    lifecycle_status = _ensure_silentguard_running()
+    counts = None
+    if lifecycle_status.state == _silentguard_lifecycle.STATE_CONNECTED:
+        try:
+            counts = _SilentGuardProvider().get_summary_counts()
+        except Exception:  # pragma: no cover — defensive belt-and-braces
+            counts = None
+    return {
+        "lifecycle": lifecycle_status.as_dict(),
+        "counts": counts,
+        "host_enabled": host_enabled,
+    }
+
+
 @app.get("/integrations/silentguard/summary")
 def silentguard_summary(user: CurrentUser = Depends(get_current_user)):
     """SilentGuard Settings status summary for the caller.
@@ -768,25 +801,63 @@ def silentguard_summary(user: CurrentUser = Depends(get_current_user)):
     polling — the UI calls this once per Settings open / Refresh
     click, mirroring the trigger set documented in the roadmap.
     """
-    host_enabled = _silentguard_lifecycle.host_enabled()
-    if not _silentguard_integration.is_enabled(user.id):
-        return {
-            "lifecycle": _silentguard_lifecycle.disabled_status().as_dict(),
-            "counts": None,
-            "host_enabled": host_enabled,
-        }
-    lifecycle_status = _ensure_silentguard_running()
-    counts = None
-    if lifecycle_status.state == _silentguard_lifecycle.STATE_CONNECTED:
-        try:
-            counts = _SilentGuardProvider().get_summary_counts()
-        except Exception:  # pragma: no cover — defensive belt-and-braces
-            counts = None
-    return {
-        "lifecycle": lifecycle_status.as_dict(),
-        "counts": counts,
-        "host_enabled": host_enabled,
-    }
+    return _silentguard_summary_payload(user)
+
+
+@app.post("/integrations/silentguard/enable")
+def silentguard_enable(user: CurrentUser = Depends(get_current_user)):
+    """Persist ``silentguard_enabled=true`` for the caller.
+
+    The Settings UI's "Enable SilentGuard" button calls this endpoint.
+    After persisting the per-user opt-in, the lifecycle helper is
+    invoked once so an operator who has also configured the safe
+    ``systemd-user`` auto-start path sees the local read-only API
+    come up immediately. The response shape is identical to
+    ``GET /integrations/silentguard/summary`` so the UI can paint the
+    new state without a follow-up request.
+
+    Safety contract (unchanged from the rest of the integration):
+
+      * only the per-user ``silentguard_enabled`` setting is mutated;
+      * lifecycle handling is delegated to
+        :func:`core.security.lifecycle.ensure_running`, which is the
+        only code path allowed to spawn a process and which already
+        forbids ``sudo`` / firewall actions / shell interpretation;
+      * no payload is read from the request — there is nothing for the
+        client to smuggle in.
+    """
+    save_user_setting(user.id, "silentguard_enabled", "true")
+    return _silentguard_summary_payload(user)
+
+
+@app.post("/integrations/silentguard/disable")
+def silentguard_disable(user: CurrentUser = Depends(get_current_user)):
+    """Persist ``silentguard_enabled=false`` for the caller.
+
+    Stops Nova from using the SilentGuard integration for this user.
+    The local SilentGuard service itself is **not** stopped — Nova
+    deliberately does not offer a stop control for an external
+    security tool (see the roadmap §8.4). Returns the same payload
+    shape as ``/summary`` so the UI can repaint the disabled state in
+    a single round-trip.
+    """
+    save_user_setting(user.id, "silentguard_enabled", "false")
+    return _silentguard_summary_payload(user)
+
+
+@app.post("/integrations/silentguard/retry")
+def silentguard_retry(user: CurrentUser = Depends(get_current_user)):
+    """Re-probe SilentGuard for the caller.
+
+    Backs the "Retry" button surfaced by the Settings card when the
+    integration is enabled but unreachable. No setting is mutated:
+    the call simply re-runs the lifecycle helper, which probes the
+    read-only API and — only when the operator has opted into the
+    safe ``systemd-user`` start mode — may attempt the same single
+    ``systemctl --user start <unit>`` ``ensure_running`` already
+    documents. Returns the same payload as ``/summary``.
+    """
+    return _silentguard_summary_payload(user)
 
 
 # ── VOICE / TTS ─────────────────────────────────────────────────────
