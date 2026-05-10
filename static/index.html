@@ -543,17 +543,17 @@
         #messages {
             flex: 1;
             overflow-y: auto;
-            padding: 28px 26px 16px;
+            padding: 24px 26px 14px;
             display: flex;
             flex-direction: column;
-            gap: 18px;
+            gap: 14px;
             scroll-behavior: smooth;
         }
 
         .message-row {
             display: flex;
             flex-direction: column;
-            gap: 6px;
+            gap: 4px;
             animation: fadeUp 360ms var(--ease) both;
         }
 
@@ -576,9 +576,9 @@
 
         .message {
             max-width: 75%;
-            padding: 12px 16px;
+            padding: 10px 14px;
             border-radius: var(--r-lg);
-            line-height: 1.65;
+            line-height: 1.55;
             white-space: pre-wrap;
             word-break: break-word;
             font-size: 0.92rem;
@@ -611,6 +611,28 @@
         @keyframes pulse {
             0%, 100% { opacity: 0.95; }
             50% { opacity: 0.45; }
+        }
+
+        /* ── STREAMING CARET ──
+           A small, calm cursor appended at the end of an assistant bubble
+           while tokens are arriving. It vanishes once the response is
+           rendered as markdown, so the final message looks identical to a
+           non-streamed one. The caret never re-flows the layout because
+           it is inline and its dimensions match the surrounding text. */
+        .streaming-caret {
+            display: inline-block;
+            width: 6px;
+            height: 0.95em;
+            margin-left: 2px;
+            vertical-align: text-bottom;
+            background: var(--cyan-dim);
+            border-radius: 1px;
+            opacity: 0.85;
+            animation: caret-blink 1.05s steps(2, end) infinite;
+        }
+
+        @keyframes caret-blink {
+            50% { opacity: 0; }
         }
 
         #empty-state {
@@ -1064,19 +1086,28 @@
             .message-actions { max-width: 65%; }
         }
 
-        /* ── MARKDOWN ── */
+        /* ── MARKDOWN ──
+           Markdown spacing inside Nova bubbles is intentionally tight: the
+           bubble itself already has comfortable padding and the
+           1.55 line-height makes prose readable without large block gaps.
+           Headings, paragraphs and lists collapse first-/last-child margins
+           so the bubble never reserves empty vertical space at the edges. */
         .message.nova h1, .message.nova h2, .message.nova h3 {
             color: var(--text);
-            margin: 12px 0 6px;
+            margin: 10px 0 4px;
             font-weight: 600;
             letter-spacing: -0.005em;
         }
         .message.nova h1 { font-size: 1.15rem; }
         .message.nova h2 { font-size: 1.02rem; }
         .message.nova h3 { font-size: 0.95rem; color: var(--cyan); }
-        .message.nova p { margin: 6px 0; }
-        .message.nova ul, .message.nova ol { padding-left: 22px; margin: 6px 0; }
-        .message.nova li { margin: 3px 0; }
+        .message.nova p { margin: 4px 0; }
+        .message.nova ul, .message.nova ol { padding-left: 20px; margin: 4px 0; }
+        .message.nova li { margin: 2px 0; }
+        .message.nova > div > *:first-child,
+        .message.nova > *:first-child { margin-top: 0; }
+        .message.nova > div > *:last-child,
+        .message.nova > *:last-child { margin-bottom: 0; }
         .message.nova code {
             background: rgba(124, 197, 212, 0.10);
             padding: 1px 6px;
@@ -1087,11 +1118,11 @@
         }
         .message.nova pre {
             background: var(--bg);
-            padding: 14px 14px;
-            padding-top: 34px;
+            padding: 12px 14px;
+            padding-top: 32px;
             border-radius: var(--r-md);
             overflow-x: auto;
-            margin: 10px 0;
+            margin: 8px 0;
             border: 1px solid var(--border);
             position: relative;
             box-shadow: var(--shadow-sm);
@@ -1168,8 +1199,8 @@
             display: flex;
             align-items: center;
             gap: 2px;
-            padding: 8px 4px 2px;
-            margin-top: 4px;
+            padding: 6px 4px 2px;
+            margin-top: 2px;
             width: 100%;
             max-width: 75%;
             position: relative;
@@ -3250,6 +3281,7 @@
     let currentImage = null;
     let activeChatController = null;
     let activeThinkingRow = null;
+    let activeStreamBubble = null;
     let userCancelledChat = false;
     let allConversations = [];
     let convSearchQuery = "";
@@ -3339,6 +3371,13 @@
             activeThinkingRow.remove();
         }
         activeThinkingRow = null;
+        // Drop the in-flight streaming bubble — partial output should
+        // never be left mounted without an action row, and the server
+        // discards the unfinished reply on disconnect.
+        if (activeStreamBubble && activeStreamBubble.row.isConnected) {
+            activeStreamBubble.row.remove();
+        }
+        activeStreamBubble = null;
         appendStoppedNotice();
         isThinking = false;
         activeChatController = null;
@@ -4903,11 +4942,123 @@
         return bubble;
     }
 
+    // Append an empty Nova bubble that the streaming reader will fill in
+    // token-by-token. Action buttons (copy, read-aloud, feedback) are
+    // deliberately NOT attached here — they only appear once the stream
+    // completes successfully, so they can never be clicked against an
+    // incomplete response. The returned object exposes the helpers the
+    // caller needs to push tokens and finalise the message.
+    function createStreamingAssistantBubble() {
+        const emptyState = document.getElementById("empty-state");
+        if (emptyState) emptyState.remove();
+
+        const messagesEl = document.getElementById("messages");
+        const row = document.createElement("div");
+        row.className = "message-row nova";
+
+        const label = document.createElement("div");
+        label.className = "message-label";
+        label.textContent = "Nova";
+
+        const bubble = document.createElement("div");
+        bubble.className = "message nova streaming";
+        bubble.dataset.rawText = "";
+
+        // Raw text node we append plain tokens to. Markdown is only
+        // resolved once the stream completes — rendering on every
+        // token would re-parse the whole reply on each chunk and
+        // produce flickering, especially around half-written fences.
+        const textNode = document.createTextNode("");
+        bubble.appendChild(textNode);
+
+        const caret = document.createElement("span");
+        caret.className = "streaming-caret";
+        caret.setAttribute("aria-hidden", "true");
+        bubble.appendChild(caret);
+
+        row.appendChild(label);
+        row.appendChild(bubble);
+        messagesEl.appendChild(row);
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+
+        let buffer = "";
+
+        return {
+            row,
+            bubble,
+            appendDelta(chunk) {
+                buffer += chunk;
+                textNode.data = buffer;
+                bubble.dataset.rawText = buffer;
+                // Auto-scroll only when the user is already pinned to
+                // the bottom; otherwise leave their scroll position
+                // alone so they can read earlier messages while Nova
+                // is still writing.
+                if (isScrolledNearBottom(messagesEl)) {
+                    messagesEl.scrollTop = messagesEl.scrollHeight;
+                }
+            },
+            reset() {
+                buffer = "";
+                textNode.data = "";
+                bubble.dataset.rawText = "";
+            },
+            finalise(model) {
+                bubble.classList.remove("streaming");
+                if (caret.parentNode) caret.parentNode.removeChild(caret);
+
+                if (model) {
+                    row.dataset.model = model;
+                    const badge = document.getElementById("model-badge");
+                    if (badge) {
+                        badge.textContent = "Nova";
+                        badge.dataset.model = model;
+                    }
+                }
+
+                if (!buffer) return;
+
+                // Swap raw text for rendered markdown in a single pass
+                // so the final layout matches a non-streamed reply.
+                bubble.removeChild(textNode);
+                const rendered = document.createElement("div");
+                rendered.innerHTML = marked.parse(buffer);
+                bubble.appendChild(rendered);
+                attachCodeBlockCopyButtons(rendered);
+
+                buildAssistantActions(row, bubble, buffer);
+                if (isScrolledNearBottom(messagesEl)) {
+                    messagesEl.scrollTop = messagesEl.scrollHeight;
+                }
+            },
+            getBuffer() {
+                return buffer;
+            },
+        };
+    }
+
+    function isScrolledNearBottom(el) {
+        // 80px tolerance: typical token-by-token growth never exceeds
+        // a couple of lines, so we'd rather stay pinned than fight a
+        // user who scrolled up intentionally.
+        return el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    }
+
     // ── CHAT ──
+    //
+    // sendMessage() consumes the NDJSON stream from /chat/stream so the
+    // user sees Nova writing token-by-token. The thinking bubble stays
+    // visible until the first chunk arrives, then is replaced by a
+    // streaming bubble that the reader fills in.
+    //
+    // The action row (like / dislike / copy / read-aloud) is built only
+    // after the stream's `done` event, so partial responses are never
+    // copyable or readable-aloud. On cancellation we discard the
+    // streaming bubble entirely and show the existing stopped-notice
+    // for visual parity with the pre-streaming UX.
     async function sendMessage() {
         if (isThinking) return;
         const input = document.getElementById("user-input");
-        const btn = document.getElementById("send-btn");
         const text = input.value.trim();
         if (!text && !currentImage) return;
 
@@ -4930,9 +5081,10 @@
         messagesEl.scrollTop = messagesEl.scrollHeight;
         activeThinkingRow = thinkingRow;
         activeChatController = new AbortController();
+        activeStreamBubble = null;
 
         try {
-            const res = await fetch("/chat", {
+            const res = await fetch("/chat/stream", {
                 method: "POST",
                 headers: {
                     "Content-Type": "application/json",
@@ -4948,33 +5100,44 @@
                 signal: activeChatController.signal
             });
 
-            if (thinkingRow.isConnected) {
-                thinkingRow.remove();
-            }
-            activeThinkingRow = null;
-
             if (res.status === 401) { logout(); return; }
+            if (!res.ok || !res.body) {
+                // Surface server-side policy denials etc. as a plain
+                // assistant message rather than dropping the request
+                // on the floor.
+                if (thinkingRow.isConnected) thinkingRow.remove();
+                activeThinkingRow = null;
+                let detail = "";
+                try { detail = (await res.json())?.detail || ""; } catch {}
+                appendMessage(
+                    "nova",
+                    detail || "Ollama is unreachable. Make sure Ollama is running, then try again."
+                );
+                return;
+            }
 
-            const data = await res.json();
-            currentConvId = data.conversation_id;
-            // If the user pressed Stop while the response was in flight,
-            // the stopped-notice has already been shown; suppress the
-            // response render so the two visuals don't fight. The reply
-            // is still persisted server-side — see issue #96 for true
-            // backend cancellation.
-            if (!userCancelledChat) {
-                appendMessage("nova", data.response, data.model);
+            const result = await consumeChatStream(res.body, thinkingRow);
+
+            if (!userCancelledChat && result.conversationId) {
+                currentConvId = result.conversationId;
+            }
+            if (result.errored && !userCancelledChat) {
+                appendMessage("nova", result.errorDetail
+                    || "Ollama is unreachable. Make sure Ollama is running, then try again.");
             }
             loadConversations();
         } catch (e) {
-            if (thinkingRow.isConnected) {
-                thinkingRow.remove();
-            }
+            if (thinkingRow.isConnected) thinkingRow.remove();
             activeThinkingRow = null;
+            if (activeStreamBubble && activeStreamBubble.row.isConnected
+                && !activeStreamBubble.getBuffer()) {
+                // Empty streaming bubble — drop it, it would only show
+                // as a stray Nova label with no content.
+                activeStreamBubble.row.remove();
+            }
             if (e?.name === "AbortError") {
-                // The stopMessage() handler already rendered the stopped
-                // notice; nothing more to do here. We deliberately do not
-                // claim the backend computation was cancelled — see #96.
+                // stopMessage() already rendered the stopped notice and
+                // pulled the streaming bubble. Nothing left to do.
             } else {
                 appendMessage("nova", "Ollama is unreachable. Make sure Ollama is running, then try again.");
             }
@@ -4982,12 +5145,131 @@
             isThinking = false;
             userCancelledChat = false;
             activeChatController = null;
+            activeStreamBubble = null;
             setSendButtonToSend();
             searchEnabled = false;
             document.getElementById("search-btn").classList.remove("active");
             removeImage();
             input.focus();
         }
+    }
+
+    // Reads an NDJSON stream of {type, ...} events from the backend and
+    // drives the streaming bubble. Returns a small summary the caller
+    // uses to decide post-stream actions (refresh sidebar, surface
+    // errors). Resolves cleanly on `done`, `error`, or end-of-stream;
+    // throws only on AbortError (handled upstream).
+    async function consumeChatStream(body, thinkingRow) {
+        const reader = body.getReader();
+        const decoder = new TextDecoder("utf-8");
+        let pending = "";
+
+        const result = {
+            conversationId: null,
+            model: null,
+            errored: false,
+            errorDetail: "",
+            completed: false,
+        };
+
+        const handleEvent = (event) => {
+            if (!event || typeof event !== "object") return;
+            switch (event.type) {
+                case "meta": {
+                    if (event.conversation_id) {
+                        result.conversationId = event.conversation_id;
+                    }
+                    if (event.model) result.model = event.model;
+                    break;
+                }
+                case "delta": {
+                    if (userCancelledChat) return;
+                    if (!activeStreamBubble) {
+                        if (thinkingRow.isConnected) thinkingRow.remove();
+                        activeThinkingRow = null;
+                        activeStreamBubble = createStreamingAssistantBubble();
+                    }
+                    activeStreamBubble.appendDelta(event.content || "");
+                    break;
+                }
+                case "replace": {
+                    if (activeStreamBubble) activeStreamBubble.reset();
+                    break;
+                }
+                case "done": {
+                    result.completed = true;
+                    if (event.conversation_id) {
+                        result.conversationId = event.conversation_id;
+                    }
+                    if (event.model) result.model = event.model;
+                    if (userCancelledChat) break;
+                    if (!activeStreamBubble) {
+                        // No deltas reached us (e.g. short-circuit reply
+                        // delivered as a single payload, or empty
+                        // response). Promote the thinking row into a
+                        // bubble now so finalise() can settle layout.
+                        if (thinkingRow.isConnected) thinkingRow.remove();
+                        activeThinkingRow = null;
+                        activeStreamBubble = createStreamingAssistantBubble();
+                    }
+                    activeStreamBubble.finalise(result.model);
+                    break;
+                }
+                case "error": {
+                    result.errored = true;
+                    result.errorDetail = event.detail || "";
+                    if (activeStreamBubble && activeStreamBubble.row.isConnected
+                        && !activeStreamBubble.getBuffer()) {
+                        activeStreamBubble.row.remove();
+                    }
+                    break;
+                }
+                default:
+                    break;
+            }
+        };
+
+        // Decoded line buffer. We process newline-delimited JSON so a
+        // single chunk may yield multiple events and a partial line is
+        // carried across chunks until its terminating '\n' arrives.
+        while (true) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            pending += decoder.decode(value, { stream: true });
+
+            let nl;
+            while ((nl = pending.indexOf("\n")) !== -1) {
+                const line = pending.slice(0, nl).trim();
+                pending = pending.slice(nl + 1);
+                if (!line) continue;
+                try {
+                    handleEvent(JSON.parse(line));
+                } catch {
+                    // Malformed line — skip silently rather than break
+                    // the whole conversation. The stream usually only
+                    // contains well-formed JSON we emitted ourselves.
+                }
+            }
+        }
+
+        // Flush any trailing buffered text once the stream is done.
+        const tail = (pending + decoder.decode()).trim();
+        if (tail) {
+            try { handleEvent(JSON.parse(tail)); } catch {}
+        }
+
+        // If the stream ended without a `done` event and without an
+        // explicit error, treat what we have as the final reply so the
+        // bubble still settles into its final layout (no caret, with
+        // actions). The server would also have persisted nothing in
+        // that case — matches existing /chat behaviour on connection
+        // drop mid-reply.
+        if (!result.completed && !result.errored && activeStreamBubble && !userCancelledChat) {
+            activeStreamBubble.finalise(result.model);
+        }
+        if (thinkingRow.isConnected) thinkingRow.remove();
+        activeThinkingRow = null;
+        return result;
     }
 
     // ── SETTINGS ──

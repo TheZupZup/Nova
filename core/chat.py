@@ -1,4 +1,5 @@
 import logging
+from typing import Iterator
 import httpx
 import ollama
 from config import NOVA_SYSTEM_PROMPT, CHAT_HISTORY_LIMIT, MODELS
@@ -23,6 +24,42 @@ from memory.store import save_memory as save_natural_memory
 logger = logging.getLogger(__name__)
 
 OLLAMA_UNAVAILABLE = "Ollama is unreachable. Make sure Ollama is running, then try again."
+
+# Phrases that, when present in a first-pass reply, mean Nova does not
+# actually know the answer. The non-streaming chat() retries with web
+# search; chat_stream() emits a `replace` event then re-streams. Kept
+# as a module-level tuple so both code paths stay in lockstep.
+UNCERTAINTY_TRIGGERS = (
+    "je ne sais pas", "je n'ai pas", "je n'ai aucune",
+    "je ne peux pas", "je ne dispose pas", "je n'ai pas accès",
+    "i don't know", "i don't have", "i cannot",
+    "je ne trouve pas", "aucune information",
+    "je ne suis pas sûr", "je ne suis pas certain",
+)
+
+
+def _reply_is_uncertain(reply: str) -> bool:
+    """True iff `reply` contains one of the uncertainty trigger phrases."""
+    lowered = reply.lower()
+    return any(trigger in lowered for trigger in UNCERTAINTY_TRIGGERS)
+
+
+def _iter_content_chunks(stream) -> Iterator[str]:
+    """Yield non-empty `message.content` strings from an Ollama stream.
+
+    Ollama's chat-stream generator yields dicts shaped like
+    ``{"message": {"content": "..."}, "done": bool}``. Some intermediate
+    events have empty content (e.g. metadata frames) and the final
+    ``done`` event also carries a synthetic empty content — skipping
+    empties keeps the wire format tidy without affecting correctness.
+    """
+    for event in stream:
+        if not isinstance(event, dict):
+            continue
+        msg = event.get("message") or {}
+        chunk = msg.get("content") or ""
+        if chunk:
+            yield chunk
 
 MEMORY_EXTRACTION_PROMPT = """Analyse cette conversation et extrait UNIQUEMENT les informations personnelles importantes sur l'utilisateur.
 
@@ -230,15 +267,7 @@ def chat(history: list[dict], user_input: str, memories: list[dict], user_id: in
         reply = response["message"]["content"]
 
         # Si Nova sait pas → cherche sur le web automatiquement
-        uncertainty_triggers = [
-            "je ne sais pas", "je n'ai pas", "je n'ai aucune",
-            "je ne peux pas", "je ne dispose pas", "je n'ai pas accès",
-            "i don't know", "i don't have", "i cannot",
-            "je ne trouve pas", "aucune information",
-            "je ne suis pas sûr", "je ne suis pas certain",
-        ]
-
-        if policy.web_search_enabled and any(t in reply.lower() for t in uncertainty_triggers):
+        if policy.web_search_enabled and _reply_is_uncertain(reply):
             search_results = web_search(user_input)
             if search_results and "Aucun résultat" not in search_results:
                 messages = build_messages(history, user_input, memories, search_results, "search", personalization=personalization)
@@ -253,6 +282,176 @@ def chat(history: list[dict], user_input: str, memories: list[dict], user_id: in
     except (ollama.ResponseError, ConnectionError, httpx.HTTPError) as e:
         logger.warning("Ollama unreachable during chat: %s", e)
         return OLLAMA_UNAVAILABLE, MODELS["default"]
+
+
+def chat_stream(
+    history: list[dict],
+    user_input: str,
+    memories: list[dict],
+    user_id: int,
+    forced_model: str = None,
+    force_search: bool = False,
+    image: str = None,
+    policy: Policy | None = None,
+) -> Iterator[dict]:
+    """Generator twin of :func:`chat` that yields incremental events.
+
+    The shape mirrors what `/chat/stream` forwards to the browser:
+
+      ``{"type": "meta", "model": "..."}``      — first event, fixed model id
+      ``{"type": "delta", "content": "..."}``  — one or more text fragments
+      ``{"type": "replace"}``                   — clear bubble (uncertainty
+                                                  fallback only; followed by
+                                                  further `delta` events)
+      ``{"type": "done", "reply": "...",
+          "model": "..."}``                     — final event, full text
+      ``{"type": "error", "detail": "..."}``    — fatal, no `done` follows
+
+    Memory extraction runs after the stream completes, identical to the
+    non-streaming path. Callers are responsible for persisting the user
+    message + the final assistant reply once they have seen ``done``;
+    nothing is persisted on the `error` path.
+
+    The image / vision branch is **not** streamed — Ollama returns
+    vision results as a single response. We emit the full reply as one
+    ``delta`` followed by ``done`` so the wire format stays uniform.
+    """
+    if policy is None:
+        policy = ADMIN_POLICY
+
+    try:
+        # Image → vision model, no routing, no streaming.
+        if image:
+            logger.debug("Processing streaming-image request, encoded length=%d", len(image))
+            messages = build_image_messages(user_input, image)
+            response = client.chat(model=MODELS["default"], messages=messages)
+            reply = response["message"]["content"]
+            if policy.memory_save_enabled:
+                extract_and_save_memory(user_input or "image", reply, user_id)
+            yield {"type": "meta", "model": MODELS["default"]}
+            if reply:
+                yield {"type": "delta", "content": reply}
+            yield {"type": "done", "reply": reply, "model": MODELS["default"]}
+            return
+
+        model = forced_model if forced_model else route(user_input)
+        yield {"type": "meta", "model": model}
+
+        natural_mems = get_relevant_memories(user_input, user_id)
+        try:
+            personalization = get_personalization(user_id)
+        except Exception:
+            personalization = None
+
+        # Weather branch — single short reply, stream it.
+        if policy.weather_enabled:
+            weather_result = detect_weather_city(user_input)
+            if isinstance(weather_result, tuple):
+                lat, lon, city = weather_result
+                weather_data = get_weather(lat, lon, city)
+                messages = build_messages(
+                    history, user_input, memories, weather_data,
+                    "weather", personalization=personalization,
+                )
+                reply = yield from _stream_and_accumulate(model, messages)
+                yield {"type": "done", "reply": reply, "model": model}
+                return
+
+            if weather_result == "no_city" or weather_result == "multiple":
+                reply = "Quelle ville ?"
+                yield {"type": "delta", "content": reply}
+                yield {"type": "done", "reply": reply, "model": model}
+                return
+
+            if weather_result == "unknown_city":
+                reply = "Je n'ai pas accès à la météo pour cette ville."
+                yield {"type": "delta", "content": reply}
+                yield {"type": "done", "reply": reply, "model": model}
+                return
+
+        # SilentGuard read-only feed — same gating as the non-streaming path.
+        if is_security_query(user_input):
+            security_data = silentguard_integration.recent_events_summary(user_id)
+            if security_data:
+                messages = build_messages(
+                    history, user_input, memories, security_data,
+                    "security", personalization=personalization,
+                )
+                reply = yield from _stream_and_accumulate(model, messages)
+                yield {"type": "done", "reply": reply, "model": model}
+                return
+
+        # Forced or auto-detected web search.
+        if policy.web_search_enabled and (force_search or should_search(user_input)):
+            search_results = web_search(user_input)
+            messages = build_messages(
+                history, user_input, memories, search_results,
+                "search", personalization=personalization,
+            )
+            reply = yield from _stream_and_accumulate(model, messages)
+            yield {"type": "done", "reply": reply, "model": model}
+            return
+
+        # Regular chat path — stream the first pass.
+        messages = build_messages(
+            history, user_input, memories,
+            natural_memories=natural_mems, personalization=personalization,
+        )
+        reply = yield from _stream_and_accumulate(model, messages)
+
+        # Uncertainty fallback (same trigger set as the non-streaming
+        # path). We clear the bubble via `replace` then stream the
+        # search-augmented retry so the user only ends up reading the
+        # search answer, not "I don't know" + the answer.
+        if policy.web_search_enabled and _reply_is_uncertain(reply):
+            search_results = web_search(user_input)
+            if search_results and "Aucun résultat" not in search_results:
+                yield {"type": "replace"}
+                messages = build_messages(
+                    history, user_input, memories, search_results,
+                    "search", personalization=personalization,
+                )
+                reply = yield from _stream_and_accumulate(model, messages)
+
+        if policy.memory_save_enabled:
+            extract_and_save_memory(user_input, reply, user_id)
+            _extract_and_save_natural_memories(user_input, user_id)
+
+        yield {"type": "done", "reply": reply, "model": model}
+
+    except (ollama.ResponseError, ConnectionError, httpx.HTTPError) as e:
+        logger.warning("Ollama unreachable during chat stream: %s", e)
+        yield {"type": "error", "detail": OLLAMA_UNAVAILABLE}
+
+
+def _stream_and_accumulate(model: str, messages: list[dict]) -> Iterator[dict]:
+    """Stream a single Ollama chat call and re-emit each token as `delta`.
+
+    The generator behaves as a coroutine: ``reply = yield from
+    _stream_and_accumulate(...)`` lets the caller inspect the full
+    concatenated text once the upstream stream is exhausted, while the
+    intermediate events propagate to whoever is iterating chat_stream.
+
+    Falls back gracefully if the installed Ollama client predates the
+    streaming kwarg — the request degrades to a single-shot reply
+    surfaced as one `delta`.
+    """
+    parts: list[str] = []
+    try:
+        stream = client.chat(model=model, messages=messages, stream=True)
+    except TypeError:
+        # Older ollama clients lacked the streaming kwarg. Fall back to a
+        # single, non-streaming call so the endpoint still works.
+        response = client.chat(model=model, messages=messages)
+        reply = response["message"]["content"]
+        if reply:
+            yield {"type": "delta", "content": reply}
+        return reply
+
+    for chunk in _iter_content_chunks(stream):
+        parts.append(chunk)
+        yield {"type": "delta", "content": chunk}
+    return "".join(parts)
 
 
 def get_history_limit() -> int:

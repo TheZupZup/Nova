@@ -1,9 +1,10 @@
+import json
 import time
 import secrets as _secrets
 import uvicorn
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Depends, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field, field_validator
@@ -18,7 +19,7 @@ from core.rate_limiter import check_login_rate_limit
 from apscheduler.schedulers.background import BackgroundScheduler
 from core.learner import learn_from_feeds
 from core.updater import check_and_update_models
-from core.chat import chat
+from core.chat import chat, chat_stream
 from core.memory_command import handle_manual_memory_command
 from core.session_continuity import build_session_continuity
 from core.memory import (
@@ -425,8 +426,20 @@ def remove_conversation(
     return {"ok": True}
 
 
-@app.post("/chat")
-def chat_endpoint(request: ChatRequest, user: CurrentUser = Depends(get_current_user)):
+def _chat_preflight(request: ChatRequest, user: CurrentUser):
+    """Shared validation + memory-command handling for chat endpoints.
+
+    Runs the family-controls / mode-access / daily-limit checks and
+    intercepts the small set of message strings that resolve without
+    ever reaching Ollama (manual memory commands, "forget X",
+    "what do you remember"). On a short-circuit match, returns a tuple
+    ``(reply, "system")``. Otherwise returns ``None`` and the caller
+    proceeds to invoke the model.
+
+    Raises ``HTTPException`` for any policy denial — the streaming
+    endpoint catches that before opening the chunked response so
+    failures surface as a clean HTTP error.
+    """
     policy = get_policy(user)
 
     denial = check_chat_request(
@@ -438,10 +451,6 @@ def chat_endpoint(request: ChatRequest, user: CurrentUser = Depends(get_current_
     if denial is not None:
         _raise_policy_denial(denial)
 
-    # Per-user / per-role mode access (#112). Layered on top of the base
-    # policy so a crafted request for a mode the admin has scoped away
-    # from this account is refused even if the family-controls row would
-    # otherwise allow it.
     access_denial = _model_access.check_mode_access(user, request.mode)
     if access_denial is not None:
         raise HTTPException(
@@ -452,8 +461,6 @@ def chat_endpoint(request: ChatRequest, user: CurrentUser = Depends(get_current_
     denial = enforce_daily_limit(policy, user.id)
     if denial is not None:
         _raise_policy_denial(denial)
-
-    memories = load_memories(user.id)
 
     msg_lower = request.message.lower().strip()
     is_manual_memory_command = any(
@@ -468,19 +475,28 @@ def chat_endpoint(request: ChatRequest, user: CurrentUser = Depends(get_current_
 
     reply = handle_manual_memory_command(request.message, user.id)
     if reply is not None:
-        return {"response": reply, "model": "system", "conversation_id": request.conversation_id}
+        return policy, reply, "system"
 
     if msg_lower.startswith("forget that ") or msg_lower.startswith("oublie que "):
         query = request.message.split(" ", 2)[2].strip()
         count = delete_memories_matching(query, user.id)
-        reply = f"Done. Removed {count} memory(ies) matching '{query}'." if count else "No matching memories found."
-        return {"response": reply, "model": "system", "conversation_id": request.conversation_id}
+        reply = (
+            f"Done. Removed {count} memory(ies) matching '{query}'."
+            if count else "No matching memories found."
+        )
+        return policy, reply, "system"
 
-    if msg_lower.startswith("forget everything about ") or msg_lower.startswith("oublie tout sur "):
+    if (
+        msg_lower.startswith("forget everything about ")
+        or msg_lower.startswith("oublie tout sur ")
+    ):
         query = request.message.split(" ", 3)[-1].strip()
         count = delete_memories_matching(query, user.id)
-        reply = f"Done. Removed {count} memory(ies) about '{query}'." if count else "No matching memories found."
-        return {"response": reply, "model": "system", "conversation_id": request.conversation_id}
+        reply = (
+            f"Done. Removed {count} memory(ies) about '{query}'."
+            if count else "No matching memories found."
+        )
+        return policy, reply, "system"
 
     if msg_lower in (
         "what do you remember about me?", "show my memories", "show memories",
@@ -489,45 +505,80 @@ def chat_endpoint(request: ChatRequest, user: CurrentUser = Depends(get_current_
     ):
         mems = list_natural_memories(user.id)
         if not mems:
-            return {"response": "I don't have any natural memories stored yet.", "model": "system", "conversation_id": request.conversation_id}
+            return policy, "I don't have any natural memories stored yet.", "system"
         lines = ["Here's what I remember about you:\n"]
         for m in mems:
             lines.append(f"- [{m.kind}/{m.topic}] {m.content}")
-        return {"response": "\n".join(lines), "model": "system", "conversation_id": request.conversation_id}
+        return policy, "\n".join(lines), "system"
 
+    return policy, None, None
+
+
+def _resolve_forced_model(request: ChatRequest, user: CurrentUser) -> str | None:
+    """Resolve the concrete model id (or None for auto-routing).
+
+    Mirrors the precedence rules from the non-streaming endpoint:
+    a per-user nova_model_enabled override beats the request mode,
+    which beats the auto fallback. Returns the resolved string or
+    ``None`` to leave the choice to ``core.router.route``.
+    """
+    nova_enabled = get_user_setting(user.id, "nova_model_enabled", "false") == "true"
+    if nova_enabled:
+        return get_user_setting(
+            user.id, "nova_model_name", NOVA_MODEL_DEFAULT_NAME
+        )
+    return MODE_MAP.get(request.mode)
+
+
+def _check_forced_model_access(forced_model: str | None, user: CurrentUser) -> None:
+    if forced_model is None:
+        return
+    model_denial = _model_access.check_model_access(user, forced_model)
+    if model_denial is not None:
+        raise HTTPException(
+            status_code=model_denial.status_code,
+            detail=model_denial.detail,
+        )
+
+
+def _resolve_conversation_id(request: ChatRequest, user: CurrentUser) -> int:
+    """Either validate ownership of an existing conversation or create one."""
     conversation_id = request.conversation_id
     if conversation_id:
         if not conversation_belongs_to(conversation_id, user.id):
             raise HTTPException(status_code=404, detail="Conversation introuvable.")
-    else:
-        conversation_id = create_conversation(request.message[:40], user.id)
+        return conversation_id
+    return create_conversation(request.message[:40], user.id)
+
+
+@app.post("/chat")
+def chat_endpoint(request: ChatRequest, user: CurrentUser = Depends(get_current_user)):
+    policy, short_reply, short_model = _chat_preflight(request, user)
+    if short_reply is not None:
+        return {
+            "response": short_reply,
+            "model": short_model,
+            "conversation_id": request.conversation_id,
+        }
+
+    memories = load_memories(user.id)
+    conversation_id = _resolve_conversation_id(request, user)
 
     history = [
         {"role": m["role"], "content": m["content"]}
         for m in load_conversation_messages(conversation_id, user.id) or []
     ]
 
-    nova_enabled = get_user_setting(user.id, "nova_model_enabled", "false") == "true"
-    if nova_enabled:
-        forced_model = get_user_setting(
-            user.id, "nova_model_name", NOVA_MODEL_DEFAULT_NAME
-        )
-    else:
-        forced_model = MODE_MAP.get(request.mode)
+    forced_model = _resolve_forced_model(request, user)
+    _check_forced_model_access(forced_model, user)
 
-    # Per-user / per-role model access (#112). Only validated when a
-    # concrete forced_model is resolved (mode=auto leaves it None and
-    # delegates to the router, which already picks from configured
-    # models). The mode check above is the primary control for auto.
-    if forced_model is not None:
-        model_denial = _model_access.check_model_access(user, forced_model)
-        if model_denial is not None:
-            raise HTTPException(
-                status_code=model_denial.status_code,
-                detail=model_denial.detail,
-            )
-
-    response, model_used = chat(history, request.message, memories, user.id, forced_model=forced_model, force_search=request.search, image=request.image, policy=policy)
+    response, model_used = chat(
+        history, request.message, memories, user.id,
+        forced_model=forced_model,
+        force_search=request.search,
+        image=request.image,
+        policy=policy,
+    )
 
     save_message(conversation_id, "user", request.message)
     save_message(conversation_id, "assistant", response, model_used)
@@ -538,8 +589,154 @@ def chat_endpoint(request: ChatRequest, user: CurrentUser = Depends(get_current_
     return {
         "response": response,
         "model": model_used,
-        "conversation_id": conversation_id
+        "conversation_id": conversation_id,
     }
+
+
+def _stream_event(payload: dict) -> bytes:
+    """Encode one streaming event as a single NDJSON line.
+
+    NDJSON keeps the wire format trivial to parse on the browser:
+    decode bytes incrementally, split on '\\n', JSON.parse each line.
+    No EventSource quirks (no Authorization header support), no SSE
+    framing overhead, and the same shape works for delta / replace /
+    done / error events.
+    """
+    return (json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8")
+
+
+@app.post("/chat/stream")
+def chat_stream_endpoint(
+    request: ChatRequest,
+    user: CurrentUser = Depends(get_current_user),
+):
+    """Incrementally streams Nova's reply as newline-delimited JSON.
+
+    Identical pre-flight + persistence semantics to ``/chat``; the
+    difference is that text tokens are forwarded to the client as they
+    arrive from Ollama. The user message + final assistant reply are
+    persisted only on a clean ``done`` event — a mid-stream error or
+    a client disconnect leaves the DB untouched, so reloading the
+    conversation never shows a half-baked response.
+    """
+    policy, short_reply, short_model = _chat_preflight(request, user)
+
+    if short_reply is not None:
+        # Short-circuit replies (memory commands, "what do you remember")
+        # do not touch the model. Surface them as a one-shot stream so
+        # the frontend uses the same code path as a real generation.
+        conv_id = request.conversation_id
+
+        def _short_circuit():
+            yield _stream_event({"type": "meta", "model": short_model,
+                                 "conversation_id": conv_id})
+            yield _stream_event({"type": "delta", "content": short_reply})
+            yield _stream_event({"type": "done", "model": short_model,
+                                 "conversation_id": conv_id})
+
+        return StreamingResponse(_short_circuit(), media_type="application/x-ndjson")
+
+    memories = load_memories(user.id)
+    conversation_id = _resolve_conversation_id(request, user)
+    is_first_message = len(load_conversation_messages(conversation_id, user.id) or []) == 0
+
+    history = [
+        {"role": m["role"], "content": m["content"]}
+        for m in load_conversation_messages(conversation_id, user.id) or []
+    ]
+
+    forced_model = _resolve_forced_model(request, user)
+    _check_forced_model_access(forced_model, user)
+
+    def _generate():
+        # `chat_stream` mirrors the synchronous `chat()` path: it does
+        # routing, weather/search/security gating, and uncertainty
+        # fallback — but yields events instead of returning a string.
+        events = chat_stream(
+            history, request.message, memories, user.id,
+            forced_model=forced_model,
+            force_search=request.search,
+            image=request.image,
+            policy=policy,
+        )
+
+        final_reply = ""
+        final_model: str | None = None
+        sent_conversation_id = False
+
+        try:
+            for event in events:
+                etype = event.get("type")
+                if etype == "meta":
+                    final_model = event.get("model") or final_model
+                    sent_conversation_id = True
+                    yield _stream_event({
+                        "type": "meta",
+                        "model": final_model,
+                        "conversation_id": conversation_id,
+                    })
+                elif etype == "delta":
+                    yield _stream_event(event)
+                elif etype == "replace":
+                    # Uncertainty fallback: clear the bubble and start the
+                    # search-augmented retry. The final accumulated reply
+                    # is whatever the upstream chat_stream returns last.
+                    final_reply = ""
+                    yield _stream_event({"type": "replace"})
+                elif etype == "done":
+                    final_reply = event.get("reply", "") or ""
+                    final_model = event.get("model") or final_model
+                    # Persist only once we know the full reply landed
+                    # cleanly. A client disconnect at this point is
+                    # acceptable: the response is already saved.
+                    save_message(conversation_id, "user", request.message)
+                    save_message(
+                        conversation_id, "assistant",
+                        final_reply, final_model,
+                    )
+                    if is_first_message:
+                        update_conversation_title(
+                            conversation_id, request.message[:40]
+                        )
+                    yield _stream_event({
+                        "type": "done",
+                        "model": final_model,
+                        "conversation_id": conversation_id,
+                    })
+                elif etype == "error":
+                    yield _stream_event({
+                        "type": "error",
+                        "detail": event.get("detail", "stream error"),
+                    })
+                    return
+        except Exception as exc:  # pragma: no cover — defensive
+            # Whatever happens we must terminate the stream tidily so
+            # the client unblocks and shows a calm error state.
+            yield _stream_event({"type": "error", "detail": str(exc) or "stream error"})
+            return
+
+        # Defensive fallthrough — chat_stream should always end with
+        # either `done` or `error`, but if it doesn't, signal completion
+        # so the frontend won't hang forever.
+        if not final_reply:
+            yield _stream_event({
+                "type": "done",
+                "model": final_model,
+                "conversation_id": conversation_id,
+            })
+
+    headers = {
+        # Disable any reverse-proxy buffering that would batch our chunks
+        # back together (nginx defaults to buffering, killing perceived
+        # latency). The X-Accel-Buffering hint is the nginx-native opt-out.
+        "X-Accel-Buffering": "no",
+        "Cache-Control": "no-cache",
+    }
+    return StreamingResponse(
+        _generate(),
+        media_type="application/x-ndjson",
+        headers=headers,
+    )
 
 
 # ── MEMORY ENDPOINTS ──
