@@ -57,6 +57,11 @@ from core.security.silentguard_client import (
     DEFAULT_TIMEOUT_SECONDS,
     SilentGuardClient,
 )
+from core.security.silentguard_mitigation import (
+    MitigationActionResult,
+    MitigationState,
+    SilentGuardMitigationClient,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -211,6 +216,7 @@ class SilentGuardProvider:
         api_url: Optional[str] = None,
         api_timeout_seconds: Optional[float] = None,
         client: Optional[SilentGuardClient] = None,
+        mitigation_client: Optional[SilentGuardMitigationClient] = None,
     ) -> None:
         self._explicit_path: Optional[Path] = (
             Path(feed_path) if feed_path is not None else None
@@ -219,6 +225,13 @@ class SilentGuardProvider:
         self._explicit_api_url: Optional[str] = api_url
         self._explicit_timeout: Optional[float] = api_timeout_seconds
         self._explicit_client: Optional[SilentGuardClient] = client
+        # Opt-in: only constructed when a caller asks for mitigation
+        # state or an action. Keeping it ``None`` by default ensures
+        # the read-only status / counts / connection-summary code paths
+        # cannot accidentally instantiate a POST-capable client.
+        self._explicit_mitigation_client: Optional[SilentGuardMitigationClient] = (
+            mitigation_client
+        )
 
     # ── Path / API resolution ───────────────────────────────────────
 
@@ -514,6 +527,141 @@ class SilentGuardProvider:
             "trusted": len(trusted),
             "connections": len(connections),
         }
+
+
+    # ── Optional mitigation surface ─────────────────────────────────
+    #
+    # SilentGuard owns enforcement. These methods are the *only* place
+    # the provider exposes write capability, and every one of them is
+    # behind an explicit user-confirmation flow at the Nova endpoint
+    # layer. They are intentionally small:
+    #
+    #   * ``get_mitigation_state``     — read-only snapshot.
+    #   * ``enable_temporary_mitigation`` — opt-in, requires SilentGuard's
+    #                                       acknowledgement payload.
+    #   * ``disable_mitigation``       — opt-in, same acknowledgement.
+    #
+    # The methods never raise; failures map to ``None`` (state read)
+    # or a calm :class:`MitigationActionResult` (action). The read-only
+    # ``get_status`` / ``get_summary_counts`` / ``get_connection_summary``
+    # paths above are unchanged and never invoke any of these.
+
+    def _resolved_mitigation_client(self) -> Optional[SilentGuardMitigationClient]:
+        """Return a ready mitigation client, or ``None`` if HTTP is off.
+
+        The mitigation client speaks to the same loopback API base URL
+        as the read-only client, but lives in its own module so the
+        forbidden-verb assertion on ``silentguard_client.py`` can stay
+        in place.
+        """
+        if self._explicit_mitigation_client is not None:
+            return self._explicit_mitigation_client
+        url = self._resolved_api_url()
+        if not url:
+            return None
+        return SilentGuardMitigationClient(
+            base_url=url,
+            timeout_seconds=self._resolved_timeout(),
+        )
+
+    def get_mitigation_state(self) -> Optional[MitigationState]:
+        """Return SilentGuard's current mitigation snapshot, or ``None``.
+
+        ``None`` means the read-only API is not configured, the
+        provider is currently unavailable, or SilentGuard returned a
+        payload Nova could not parse at all. The Nova endpoint above
+        translates ``None`` into a calm "mitigation status unavailable"
+        response — callers must not treat ``None`` as "no mitigation
+        is configured".
+
+        Read-only. Issues at most one ``GET /mitigation`` against the
+        loopback API.
+        """
+        status = self.get_status()
+        if not status.available:
+            return None
+        client = self._resolved_mitigation_client()
+        if client is None:
+            return None
+        try:
+            return client.get_state()
+        except Exception:  # pragma: no cover — defensive belt-and-braces
+            logger.debug(
+                "SilentGuard mitigation state fetch failed", exc_info=True,
+            )
+            return None
+
+    def enable_temporary_mitigation(self) -> MitigationActionResult:
+        """Ask SilentGuard to enable temporary mitigation.
+
+        Sends SilentGuard's required acknowledgement payload. This
+        method must only be called after the user has explicitly
+        confirmed the action — that gating lives at the Nova endpoint
+        layer (``POST /integrations/silentguard/mitigation/enable-
+        temporary``). The provider does not record consent and does
+        not re-derive it.
+
+        Never raises. Returns a calm
+        :class:`MitigationActionResult` describing the outcome — the
+        endpoint above this layer surfaces the result as JSON without
+        further translation.
+        """
+        client = self._resolved_mitigation_client()
+        if client is None:
+            return MitigationActionResult(
+                ok=False, state=None,
+                message="SilentGuard mitigation API is not configured.",
+            )
+        # Defence in depth: refuse to attempt the action when the
+        # underlying read-only probe says SilentGuard is unreachable.
+        # Saves us from posting into the void and confusing the user
+        # with a SilentGuard-side error message.
+        status = self.get_status()
+        if not status.available:
+            return MitigationActionResult(
+                ok=False, state=None,
+                message="SilentGuard is not reachable right now.",
+            )
+        try:
+            return client.enable_temporary()
+        except Exception:  # pragma: no cover — defensive belt-and-braces
+            logger.debug(
+                "SilentGuard mitigation enable-temporary failed", exc_info=True,
+            )
+            return MitigationActionResult(
+                ok=False, state=None,
+                message="SilentGuard mitigation request failed.",
+            )
+
+    def disable_mitigation(self) -> MitigationActionResult:
+        """Ask SilentGuard to disable mitigation.
+
+        Same gating contract as :meth:`enable_temporary_mitigation`:
+        the user-confirmation step lives at the Nova endpoint layer.
+        Never raises.
+        """
+        client = self._resolved_mitigation_client()
+        if client is None:
+            return MitigationActionResult(
+                ok=False, state=None,
+                message="SilentGuard mitigation API is not configured.",
+            )
+        status = self.get_status()
+        if not status.available:
+            return MitigationActionResult(
+                ok=False, state=None,
+                message="SilentGuard is not reachable right now.",
+            )
+        try:
+            return client.disable()
+        except Exception:  # pragma: no cover — defensive belt-and-braces
+            logger.debug(
+                "SilentGuard mitigation disable failed", exc_info=True,
+            )
+            return MitigationActionResult(
+                ok=False, state=None,
+                message="SilentGuard mitigation request failed.",
+            )
 
 
 def _normalise_url(value: str) -> str:

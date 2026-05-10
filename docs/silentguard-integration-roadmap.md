@@ -279,6 +279,169 @@ What the surface deliberately does **not** do:
     per-user / channel gates as every other ``/integrations/*``
     endpoint.
 
+### 2.4.quater Confirmation-gated SilentGuard mitigation surface
+
+Nova's Settings card grew a small **mitigation block** in this PR.
+SilentGuard owns detection and enforcement; Nova is the cognitive
+layer. The block lets the user *ask SilentGuard* — explicitly, after
+confirming — to enable temporary mitigation, or to disable it again.
+Nova never blocks IPs directly, never runs firewall commands, never
+runs `sudo`, never executes shell, never silently auto-blocks.
+
+The mitigation surface lives in two new files:
+
+  * `core/security/silentguard_mitigation.py` — a tiny POST-capable
+    HTTP client for SilentGuard's mitigation endpoints, plus the
+    sanitiser helpers (`_normalise_mode`, `_normalise_timestamp`,
+    `_parse_state`) that protect Nova's UI from any unreviewed field
+    SilentGuard might one day return. The client ships exactly three
+    methods (`get_state`, `enable_temporary`, `disable`), and every
+    POST carries the SilentGuard acknowledgement payload
+    (`{"acknowledge": true}`). Errors collapse to `None` (read) or
+    `MitigationActionResult(ok=False, ...)` (action) — no exception
+    ever reaches the caller.
+  * `core/security/silentguard.py::SilentGuardProvider` grew three
+    matching methods (`get_mitigation_state`,
+    `enable_temporary_mitigation`, `disable_mitigation`) that delegate
+    to the new client. The provider refuses to issue a write when its
+    own status probe says SilentGuard is unavailable, so a stray POST
+    cannot fire into a void. The existing read-only `get_status`,
+    `get_summary_counts`, and `get_connection_summary` paths stay
+    byte-identical; pinned tests assert they never invoke any
+    mitigation method.
+
+The read-only `core/security/silentguard_client.py` stays read-only.
+The forbidden-verb assertion in `tests/test_security_provider.py`
+still passes (no `.post(`/`.put(`/`.delete(`/`.patch(` calls in that
+file). Splitting the POST capability into its own module on purpose
+keeps the existing read paths' safety contract intact.
+
+#### Modes Nova knows about
+
+The mitigation client recognises exactly three modes; anything else
+SilentGuard returns coerces to `"unknown"` so the UI never paints an
+unreviewed value:
+
+  * **`detection_only`** — the default. SilentGuard observes and logs
+    but takes no enforcement action. The Settings card surfaces this
+    as *"Detection only"* with the calm explainer *"SilentGuard
+    detected activity that may resemble a flood pattern. Temporary
+    mitigation is available, but it is not active yet."*
+  * **`ask_before_blocking`** — SilentGuard prompts before any block.
+    Surfaced as *"Ask before blocking"*; no action is taken until the
+    user confirms.
+  * **`temporary_auto_block`** — SilentGuard's temporary mitigation is
+    active. Surfaced as *"Temporary auto-block active"*. The Settings
+    card shows the optional `expires_at` timestamp verbatim when
+    SilentGuard provides one (sanitiser-validated, length-capped, no
+    re-parsing).
+
+#### Confirmation flow (two clicks per mutation)
+
+  1. The user opens Settings or clicks Refresh on the SilentGuard
+     status card → Nova issues `GET /integrations/silentguard/mitigation`
+     once. The block hides itself when SilentGuard returns no parsed
+     state, so a non-mitigation install never sees a misleading half-
+     painted control.
+  2. The user clicks *Enable temporary mitigation* (or *Disable
+     mitigation* when a temporary block is already active) → Nova
+     shows an inline confirmation prompt. **No HTTP call is issued
+     yet.**
+  3. The user clicks *Confirm* → Nova issues
+     `POST /integrations/silentguard/mitigation/enable-temporary`
+     (or `/disable`) with the body `{"acknowledge": true}`. SilentGuard
+     applies the change and returns the new state; Nova repaints the
+     mode badge and shows a calm *"Temporary mitigation enabled."* /
+     *"Mitigation disabled."* status line.
+
+The third button — *Keep detection only* — is purely a UX
+acknowledgement. It does **not** call any endpoint, because
+detection-only is the default mode. A pinned test (`UI controller
+tests`) asserts this remains true: turning *Keep detection only* into
+a network call would be a *new* mitigation capability that needs its
+own review.
+
+#### Nova-side endpoint contract
+
+| Method | Path                                                         | Effect                                                     |
+| ------ | ------------------------------------------------------------ | ---------------------------------------------------------- |
+| GET    | `/integrations/silentguard/mitigation`                       | Read-only mitigation snapshot for the caller.              |
+| POST   | `/integrations/silentguard/mitigation/enable-temporary`      | Acknowledged enable; relays to SilentGuard's `/mitigation/enable-temporary`. |
+| POST   | `/integrations/silentguard/mitigation/disable`               | Acknowledged disable; relays to SilentGuard's `/mitigation/disable`. |
+
+Stable response shape (all four endpoints):
+
+```json
+{
+  "ok": true,
+  "available": true,
+  "state": {
+    "mode":       "detection_only" | "ask_before_blocking"
+                  | "temporary_auto_block" | "unknown",
+    "active":     true,
+    "expires_at": "2026-05-10T13:00:00Z" | null
+  },
+  "message": "Temporary mitigation enabled."
+}
+```
+
+`available` is `false` whenever SilentGuard's mitigation API is not
+reachable / not configured / returned an unparseable payload. The
+`message` field is calm, user-safe wording — never a raw exception or
+HTTP body — chosen by the provider layer so the endpoint can surface
+it verbatim.
+
+Safety contract:
+
+  * Every endpoint requires an authenticated session.
+  * Both POST endpoints require the body `{"acknowledge": true}`. Without
+    it, the endpoint returns **400** and never issues any call to
+    SilentGuard. This is a hard server-side checkpoint independent of
+    the UI confirmation step.
+  * Both endpoints honour the per-user `silentguard_enabled` gate. A
+    user who has not opted in sees a calm
+    `{"ok": false, "available": false, "state": null, ...}` payload
+    and the provider is **not instantiated**.
+  * The `_SilentGuardMitigationRequest` body model declares only
+    `acknowledge` and ignores extra fields — there is nothing for an
+    attacker to smuggle in (no IP list, no command string, no mode
+    selector).
+  * Disable does **not** mean Nova writes to SilentGuard's data files.
+    Nova never touches `~/.silentguard_rules.json` or
+    `~/.silentguard_memory.json`. Mitigation mode lives inside
+    SilentGuard.
+  * The read-only `/integrations/silentguard/summary` endpoint is
+    unchanged. A pinned test (`TestReadOnlyEndpointsDoNotCallMitigation`)
+    asserts that hitting `/summary` never triggers any mitigation
+    read or write. The mitigation block on the Settings card pulls
+    from its own URL on the same trigger set as the existing summary
+    refresh (Settings open + Refresh click) — there is **no
+    background polling** added by this PR.
+
+#### What this PR explicitly does **not** ship
+
+  * No notifications, toasts, or "you have alerts" badges. The
+    mitigation block is rendered inside the existing Settings card
+    only when the user opens it.
+  * No permanent blocking control. The SilentGuard
+    `POST /blocked/{ip}/unblock` path mentioned in the original brief
+    is intentionally out of scope; it would only land in a later PR
+    after its own review.
+  * No autonomous behaviour — mitigation never enables itself, never
+    auto-disables, never re-arms after a failure.
+  * No new aggressive language. The copy stays calm; a forbidden-
+    word assertion in `test_silentguard_mitigation_card_wiring`
+    rejects strings like *"under attack"*, *"alert!"*, *"danger"*,
+    *"urgent"* in the mitigation i18n set.
+  * No subprocess, no shell, no firewall command. The mitigation
+    module imports neither `subprocess` nor `shutil`; a forbidden-
+    imports test pins this.
+
+The default behaviour Nova ships in this PR is therefore *unchanged
+from before*: a fresh install starts with detection-only and never
+issues a mitigation POST until the user explicitly clicks *Enable
+temporary mitigation* and then confirms.
+
 ### 2.5 `core/security/context.py` (read-only chat context)
 
 A small builder that produces the per-turn "Security context:" block
@@ -1397,6 +1560,19 @@ auto-retries. The user retries by clicking the button again.
   the read-only subtext, the optional Start button, and the "View
   setup instructions" link. The existing read-only data tab (four
   lists with "explain" buttons) is added under the same panel.
+- The **confirmation-gated mitigation flow** described in §2.4.quater:
+  three new endpoints
+  (`GET /integrations/silentguard/mitigation` and the two
+  acknowledged POSTs), three new provider methods
+  (`get_mitigation_state`, `enable_temporary_mitigation`,
+  `disable_mitigation`), a new POST-capable client module
+  (`core/security/silentguard_mitigation.py`) — with the read-only
+  client kept POST-free so its forbidden-verb assertion still holds —
+  and a Settings card mitigation block whose default copy is calm,
+  whose actions require explicit confirmation, and which surfaces no
+  notifications. Detection-only remains the default: Nova never
+  enables temporary mitigation without an explicit user click +
+  confirm.
 - Test coverage:
   - Setting disabled means Nova issues *zero* calls to SilentGuard
     (asserted with a fake connector that records call counts and a
@@ -1619,6 +1795,17 @@ the following, and proposals that require them should be rejected.
 - A new permission tier in `family_controls` specifically for
   SilentGuard. The existing per-user switch is the entire
   authorisation surface.
+- Nova becoming the firewall engine. The mitigation surface in
+  §2.4.quater **only** asks SilentGuard, after the user has
+  explicitly confirmed, to enable or disable temporary mitigation.
+  Nova does not block IPs directly, does not run firewall commands,
+  does not auto-block, does not silently enable mitigation, and does
+  not keep mitigation enabled when the user has not asked for it.
+  The SilentGuard `POST /blocked/{ip}/unblock` path is intentionally
+  out of scope for this PR; even when added, it would only land
+  behind the same explicit-confirmation contract as
+  `/mitigation/enable-temporary` and would never be invoked
+  autonomously.
 
 If a PR description starts with "to enable this we just need to
 relax constraint X from §10," the answer is no.

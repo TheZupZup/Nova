@@ -1596,6 +1596,58 @@
             color: var(--text-mid);
         }
 
+        /* SilentGuard mitigation block — calm, opt-in. The colour
+           palette stays neutral so the block never reads as alarming. */
+        .silentguard-mitigation {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            margin-top: 10px;
+            padding-top: 10px;
+            border-top: 1px solid var(--border);
+        }
+        .silentguard-mitigation-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 0.74rem;
+            color: var(--text-dim);
+        }
+        .silentguard-mitigation-mode-label {
+            color: var(--text-mid);
+        }
+        .silentguard-mitigation-explainer {
+            font-size: 0.74rem;
+            color: var(--text-dim);
+            line-height: 1.45;
+        }
+        .silentguard-mitigation-actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+        }
+        .silentguard-mitigation-confirm {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            padding: 8px 10px;
+            border: 1px solid var(--border);
+            border-radius: var(--r-md);
+            background: var(--bg-elev);
+            font-size: 0.74rem;
+            color: var(--text-mid);
+        }
+        .silentguard-mitigation-confirm-actions {
+            display: flex;
+            gap: 6px;
+        }
+        .silentguard-mitigation-status {
+            font-size: 0.72rem;
+            color: var(--text-dim);
+            min-height: 1em;
+        }
+        .silentguard-mitigation-status.is-error { color: var(--text-mid); }
+
         #mem-search {
             width: 100%;
             box-sizing: border-box;
@@ -2449,6 +2501,41 @@
                             <span class="silentguard-counts" id="silentguard-connection-summary" style="display:none;"></span>
                             <span class="silentguard-substatus" id="silentguard-substatus" aria-live="polite"></span>
                         </div>
+                        <!-- SilentGuard mitigation block. SilentGuard owns
+                             enforcement; Nova only explains and asks for
+                             confirmation. The whole block is hidden until
+                             the integration is connected and SilentGuard
+                             reports a mitigation state. -->
+                        <div class="silentguard-mitigation" id="silentguard-mitigation-block" style="display:none;">
+                            <div class="silentguard-mitigation-row">
+                                <span class="silentguard-mitigation-mode-label" id="silentguard-mitigation-mode-label">Mitigation</span>
+                                <span class="silentguard-mode-badge" id="silentguard-mitigation-mode-badge"></span>
+                            </div>
+                            <div class="silentguard-mitigation-explainer" id="silentguard-mitigation-explainer" aria-live="polite"></div>
+                            <div class="silentguard-mitigation-actions" id="silentguard-mitigation-actions">
+                                <button type="button" class="memory-btn" id="silentguard-mitigation-enable-btn" style="display:none;">
+                                    <span id="silentguard-mitigation-enable-label">Enable temporary mitigation</span>
+                                </button>
+                                <button type="button" class="memory-btn" id="silentguard-mitigation-keep-btn" style="display:none;">
+                                    <span id="silentguard-mitigation-keep-label">Keep detection only</span>
+                                </button>
+                                <button type="button" class="memory-btn" id="silentguard-mitigation-disable-btn" style="display:none;">
+                                    <span id="silentguard-mitigation-disable-label">Disable mitigation</span>
+                                </button>
+                            </div>
+                            <div class="silentguard-mitigation-confirm" id="silentguard-mitigation-confirm" role="status" aria-live="polite" style="display:none;">
+                                <span class="silentguard-mitigation-confirm-text" id="silentguard-mitigation-confirm-text"></span>
+                                <div class="silentguard-mitigation-confirm-actions">
+                                    <button type="button" class="memory-btn" id="silentguard-mitigation-confirm-yes">
+                                        <span id="silentguard-mitigation-confirm-yes-label">Confirm</span>
+                                    </button>
+                                    <button type="button" class="memory-btn" id="silentguard-mitigation-confirm-no">
+                                        <span id="silentguard-mitigation-confirm-no-label">Cancel</span>
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="silentguard-mitigation-status" id="silentguard-mitigation-status" aria-live="polite"></div>
+                        </div>
                     </div>
                 </section>
 
@@ -2746,6 +2833,28 @@
             silentguard_check_failed: "Statut SilentGuard indisponible",
             silentguard_counts_label: "{alerts} alertes · {blocked} bloqués · {trusted} approuvés · {connections} connexions",
             silentguard_connection_breakdown_label: "{local} locales · {known} connues · {unknown} inconnues",
+            silentguard_mitigation_label: "Atténuation",
+            silentguard_mitigation_mode_detection_only: "Détection seule",
+            silentguard_mitigation_mode_ask_before_blocking: "Demander avant de bloquer",
+            silentguard_mitigation_mode_temporary_auto_block: "Blocage temporaire actif",
+            silentguard_mitigation_mode_unknown: "Mode inconnu",
+            silentguard_mitigation_explainer_detection_only: "SilentGuard a détecté une activité pouvant ressembler à un schéma de type flood. Une atténuation temporaire est disponible, mais elle n'est pas encore active.",
+            silentguard_mitigation_explainer_ask_before_blocking: "SilentGuard est en mode « demander avant de bloquer ». Aucune action de pare-feu n'est prise tant que tu ne confirmes pas.",
+            silentguard_mitigation_explainer_temporary_auto_block: "L'atténuation temporaire de SilentGuard est active. Tu peux la désactiver à tout moment.",
+            silentguard_mitigation_explainer_unknown: "SilentGuard signale un mode d'atténuation que Nova ne reconnaît pas. Aucune action n'est entreprise.",
+            silentguard_mitigation_enable: "Activer l'atténuation temporaire",
+            silentguard_mitigation_keep: "Conserver la détection seule",
+            silentguard_mitigation_disable: "Désactiver l'atténuation",
+            silentguard_mitigation_confirm_yes: "Confirmer",
+            silentguard_mitigation_confirm_no: "Annuler",
+            silentguard_mitigation_confirm_enable: "Confirmer : SilentGuard activera une atténuation temporaire. Nova ne touche pas au pare-feu.",
+            silentguard_mitigation_confirm_disable: "Confirmer : SilentGuard désactivera l'atténuation et reviendra à la détection seule.",
+            silentguard_mitigation_keep_ack: "D'accord — SilentGuard reste en mode détection seule.",
+            silentguard_mitigation_status_unavailable: "État de l'atténuation indisponible.",
+            silentguard_mitigation_status_failed: "L'atténuation n'a pas pu être modifiée. Réessaie plus tard.",
+            silentguard_mitigation_status_enabled: "Atténuation temporaire activée.",
+            silentguard_mitigation_status_disabled: "Atténuation désactivée.",
+            silentguard_mitigation_expires_at: "Expire à {time}.",
             personalization_note: "Ces préférences ajusteront le ton de Nova dans tes conversations. Stockées par utilisateur, visibles uniquement par toi.",
             pers_style_title: "Style de réponse",
             pers_style_hint: "Niveau de détail des réponses de Nova.",
@@ -2886,6 +2995,28 @@
             silentguard_check_failed: "SilentGuard status unavailable",
             silentguard_counts_label: "{alerts} alerts · {blocked} blocked · {trusted} trusted · {connections} connections",
             silentguard_connection_breakdown_label: "{local} local · {known} known · {unknown} unknown",
+            silentguard_mitigation_label: "Mitigation",
+            silentguard_mitigation_mode_detection_only: "Detection only",
+            silentguard_mitigation_mode_ask_before_blocking: "Ask before blocking",
+            silentguard_mitigation_mode_temporary_auto_block: "Temporary auto-block active",
+            silentguard_mitigation_mode_unknown: "Unknown mode",
+            silentguard_mitigation_explainer_detection_only: "SilentGuard detected activity that may resemble a flood pattern. Temporary mitigation is available, but it is not active yet.",
+            silentguard_mitigation_explainer_ask_before_blocking: "SilentGuard is in \"ask before blocking\" mode. No firewall action is taken until you confirm.",
+            silentguard_mitigation_explainer_temporary_auto_block: "SilentGuard's temporary mitigation is active. You can disable it at any time.",
+            silentguard_mitigation_explainer_unknown: "SilentGuard reports a mitigation mode Nova doesn't recognise. No action is taken.",
+            silentguard_mitigation_enable: "Enable temporary mitigation",
+            silentguard_mitigation_keep: "Keep detection only",
+            silentguard_mitigation_disable: "Disable mitigation",
+            silentguard_mitigation_confirm_yes: "Confirm",
+            silentguard_mitigation_confirm_no: "Cancel",
+            silentguard_mitigation_confirm_enable: "Confirm: SilentGuard will enable temporary mitigation. Nova does not touch the firewall itself.",
+            silentguard_mitigation_confirm_disable: "Confirm: SilentGuard will disable mitigation and return to detection only.",
+            silentguard_mitigation_keep_ack: "Got it — SilentGuard stays in detection-only mode.",
+            silentguard_mitigation_status_unavailable: "Mitigation status unavailable.",
+            silentguard_mitigation_status_failed: "Mitigation could not be changed. Try again later.",
+            silentguard_mitigation_status_enabled: "Temporary mitigation enabled.",
+            silentguard_mitigation_status_disabled: "Mitigation disabled.",
+            silentguard_mitigation_expires_at: "Expires at {time}.",
             personalization_note: "These preferences will shape Nova's tone in your conversations. Saved per-user; visible only to you.",
             pers_style_title: "Response style",
             pers_style_hint: "How detailed Nova's answers should be.",
@@ -3041,12 +3172,21 @@
         _setText("settings-silentguard-title", t("silentguard_title"));
         _setText("silentguard-refresh-label", t("silentguard_refresh"));
         _setText("silentguard-retry-label", t("silentguard_retry"));
+        _setText("silentguard-mitigation-mode-label", t("silentguard_mitigation_label"));
+        _setText("silentguard-mitigation-enable-label", t("silentguard_mitigation_enable"));
+        _setText("silentguard-mitigation-keep-label", t("silentguard_mitigation_keep"));
+        _setText("silentguard-mitigation-disable-label", t("silentguard_mitigation_disable"));
+        _setText("silentguard-mitigation-confirm-yes-label", t("silentguard_mitigation_confirm_yes"));
+        _setText("silentguard-mitigation-confirm-no-label", t("silentguard_mitigation_confirm_no"));
         // Re-render the status card so headline / counts / action button
         // labels pick up the new language without re-issuing the network
         // call. The action button label is state-driven, so the summary
         // re-render is the single owner of its text.
         if (typeof applySilentGuardSummaryUI === "function" && lastSilentGuardSummary) {
             applySilentGuardSummaryUI(lastSilentGuardSummary);
+        }
+        if (typeof applySilentGuardMitigationUI === "function" && lastSilentGuardMitigation) {
+            applySilentGuardMitigationUI(lastSilentGuardMitigation);
         }
 
         _setText("settings-personalization-note", t("personalization_note"));
@@ -5079,6 +5219,13 @@
             counts: null,
             host_enabled: false,
         });
+        // Mitigation state is also unknown after a failure; collapse
+        // the block so the user never sees stale "active" wording from
+        // a previous successful read.
+        if (typeof applySilentGuardMitigationUI === "function") {
+            lastSilentGuardMitigation = null;
+            applySilentGuardMitigationUI(null);
+        }
         const sub = document.getElementById("silentguard-substatus");
         if (sub) sub.textContent = t("silentguard_check_failed");
     }
@@ -5106,6 +5253,15 @@
             const data = await res.json();
             lastSilentGuardSummary = data;
             applySilentGuardSummaryUI(data);
+            // Mitigation state piggybacks on the same trigger set as
+            // the read-only summary refresh — Settings open and the
+            // Refresh button. We deliberately do *not* call this from
+            // the read-only summary endpoint itself; mitigation lives
+            // behind its own URL so the no-poll guarantee on /summary
+            // stays intact.
+            if (typeof refreshSilentGuardMitigation === "function") {
+                refreshSilentGuardMitigation().catch(() => {});
+            }
         } catch (e) {
             applySilentGuardCheckFailedUI();
         } finally {
@@ -5169,6 +5325,19 @@
                 const data = await res.json();
                 lastSilentGuardSummary = data;
                 applySilentGuardSummaryUI(data);
+                // After enable: pull mitigation state so the new card
+                // includes it without a manual Refresh. After disable:
+                // collapse the mitigation block — the user has opted
+                // out and Nova should not surface a mode it is no
+                // longer authorised to read.
+                if (newVal) {
+                    if (typeof refreshSilentGuardMitigation === "function") {
+                        refreshSilentGuardMitigation().catch(() => {});
+                    }
+                } else if (typeof applySilentGuardMitigationUI === "function") {
+                    lastSilentGuardMitigation = null;
+                    applySilentGuardMitigationUI(null);
+                }
             } catch (parseErr) {
                 applySilentGuardToggleUI(newVal);
                 await refreshSilentGuardStatus();
@@ -5206,6 +5375,9 @@
             const data = await res.json();
             lastSilentGuardSummary = data;
             applySilentGuardSummaryUI(data);
+            if (typeof refreshSilentGuardMitigation === "function") {
+                refreshSilentGuardMitigation().catch(() => {});
+            }
         } catch (e) {
             applySilentGuardCheckFailedUI();
         } finally {
@@ -5246,6 +5418,270 @@
                 retrySilentGuardStartup().catch(() => {
                     applySilentGuardCheckFailedUI();
                 });
+            });
+        }
+    })();
+
+    // ── SILENTGUARD MITIGATION ──
+    // Calm, opt-in confirmation flow over SilentGuard's mitigation
+    // endpoints. SilentGuard owns enforcement; Nova only explains and
+    // asks for confirmation. The flow is two clicks per action:
+    //   1. User clicks "Enable temporary mitigation" / "Disable
+    //      mitigation" → an inline confirmation prompt appears.
+    //   2. User clicks "Confirm" → Nova POSTs to its endpoint with
+    //      ``{"acknowledge": true}``.
+    // No background polling. Mitigation state is read once per
+    // Settings open / Refresh click (piggybacking on the existing
+    // refresh trigger set), and re-read after a successful
+    // enable / disable so the UI repaints with the fresh mode.
+    let lastSilentGuardMitigation = null;
+    let silentGuardMitigationFetchInFlight = false;
+    let silentGuardMitigationActionInFlight = false;
+    // ``pending`` is the action the user has asked for but not yet
+    // confirmed: "enable", "disable", or null. The Confirm button
+    // executes this action; Cancel clears it. State stays local — no
+    // network call happens until Confirm is clicked.
+    let silentGuardMitigationPending = null;
+
+    const SILENTGUARD_MITIGATION_MODE_LABELS = {
+        detection_only: "silentguard_mitigation_mode_detection_only",
+        ask_before_blocking: "silentguard_mitigation_mode_ask_before_blocking",
+        temporary_auto_block: "silentguard_mitigation_mode_temporary_auto_block",
+        unknown: "silentguard_mitigation_mode_unknown",
+    };
+    const SILENTGUARD_MITIGATION_EXPLAINER_KEYS = {
+        detection_only: "silentguard_mitigation_explainer_detection_only",
+        ask_before_blocking: "silentguard_mitigation_explainer_ask_before_blocking",
+        temporary_auto_block: "silentguard_mitigation_explainer_temporary_auto_block",
+        unknown: "silentguard_mitigation_explainer_unknown",
+    };
+
+    function _setMitigationStatus(text, isError) {
+        const status = document.getElementById("silentguard-mitigation-status");
+        if (!status) return;
+        status.textContent = text || "";
+        if (isError) {
+            status.classList.add("is-error");
+        } else {
+            status.classList.remove("is-error");
+        }
+    }
+
+    function _hideMitigationConfirm() {
+        silentGuardMitigationPending = null;
+        const confirm = document.getElementById("silentguard-mitigation-confirm");
+        if (confirm) confirm.style.display = "none";
+    }
+
+    function applySilentGuardMitigationUI(payload) {
+        // Render the mitigation block from a Nova payload (or null when
+        // the integration is disabled / not yet fetched). The whole
+        // block is hidden when there is nothing meaningful to show — we
+        // never paint a half-state.
+        const block = document.getElementById("silentguard-mitigation-block");
+        const badge = document.getElementById("silentguard-mitigation-mode-badge");
+        const modeLabel = document.getElementById("silentguard-mitigation-mode-label");
+        const explainer = document.getElementById("silentguard-mitigation-explainer");
+        const enableBtn = document.getElementById("silentguard-mitigation-enable-btn");
+        const keepBtn = document.getElementById("silentguard-mitigation-keep-btn");
+        const disableBtn = document.getElementById("silentguard-mitigation-disable-btn");
+        if (!block || !badge || !explainer || !enableBtn || !keepBtn || !disableBtn) {
+            return;
+        }
+        if (modeLabel) modeLabel.textContent = t("silentguard_mitigation_label");
+
+        // Hide the whole block on disabled / unavailable so it never
+        // sits on the page in a misleading "loading" state.
+        if (!payload || payload.available !== true || !payload.state) {
+            block.style.display = "none";
+            _hideMitigationConfirm();
+            _setMitigationStatus("");
+            return;
+        }
+        block.style.display = "";
+
+        const state = payload.state;
+        const mode = (state && state.mode) || "unknown";
+        const modeKey = SILENTGUARD_MITIGATION_MODE_LABELS[mode]
+            || "silentguard_mitigation_mode_unknown";
+        badge.textContent = t(modeKey);
+        const explainerKey = SILENTGUARD_MITIGATION_EXPLAINER_KEYS[mode]
+            || "silentguard_mitigation_explainer_unknown";
+        let explainerText = t(explainerKey);
+        if (mode === "temporary_auto_block" && state.expires_at) {
+            // ``state.expires_at`` is a sanitised ISO-8601 string from
+            // the backend; rendering it verbatim keeps the timezone /
+            // offset visible to the user without any client-side
+            // re-parsing surprises.
+            explainerText = explainerText
+                + " "
+                + t("silentguard_mitigation_expires_at").replace("{time}", state.expires_at);
+        }
+        explainer.textContent = explainerText;
+
+        // Action button visibility is mode-driven so the user only sees
+        // actions that make sense in the current state. The Confirm
+        // step gates each action; nothing happens on a single click.
+        enableBtn.style.display = "none";
+        keepBtn.style.display = "none";
+        disableBtn.style.display = "none";
+        if (mode === "temporary_auto_block") {
+            disableBtn.style.display = "";
+        } else {
+            // For detection_only, ask_before_blocking, and unknown:
+            // offer the calm "enable" + "keep detection only"
+            // affordances. The "keep" button is a no-op at the API
+            // layer — it just confirms the user's choice in the UI.
+            enableBtn.style.display = "";
+            keepBtn.style.display = "";
+        }
+
+        // If the user had a pending confirmation (e.g. they clicked
+        // Enable, then Refresh), clear it: the action they asked for
+        // may no longer match the new state.
+        _hideMitigationConfirm();
+    }
+
+    async function refreshSilentGuardMitigation() {
+        // Read the current mode. Skips the call when a previous fetch
+        // is still in flight so a quick double-click never queues
+        // duplicate requests. Failure renders as the calm "unavailable"
+        // state — never as a thrown error.
+        if (silentGuardMitigationFetchInFlight) return;
+        silentGuardMitigationFetchInFlight = true;
+        try {
+            const res = await fetch("/integrations/silentguard/mitigation", {
+                credentials: "include",
+                headers: { "Authorization": `Bearer ${token}` },
+            });
+            if (!res.ok) {
+                lastSilentGuardMitigation = null;
+                applySilentGuardMitigationUI(null);
+                return;
+            }
+            const data = await res.json();
+            lastSilentGuardMitigation = data;
+            applySilentGuardMitigationUI(data);
+        } catch (e) {
+            lastSilentGuardMitigation = null;
+            applySilentGuardMitigationUI(null);
+        } finally {
+            silentGuardMitigationFetchInFlight = false;
+        }
+    }
+
+    function showSilentGuardMitigationConfirm(action) {
+        // Show the inline confirmation prompt for the requested action.
+        // No network call happens here — the user must click Confirm
+        // before anything is sent to Nova's endpoint.
+        const confirm = document.getElementById("silentguard-mitigation-confirm");
+        const text = document.getElementById("silentguard-mitigation-confirm-text");
+        if (!confirm || !text) return;
+        if (action === "enable") {
+            text.textContent = t("silentguard_mitigation_confirm_enable");
+        } else if (action === "disable") {
+            text.textContent = t("silentguard_mitigation_confirm_disable");
+        } else {
+            return;
+        }
+        silentGuardMitigationPending = action;
+        confirm.style.display = "";
+        _setMitigationStatus("");
+    }
+
+    function acknowledgeSilentGuardKeepDetectionOnly() {
+        // "Keep detection only" is a calm UX affordance — it does not
+        // call any endpoint, because detection-only is the default.
+        // We just acknowledge the user's choice so they have feedback
+        // for the click and the confirmation prompt is dismissed.
+        _hideMitigationConfirm();
+        _setMitigationStatus(t("silentguard_mitigation_keep_ack"), false);
+    }
+
+    async function executeSilentGuardMitigationAction() {
+        // Send the pending action to Nova's endpoint with the required
+        // acknowledgement payload. Single-use: the pending state is
+        // cleared as soon as we start the call, so a stray click after
+        // Confirm cannot queue a second mutation.
+        if (silentGuardMitigationActionInFlight) return;
+        const action = silentGuardMitigationPending;
+        if (action !== "enable" && action !== "disable") {
+            _hideMitigationConfirm();
+            return;
+        }
+        silentGuardMitigationActionInFlight = true;
+        silentGuardMitigationPending = null;
+        const path = action === "enable"
+            ? "/integrations/silentguard/mitigation/enable-temporary"
+            : "/integrations/silentguard/mitigation/disable";
+        try {
+            const res = await fetch(path, {
+                method: "POST",
+                credentials: "include",
+                headers: {
+                    "Content-Type": "application/json",
+                    "Authorization": `Bearer ${token}`,
+                },
+                body: JSON.stringify({ acknowledge: true }),
+            });
+            if (!res.ok) {
+                _setMitigationStatus(t("silentguard_mitigation_status_failed"), true);
+                return;
+            }
+            const data = await res.json();
+            lastSilentGuardMitigation = data;
+            applySilentGuardMitigationUI(data);
+            if (data && data.ok) {
+                const okKey = action === "enable"
+                    ? "silentguard_mitigation_status_enabled"
+                    : "silentguard_mitigation_status_disabled";
+                _setMitigationStatus(t(okKey), false);
+            } else {
+                _setMitigationStatus(
+                    (data && data.message) || t("silentguard_mitigation_status_failed"),
+                    true,
+                );
+            }
+        } catch (e) {
+            _setMitigationStatus(t("silentguard_mitigation_status_failed"), true);
+        } finally {
+            silentGuardMitigationActionInFlight = false;
+            _hideMitigationConfirm();
+        }
+    }
+
+    (function wireSilentGuardMitigationButtons() {
+        const enableBtn = document.getElementById("silentguard-mitigation-enable-btn");
+        if (enableBtn) {
+            enableBtn.addEventListener("click", () => {
+                showSilentGuardMitigationConfirm("enable");
+            });
+        }
+        const keepBtn = document.getElementById("silentguard-mitigation-keep-btn");
+        if (keepBtn) {
+            keepBtn.addEventListener("click", () => {
+                acknowledgeSilentGuardKeepDetectionOnly();
+            });
+        }
+        const disableBtn = document.getElementById("silentguard-mitigation-disable-btn");
+        if (disableBtn) {
+            disableBtn.addEventListener("click", () => {
+                showSilentGuardMitigationConfirm("disable");
+            });
+        }
+        const confirmYes = document.getElementById("silentguard-mitigation-confirm-yes");
+        if (confirmYes) {
+            confirmYes.addEventListener("click", () => {
+                executeSilentGuardMitigationAction().catch(() => {
+                    _setMitigationStatus(t("silentguard_mitigation_status_failed"), true);
+                });
+            });
+        }
+        const confirmNo = document.getElementById("silentguard-mitigation-confirm-no");
+        if (confirmNo) {
+            confirmNo.addEventListener("click", () => {
+                _hideMitigationConfirm();
+                _setMitigationStatus("");
             });
         }
     })();

@@ -41,6 +41,17 @@ from core.security.provider import (
 )
 from core.security.silentguard import SilentGuardProvider
 from core.security.silentguard_client import SilentGuardClient
+from core.security.silentguard_mitigation import (
+    ACKNOWLEDGE_KEY,
+    ACKNOWLEDGE_PAYLOAD,
+    MODE_ASK_BEFORE_BLOCKING,
+    MODE_DETECTION_ONLY,
+    MODE_TEMPORARY_AUTO_BLOCK,
+    MODE_UNKNOWN,
+    MitigationActionResult,
+    MitigationState,
+    SilentGuardMitigationClient,
+)
 from core.security.context import build_security_context_block
 # Lifecycle helper is the only file in this package permitted to import
 # ``subprocess`` / ``shutil``. It is exposed here so the web layer can
@@ -52,11 +63,20 @@ from core.security.lifecycle import (
 )
 
 __all__ = [
+    "ACKNOWLEDGE_KEY",
+    "ACKNOWLEDGE_PAYLOAD",
     "LifecycleStatus",
+    "MODE_ASK_BEFORE_BLOCKING",
+    "MODE_DETECTION_ONLY",
+    "MODE_TEMPORARY_AUTO_BLOCK",
+    "MODE_UNKNOWN",
+    "MitigationActionResult",
+    "MitigationState",
     "NullSecurityProvider",
     "SecurityProvider",
     "SecurityStatus",
     "SilentGuardClient",
+    "SilentGuardMitigationClient",
     "SilentGuardProvider",
     "STATE_AVAILABLE",
     "STATE_OFFLINE",

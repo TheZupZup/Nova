@@ -888,6 +888,200 @@ def silentguard_retry(user: CurrentUser = Depends(get_current_user)):
     return _silentguard_summary_payload(user)
 
 
+# ── SILENTGUARD MITIGATION (opt-in, confirmation-gated) ─────────────
+#
+# SilentGuard owns enforcement. Nova does not become the firewall: it
+# only explains, asks for confirmation, and — *only after explicit user
+# acknowledgement* — relays the user's decision to SilentGuard's
+# narrow ``/mitigation/*`` endpoints. The endpoints below are the
+# entire surface of that bridge, and every one of them:
+#
+#   * requires an authenticated session;
+#   * requires the per-user ``silentguard_enabled`` opt-in;
+#   * for the mutating endpoints, requires an explicit
+#     ``{"acknowledge": true}`` body — Nova refuses to forward without it,
+#     even though the underlying SilentGuard call would also reject;
+#   * never runs sudo, shell, or firewall commands, and never opens a
+#     non-loopback connection;
+#   * sanitises every error path into calm, user-safe wording.
+#
+# There is no background polling and no auto-enable. The default
+# remains detection-only.
+
+
+class _SilentGuardMitigationRequest(BaseModel):
+    """Body for the mitigation enable / disable endpoints.
+
+    The single recognised field is ``acknowledge``. Anything else is
+    silently ignored — there is nothing for an attacker to smuggle in.
+    The endpoint refuses the request unless the caller has explicitly
+    sent ``acknowledge=True``, mirroring SilentGuard's own
+    acknowledgement contract.
+    """
+
+    model_config = {"extra": "ignore"}
+
+    acknowledge: bool = False
+
+
+def _silentguard_mitigation_disabled_payload() -> dict:
+    """Calm payload returned when the per-user gate is off."""
+    return {
+        "ok": False,
+        "available": False,
+        "state": None,
+        "message": "SilentGuard integration is disabled.",
+    }
+
+
+def _silentguard_mitigation_payload(state, *, ok=True, message=""):
+    """Render a Nova-side mitigation response.
+
+    Always returns the same shape — ``ok``, ``available``, ``state``,
+    ``message`` — so the UI can render reads and action results with
+    one renderer.
+    """
+    state_dict = state.as_dict() if state is not None else None
+    return {
+        "ok": bool(ok),
+        "available": state is not None,
+        "state": state_dict,
+        "message": message or "",
+    }
+
+
+@app.get("/integrations/silentguard/mitigation")
+def silentguard_mitigation_state(user: CurrentUser = Depends(get_current_user)):
+    """Return the current SilentGuard mitigation snapshot for the caller.
+
+    Read-only. Gated by the per-user ``silentguard_enabled`` setting,
+    just like every other SilentGuard surface. When the user has not
+    opted in, the endpoint returns a calm
+    ``{"available": false, "state": null, ...}`` payload instead of
+    issuing any HTTP call to SilentGuard.
+
+    The response shape is::
+
+        {
+            "ok": bool,
+            "available": bool,        # SilentGuard returned a parsed state
+            "state": {                # null when not available
+                "mode":       "detection_only" | "ask_before_blocking"
+                              | "temporary_auto_block" | "unknown",
+                "active":     bool,
+                "expires_at": str | null,   # ISO-8601, when known
+            } | null,
+            "message": str,           # calm, user-safe wording
+        }
+
+    No background polling, no notifications. The endpoint runs only
+    when the UI explicitly asks (Settings card mount or Refresh
+    click). It never triggers any mitigation enable / disable call.
+    """
+    if not _silentguard_integration.is_enabled(user.id):
+        return _silentguard_mitigation_disabled_payload()
+    provider = _SilentGuardProvider()
+    try:
+        state = provider.get_mitigation_state()
+    except Exception:  # pragma: no cover — defensive belt-and-braces
+        state = None
+    if state is None:
+        return _silentguard_mitigation_payload(
+            None, ok=True,
+            message="SilentGuard mitigation status is currently unavailable.",
+        )
+    return _silentguard_mitigation_payload(state, ok=True)
+
+
+@app.post("/integrations/silentguard/mitigation/enable-temporary")
+def silentguard_mitigation_enable_temporary(
+    user: CurrentUser = Depends(get_current_user),
+    body: _SilentGuardMitigationRequest = _SilentGuardMitigationRequest(),
+):
+    """Enable SilentGuard temporary mitigation, after explicit confirmation.
+
+    Gating, in order:
+
+      1. The request must be authenticated.
+      2. The caller's ``silentguard_enabled`` setting must be ``true``.
+      3. The request body must contain ``"acknowledge": true``. Without
+         it the endpoint returns 400 and **never** issues a call to
+         SilentGuard. This mirrors SilentGuard's own acknowledgement
+         contract and gives the UI a hard server-side checkpoint
+         independent of any client-side confirmation flow.
+
+    On success the response carries the post-action mitigation state
+    so the UI can repaint without a follow-up read. On failure the
+    endpoint returns a calm, user-safe message — never a raw exception
+    or HTTP body from SilentGuard.
+
+    Safety contract:
+
+      * Nova does not run sudo / firewall / shell commands.
+      * Nova does not call SilentGuard until the body has been
+        explicitly acknowledged by the user.
+      * The acknowledgement is single-use: a fresh request must
+        re-acknowledge before any further action.
+      * Errors never leak raw transport text; SilentGuard-side
+        failures map to a calm "currently unavailable" message.
+    """
+    if not _silentguard_integration.is_enabled(user.id):
+        return _silentguard_mitigation_disabled_payload()
+    if not body.acknowledge:
+        # 400 here is intentional: every other mitigation gate returns
+        # 200 with a calm payload, but a missing acknowledgement is a
+        # client-side bug — the UI must always send ``acknowledge=true``
+        # after the user clicks Confirm.
+        raise HTTPException(
+            status_code=400,
+            detail="Acknowledgement required to enable mitigation.",
+        )
+    provider = _SilentGuardProvider()
+    try:
+        result = provider.enable_temporary_mitigation()
+    except Exception:  # pragma: no cover — defensive belt-and-braces
+        return _silentguard_mitigation_payload(
+            None, ok=False,
+            message="SilentGuard mitigation request failed.",
+        )
+    return _silentguard_mitigation_payload(
+        result.state, ok=result.ok, message=result.message,
+    )
+
+
+@app.post("/integrations/silentguard/mitigation/disable")
+def silentguard_mitigation_disable(
+    user: CurrentUser = Depends(get_current_user),
+    body: _SilentGuardMitigationRequest = _SilentGuardMitigationRequest(),
+):
+    """Disable SilentGuard mitigation, after explicit confirmation.
+
+    Same gating contract as the enable endpoint above: authenticated
+    user, per-user opt-in, and ``acknowledge=true`` in the body.
+    Returning to detection-only is still a user-visible change, so
+    Nova requires the same explicit confirmation rather than offering
+    a one-click disable.
+    """
+    if not _silentguard_integration.is_enabled(user.id):
+        return _silentguard_mitigation_disabled_payload()
+    if not body.acknowledge:
+        raise HTTPException(
+            status_code=400,
+            detail="Acknowledgement required to disable mitigation.",
+        )
+    provider = _SilentGuardProvider()
+    try:
+        result = provider.disable_mitigation()
+    except Exception:  # pragma: no cover — defensive belt-and-braces
+        return _silentguard_mitigation_payload(
+            None, ok=False,
+            message="SilentGuard mitigation request failed.",
+        )
+    return _silentguard_mitigation_payload(
+        result.state, ok=result.ok, message=result.message,
+    )
+
+
 # ── VOICE / TTS ─────────────────────────────────────────────────────
 # Opt-in "read aloud" surface on assistant replies. The server returns
 # voice preferences, validates input, and (when a local engine is
