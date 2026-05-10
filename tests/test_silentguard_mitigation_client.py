@@ -87,7 +87,6 @@ class _RecordingTransport(httpx.BaseTransport):
 def _make_client_with_transport(transport, *, base_url="http://127.0.0.1:8765"):
     """Wire a ``SilentGuardMitigationClient`` whose calls go through ``transport``."""
     client = SilentGuardMitigationClient(base_url=base_url)
-    real_open = client._open
 
     def _open_with_transport():
         # Build an httpx.Client that uses our recording transport, but

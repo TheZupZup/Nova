@@ -528,7 +528,6 @@ class SilentGuardProvider:
             "connections": len(connections),
         }
 
-
     # ── Optional mitigation surface ─────────────────────────────────
     #
     # SilentGuard owns enforcement. These methods are the *only* place
