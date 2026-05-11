@@ -1338,6 +1338,160 @@
 
         .msg-action-status.is-positive { color: var(--cyan); }
 
+        /* ── "Nova is speaking" indicator ──
+           Sits inside the assistant message row, just below the bubble and
+           above the action row, only while audio is playing. Designed to
+           whisper: a soft cyan orb that breathes, three slim waveform bars
+           that drift, a calm label, and an inline stop button. Lives
+           entirely in CSS — no animation library, no canvas.
+
+           Lifecycle is owned by `speakingIndicator.show()` /
+           `speakingIndicator.hide()` in the script section; the indicator
+           is created on demand and removed when playback ends. */
+        .speaking-indicator {
+            display: none;
+            align-items: center;
+            gap: 10px;
+            padding: 6px 12px 6px 10px;
+            margin: 8px 0 0;
+            width: fit-content;
+            max-width: 75%;
+            background: var(--cyan-soft);
+            border: 1px solid var(--cyan-glow);
+            border-radius: var(--r-pill);
+            color: var(--cyan);
+            font-size: 0.75rem;
+            letter-spacing: 0.02em;
+            opacity: 0;
+            transform: translateY(-2px);
+            transition:
+                opacity var(--t-base),
+                transform var(--t-base);
+        }
+        .speaking-indicator.is-visible {
+            display: inline-flex;
+            opacity: 1;
+            transform: translateY(0);
+        }
+
+        .speaking-visual {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            position: relative;
+        }
+
+        /* The orb: a small filled circle that pulses with a soft glow. The
+           outer halo is a second pseudo-element that breathes out of phase
+           so the motion never feels mechanical. */
+        .speaking-orb {
+            position: relative;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: var(--cyan);
+            box-shadow: 0 0 8px var(--cyan-glow);
+            animation: speakingOrbBreath 2.4s var(--ease) infinite;
+        }
+        .speaking-orb::after {
+            content: '';
+            position: absolute;
+            inset: -5px;
+            border-radius: 50%;
+            border: 1px solid var(--cyan-glow);
+            opacity: 0.55;
+            animation: speakingOrbHalo 2.4s var(--ease) infinite;
+        }
+
+        @keyframes speakingOrbBreath {
+            0%, 100% { transform: scale(1); opacity: 1; }
+            50%      { transform: scale(1.12); opacity: 0.85; }
+        }
+        @keyframes speakingOrbHalo {
+            0%       { transform: scale(0.85); opacity: 0.6; }
+            70%      { transform: scale(1.55); opacity: 0; }
+            100%     { transform: scale(1.55); opacity: 0; }
+        }
+
+        /* Three slim vertical bars rising / falling out of phase. Pure
+           CSS keyframes — lightweight, GPU-friendly. */
+        .speaking-wave {
+            display: inline-flex;
+            align-items: flex-end;
+            gap: 2px;
+            height: 14px;
+        }
+        .speaking-wave span {
+            display: inline-block;
+            width: 2px;
+            background: var(--cyan);
+            border-radius: 1px;
+            opacity: 0.85;
+            animation: speakingWave 1.1s var(--ease) infinite;
+        }
+        .speaking-wave span:nth-child(1) { height: 6px;  animation-delay: 0.00s; }
+        .speaking-wave span:nth-child(2) { height: 10px; animation-delay: 0.18s; }
+        .speaking-wave span:nth-child(3) { height: 6px;  animation-delay: 0.36s; }
+
+        @keyframes speakingWave {
+            0%, 100% { transform: scaleY(0.45); }
+            50%      { transform: scaleY(1.00); }
+        }
+
+        .speaking-label {
+            white-space: nowrap;
+            color: var(--cyan);
+        }
+
+        /* Stop button is a small icon-only chip — same visual language as
+           the action row, just inside the indicator so users do not need
+           to hunt for the speaker button to silence Nova. */
+        .speaking-stop {
+            appearance: none;
+            -webkit-appearance: none;
+            background: transparent;
+            border: 1px solid transparent;
+            border-radius: var(--r-pill);
+            color: var(--cyan);
+            cursor: pointer;
+            padding: 0;
+            width: 22px;
+            height: 22px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            transition:
+                color var(--t-base),
+                background var(--t-base),
+                border-color var(--t-base),
+                transform var(--t-fast);
+        }
+        .speaking-stop svg { width: 12px; height: 12px; stroke: currentColor; }
+        .speaking-stop:hover {
+            background: var(--cyan-glow);
+            border-color: var(--cyan-glow);
+            color: var(--text);
+        }
+        .speaking-stop:focus { outline: none; }
+        .speaking-stop:focus-visible {
+            color: var(--text);
+            box-shadow: 0 0 0 2px var(--cyan-glow);
+        }
+        .speaking-stop:active { transform: scale(0.92); }
+
+        /* Respect reduced-motion: keep the visual presence (so users know
+           Nova is speaking) but freeze the animation loops. */
+        @media (prefers-reduced-motion: reduce) {
+            .speaking-orb,
+            .speaking-orb::after,
+            .speaking-wave span {
+                animation: none;
+            }
+            .speaking-indicator {
+                transition: opacity var(--t-base);
+            }
+        }
+
         /* ── SETTINGS PANEL ── */
         #settings-overlay {
             display: none;
@@ -1584,6 +1738,73 @@
         }
         .voice-status.is-visible { opacity: 1; }
         .voice-status.is-warn { color: var(--text-mid); }
+
+        /* Title row that lets the active-engine chip sit beside the
+           "Voice engine" label without entering its text node — which
+           lets _setText() keep updating the title on a language flip. */
+        .settings-row-title-row {
+            display: inline-flex;
+            align-items: center;
+            gap: 0;
+            flex-wrap: wrap;
+        }
+
+        /* "Active engine" chip in Settings → Voice. Compact, read-only,
+           explains which TTS pipeline the next read-aloud will actually
+           use. Distinct from the engine select (the user's preference)
+           because Piper can be selected but unavailable on this host. */
+        .voice-active-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 0.72rem;
+            color: var(--text-dim);
+            padding: 2px 10px;
+            border: 1px solid var(--border);
+            border-radius: var(--r-pill);
+            background: var(--bg-elev);
+            margin-left: 6px;
+            letter-spacing: 0.02em;
+        }
+        .voice-active-chip[data-engine="piper"] {
+            color: var(--cyan);
+            border-color: var(--cyan-glow);
+            background: var(--cyan-soft);
+        }
+        .voice-active-chip[data-engine="unavailable"] { color: var(--text-mid); }
+        .voice-active-chip-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: currentColor;
+            opacity: 0.75;
+        }
+
+        /* Gentle hint surfaced in Settings → Voice when the host is on
+           Linux, Piper is not configured, and the installed browser voices
+           look like the robotic eSpeak/Speech Dispatcher fallback. The
+           hint is informational only — Nova never auto-installs anything. */
+        .voice-linux-hint {
+            display: none;
+            margin-top: 12px;
+            padding: 10px 12px;
+            font-size: 0.78rem;
+            line-height: 1.45;
+            color: var(--text-mid);
+            background: var(--bg-elev);
+            border: 1px solid var(--border);
+            border-radius: var(--r-md);
+        }
+        .voice-linux-hint.is-visible { display: block; }
+        .voice-linux-hint strong { color: var(--text); font-weight: 500; }
+        .voice-linux-hint code {
+            font-family: var(--font-mono);
+            font-size: 0.72rem;
+            color: var(--text);
+            background: rgba(255, 255, 255, 0.04);
+            padding: 1px 5px;
+            border-radius: 4px;
+        }
 
         /* SilentGuard status card — calm, read-only.
            Colour shifts with state but never alarms. */
@@ -2675,7 +2896,13 @@
                     <div class="settings-row" id="voice-engine-row" style="display:none;">
                         <div class="settings-row-head">
                             <div class="settings-row-label">
-                                <span class="settings-row-title" id="voice-engine-title">Voice engine</span>
+                                <span class="settings-row-title-row">
+                                    <span class="settings-row-title" id="voice-engine-title">Voice engine</span>
+                                    <span class="voice-active-chip" id="voice-active-chip" data-engine="browser" aria-live="polite">
+                                        <span class="voice-active-chip-dot" aria-hidden="true"></span>
+                                        <span id="voice-active-chip-label">Browser</span>
+                                    </span>
+                                </span>
                                 <span class="settings-row-hint" id="voice-engine-hint">Browser is the safe default. Piper renders locally on this host for a calmer neural voice.</span>
                             </div>
                         </div>
@@ -2701,6 +2928,13 @@
                             </button>
                             <span class="voice-status" id="voice-status" aria-live="polite"></span>
                         </div>
+                    </div>
+
+                    <!-- Linux hint: shown only when running on Linux with Piper
+                         unavailable and only robotic-sounding browser voices
+                         installed. Informational; Nova never auto-installs. -->
+                    <div class="voice-linux-hint" id="voice-linux-hint" role="note">
+                        <span id="voice-linux-hint-text"></span>
                     </div>
                 </section>
 
@@ -2922,6 +3156,12 @@
             voice_engine_piper_unavailable: "Piper n'est pas configuré sur cet hôte.",
             voice_engine_piper_active: "Piper est prêt — la voix est rendue localement.",
             voice_engine_fallback: "Piper a échoué — Nova est revenue à la voix du navigateur.",
+            voice_active_browser: "Navigateur",
+            voice_active_piper: "Piper",
+            voice_active_unavailable: "Indisponible",
+            voice_linux_hint: "Sur Linux, les voix du navigateur peuvent sonner robotiques. Pour une voix neuronale plus calme rendue localement, installe Piper et un modèle de voix doux (voir README → « Voice »). Aucun téléchargement automatique, aucun service cloud.",
+            speaking_label: "Lecture en cours",
+            speaking_stop: "Arrêter la lecture",
             novamodel_title: "Utiliser le modèle Nova",
             novamodel_hint: "Remplace tout le routage par un seul modèle.",
             novamodel_help: "Nom du modèle Ollama (ex. nova-assistant, llama3:8b)",
@@ -3084,6 +3324,12 @@
             voice_engine_piper_unavailable: "Piper isn't configured on this host.",
             voice_engine_piper_active: "Piper is ready — voice is rendered locally.",
             voice_engine_fallback: "Piper failed — Nova fell back to the browser voice.",
+            voice_active_browser: "Browser",
+            voice_active_piper: "Piper",
+            voice_active_unavailable: "Unavailable",
+            voice_linux_hint: "On Linux, browser voices may sound robotic. For a calmer neural voice rendered locally, install Piper and a soft voice model (see README → \"Voice\"). No automatic downloads, no cloud service.",
+            speaking_label: "Nova is speaking",
+            speaking_stop: "Stop reading",
             novamodel_title: "Use Nova model",
             novamodel_hint: "Override all routing with a single model.",
             novamodel_help: "Ollama model name (e.g. nova-assistant, llama3:8b)",
@@ -3241,6 +3487,11 @@
         _setText("voice-select-hint", t("voice_select_hint"));
         _setText("voice-engine-title", t("voice_engine_title"));
         _setText("voice-engine-hint", t("voice_engine_hint"));
+        if (typeof updateActiveEngineChip === "function") updateActiveEngineChip();
+        if (typeof updateLinuxVoiceHint === "function") updateLinuxVoiceHint();
+        // The "Nova is speaking" indicator caches its label at mount,
+        // so a mid-flight language flip needs an explicit refresh.
+        if (typeof speakingIndicator !== "undefined") speakingIndicator._updateLabel();
         // The voice catalog labels its option groups via the language map.
         // If Settings is open we re-render the dropdown so optgroup labels
         // flip immediately; otherwise the next openSettings() handles it.
@@ -4168,7 +4419,151 @@
         btn.setAttribute("aria-label", label);
         btn.setAttribute("title", label);
         btn.setAttribute("aria-pressed", playing ? "true" : "false");
+
+        // Keep the calm "Nova is speaking" visual in lockstep with the
+        // speaker button. Doing it here means every entry / exit path —
+        // toggle, conversation switch, logout, error — flows through
+        // the same single source of truth.
+        if (playing) {
+            speakingIndicator.show(btn);
+        } else {
+            speakingIndicator.hide(btn);
+        }
     }
+
+    // Polished "Nova is speaking" indicator. Mounts inside the assistant
+    // message row that owns the active speaker button, breathes a small
+    // cyan orb and waveform, and offers a redundant Stop affordance so
+    // the user does not have to find the speaker button again. Lifecycle
+    // is fully driven by `setSpeakButtonState`; this controller is a
+    // view layer, not a state owner.
+    const SPEAKING_INDICATOR_SVG_STOP =
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6.5" y="6.5" width="11" height="11" rx="2"/></svg>';
+
+    const speakingIndicator = {
+        // Currently mounted element, when any. The single-instance shape
+        // mirrors the rest of the voice controller: only one message
+        // reads aloud at a time, so only one indicator is on screen.
+        el: null,
+        // The speaker button whose row owns the current indicator. We
+        // remember it so `.hide()` only tears down when called for the
+        // owning button, never for a stale call from a different one.
+        ownerBtn: null,
+
+        show(btn) {
+            if (!btn) return;
+            const row = btn.closest(".message-row.nova")
+                || btn.closest(".message-row");
+            if (!row) return;
+            // Replacing a stale indicator from a previous message keeps
+            // the visual in the right row when the user toggles between
+            // messages quickly.
+            if (this.el && this.ownerBtn !== btn) this.hide(this.ownerBtn);
+            if (this.el) {
+                // Same owner — make sure the visual is current.
+                this.el.classList.add("is-visible");
+                this._updateLabel();
+                return;
+            }
+
+            const el = document.createElement("div");
+            el.className = "speaking-indicator";
+            el.setAttribute("role", "status");
+            el.setAttribute("aria-live", "polite");
+
+            const visual = document.createElement("span");
+            visual.className = "speaking-visual";
+            visual.setAttribute("aria-hidden", "true");
+
+            const orb = document.createElement("span");
+            orb.className = "speaking-orb";
+            visual.appendChild(orb);
+
+            const wave = document.createElement("span");
+            wave.className = "speaking-wave";
+            wave.appendChild(document.createElement("span"));
+            wave.appendChild(document.createElement("span"));
+            wave.appendChild(document.createElement("span"));
+            visual.appendChild(wave);
+
+            const label = document.createElement("span");
+            label.className = "speaking-label";
+            label.textContent = (typeof t === "function" ? t("speaking_label") : "Nova is speaking");
+
+            const stopLabel = (typeof t === "function" ? t("speaking_stop") : "Stop reading");
+            const stop = document.createElement("button");
+            stop.type = "button";
+            stop.className = "speaking-stop";
+            stop.setAttribute("aria-label", stopLabel);
+            stop.setAttribute("title", stopLabel);
+            stop.innerHTML = SPEAKING_INDICATOR_SVG_STOP;
+            // The stop button delegates to the same global cancel path
+            // used by the speaker button, the logout flow, etc. Doing it
+            // through stopVoicePlayback() guarantees the indicator is
+            // torn down too — the chain comes back through setSpeak‐
+            // ButtonState(..., false) → speakingIndicator.hide().
+            stop.onclick = (e) => {
+                e.stopPropagation();
+                stopVoicePlayback();
+            };
+
+            el.appendChild(visual);
+            el.appendChild(label);
+            el.appendChild(stop);
+
+            // Insert above the action row so the indicator visually
+            // follows the bubble and precedes the actions. If the row
+            // does not have an action row yet (rare), append to end.
+            const actions = row.querySelector(".message-actions");
+            if (actions) {
+                row.insertBefore(el, actions);
+            } else {
+                row.appendChild(el);
+            }
+
+            // Force a reflow so the .is-visible transition runs from
+            // the initial opacity-0 state on the very first mount.
+            // eslint-disable-next-line no-unused-expressions
+            el.offsetHeight;
+            el.classList.add("is-visible");
+
+            this.el = el;
+            this.ownerBtn = btn;
+        },
+
+        hide(btn) {
+            // Ignore stale hide calls for a different button so the
+            // indicator does not flicker when stopVoicePlayback() runs
+            // its multi-pass cleanup.
+            if (!this.el) return;
+            if (btn && this.ownerBtn && btn !== this.ownerBtn) return;
+            const el = this.el;
+            this.el = null;
+            this.ownerBtn = null;
+            el.classList.remove("is-visible");
+            // Allow the fade-out transition to complete before removing
+            // the node so a quick stop / restart sequence does not flash.
+            setTimeout(() => {
+                if (el && el.parentNode) {
+                    try { el.parentNode.removeChild(el); } catch {}
+                }
+            }, 220);
+        },
+
+        _updateLabel() {
+            if (!this.el) return;
+            const labelEl = this.el.querySelector(".speaking-label");
+            if (labelEl && typeof t === "function") {
+                labelEl.textContent = t("speaking_label");
+            }
+            const stopBtn = this.el.querySelector(".speaking-stop");
+            if (stopBtn && typeof t === "function") {
+                const stopLabel = t("speaking_stop");
+                stopBtn.setAttribute("aria-label", stopLabel);
+                stopBtn.setAttribute("title", stopLabel);
+            }
+        },
+    };
 
     function stopVoicePlayback() {
         // Browser engine — cancel any speechSynthesis utterance.
@@ -4632,6 +5027,10 @@
             if (getSelectedEngine() === VOICE_ENGINE_PIPER) {
                 setSelectedEngine(VOICE_ENGINE_BROWSER);
             }
+            // The hint is the only voice-engine surface left when the
+            // host offers nothing but the browser engine; refresh it
+            // before bailing so the Linux fallback path still helps.
+            updateLinuxVoiceHint();
             return;
         }
         row.style.display = "";
@@ -4668,6 +5067,73 @@
             status.textContent = "";
             status.classList.remove("is-visible", "is-warn");
         }
+        updateActiveEngineChip();
+        updateLinuxVoiceHint();
+    }
+
+    // Updates the small "active engine" chip next to the Voice engine
+    // label. Reports the engine that will actually be used for the next
+    // read-aloud — distinct from the user's stored preference, which
+    // can point at an engine that is no longer available on this host.
+    function updateActiveEngineChip() {
+        const chip = document.getElementById("voice-active-chip");
+        const label = document.getElementById("voice-active-chip-label");
+        if (!chip || !label) return;
+        const config = voice.config || {};
+        const engine = effectiveEngine(config);
+        if (engine === VOICE_ENGINE_PIPER) {
+            chip.dataset.engine = "piper";
+            label.textContent = t("voice_active_piper");
+        } else if (!voiceSupported()) {
+            chip.dataset.engine = "unavailable";
+            label.textContent = t("voice_active_unavailable");
+        } else {
+            chip.dataset.engine = "browser";
+            label.textContent = t("voice_active_browser");
+        }
+    }
+
+    // Heuristic: are we on Linux with only the robotic eSpeak / Speech
+    // Dispatcher voices installed? When that is true we show a calm
+    // hint pointing at Piper. Anything ambiguous (no voices yet, a
+    // neural voice present, non-Linux platform) keeps the hint hidden.
+    function shouldShowLinuxVoiceHint() {
+        if (!voiceSupported()) return false;
+        const ua = (navigator.userAgent || "").toLowerCase();
+        const platform = (navigator.platform || "").toLowerCase();
+        const isLinux = (platform.indexOf("linux") !== -1
+            || ua.indexOf("linux") !== -1)
+            && ua.indexOf("android") === -1;
+        if (!isLinux) return false;
+        // Piper available host-side → the user already has a better
+        // option in the engine select; no hint needed.
+        const config = voice.config || {};
+        if (piperAvailable(config)) return false;
+        const voices = window.speechSynthesis.getVoices() || [];
+        if (!voices.length) return false;
+        // "Looks robotic" → only eSpeak / Speech Dispatcher / generic
+        // entries are installed. Anything that looks like a neural
+        // voice (Microsoft Online (Natural), Google, Apple Samantha,
+        // etc.) suppresses the hint. We're deliberately conservative —
+        // the hint stays hidden when in doubt.
+        const neuralMarkers = [
+            "natural", "online", "google", "samantha", "ava", "allison",
+            "karen", "moira", "aria", "jenny", "sonia", "hazel", "denise",
+            "audrey", "amelie",
+        ];
+        const hasNeural = voices.some(v => {
+            const name = (v.name || "").toLowerCase();
+            return neuralMarkers.some(marker => name.indexOf(marker) !== -1);
+        });
+        return !hasNeural;
+    }
+
+    function updateLinuxVoiceHint() {
+        const hint = document.getElementById("voice-linux-hint");
+        const text = document.getElementById("voice-linux-hint-text");
+        if (!hint || !text) return;
+        text.textContent = t("voice_linux_hint");
+        hint.classList.toggle("is-visible", shouldShowLinuxVoiceHint());
     }
 
     function onVoiceEngineChange(value) {
@@ -4848,6 +5314,11 @@
             window.speechSynthesis.addEventListener?.("voiceschanged", () => {
                 if (document.getElementById("voice-select")) {
                     renderVoiceSelect();
+                }
+                // The Linux hint depends on the installed voice list,
+                // which can populate asynchronously on first load.
+                if (document.getElementById("voice-linux-hint")) {
+                    updateLinuxVoiceHint();
                 }
             });
         } catch {}

@@ -87,9 +87,62 @@ ProtectKernelTunables=true
 # Disallow loading or unloading kernel modules from this unit.
 ProtectKernelModules=true
 
+# Block read/write access to the kernel log ring buffer (`dmesg` /
+# `/dev/kmsg`). Nova never inspects kernel messages; the buffer can
+# leak fragments of other processes' activity to a misbehaving tool.
+ProtectKernelLogs=true
+
 # Make the cgroup hierarchy read-only, so the unit cannot escape or rewrite
 # its own resource limits.
 ProtectControlGroups=true
+
+# Hide /dev/kmsg, raw block devices and most of /dev. Nova never speaks
+# to a hardware device; only pseudo-terminals and the standard streams
+# remain available.
+PrivateDevices=true
+
+# Restrict the namespace API so the process cannot create new user,
+# mount, ipc, pid, net, uts or cgroup namespaces. Blocks a common
+# container-escape building block and stops misbehaving libraries from
+# sandboxing themselves in ways that hide activity from the host.
+RestrictNamespaces=true
+
+# Drop access to SysV IPC objects (shared memory, semaphores, message
+# queues) on stop. Nova has no IPC peers — leaving stale segments
+# around is a needless attack surface.
+RemoveIPC=true
+
+# Hide other users' processes in /proc and expose only generic
+# directories. The combination prevents Nova (or a tool it spawns)
+# from enumerating PIDs that belong to other users on the host.
+ProtectProc=invisible
+ProcSubset=pid
+
+# Prevent the unit from changing the system clock or scheduling
+# realtime priorities. Both are common targets for denial-of-service
+# style abuse and Nova never needs them.
+ProtectClock=true
+RestrictRealtime=true
+
+# Hostname is read-only for the unit. Some Linux libraries try to
+# rewrite it when probing locale; this lock keeps the host name stable.
+ProtectHostname=true
+
+# UMask 0077 ensures any file Nova writes (nova.db, backups, logs) is
+# owner-only by default. systemd's default UMask is 0022 which would
+# leave the SQLite database world-readable on a shared host.
+UMask=0077
+
+# Syscall allow-list. Anything outside the chosen groups is filtered by
+# the kernel before the process sees it. We start from the standard
+# "service" set (the safe baseline for a userspace HTTP app), keep the
+# few extras Python / uvicorn need, and reject anything the kernel does
+# not understand as a syscall in that group. ``~`` denylist entries
+# remove syscalls a misbehaving binary should never reach for: ptrace
+# debugging, swap, kernel reboot, raw clock writes.
+SystemCallFilter=@system-service
+SystemCallFilter=~@debug @mount @swap @reboot @raw-io @cpu-emulation @obsolete
+SystemCallErrorNumber=EPERM
 
 [Install]
 WantedBy=multi-user.target

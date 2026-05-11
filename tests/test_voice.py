@@ -644,3 +644,67 @@ class TestVoiceSynthesizeWithPiper:
             headers=_h(token),
         )
         assert resp.status_code == 400
+
+
+# ── Voice config payload contract ───────────────────────────────────
+
+
+class TestVoiceConfigPayloadContract:
+    """Pins the keys the Settings UI relies on.
+
+    The Settings panel reads ``available_engines`` to decide whether to
+    show the engine selector and the active-engine chip, and
+    ``piper.detail`` to surface a calm hint when Piper is misconfigured.
+    Renaming or dropping either field would silently break the UX even
+    if the rest of the read-aloud flow still works, so we lock the
+    shape here.
+    """
+
+    def test_browser_only_payload_carries_available_engines(self, db_path, web_client):
+        _make_user(db_path, "alice")
+        token = _login(web_client, "alice")
+        body = web_client.get("/voice/config", headers=_h(token)).json()
+        assert "available_engines" in body
+        assert isinstance(body["available_engines"], list)
+        assert voice_providers.ENGINE_BROWSER in body["available_engines"]
+
+    def test_piper_block_exposes_detail_for_ui_hint(
+        self, tmp_path, db_path, web_client, monkeypatch,
+    ):
+        # Half-configured Piper (binary present, model missing) is the
+        # case where the UI most wants a hint. The payload must include
+        # a ``piper`` block with ``available=False`` and a human-readable
+        # ``detail`` string.
+        binary, _model, _config = _make_piper_files(tmp_path, with_config=False)
+        monkeypatch.setattr("config.NOVA_PIPER_BINARY", binary)
+        monkeypatch.setattr("config.NOVA_PIPER_VOICE_MODEL", "")
+        monkeypatch.setattr("config.NOVA_PIPER_VOICE_CONFIG", "")
+
+        _make_user(db_path, "alice")
+        token = _login(web_client, "alice")
+        body = web_client.get("/voice/config", headers=_h(token)).json()
+
+        piper = body.get("piper")
+        assert isinstance(piper, dict)
+        assert piper["available"] is False
+        assert isinstance(piper["detail"], str)
+        assert piper["detail"].strip(), "detail string must not be empty"
+
+    def test_payload_never_leaks_filesystem_paths(
+        self, tmp_path, db_path, web_client, monkeypatch,
+    ):
+        # The Piper provider holds absolute paths internally. Those
+        # paths must never appear in the public payload — a static
+        # check today, but the kind of regression worth pinning.
+        binary, model, config = _make_piper_files(tmp_path)
+        monkeypatch.setattr("config.NOVA_PIPER_BINARY", binary)
+        monkeypatch.setattr("config.NOVA_PIPER_VOICE_MODEL", model)
+        monkeypatch.setattr("config.NOVA_PIPER_VOICE_CONFIG", config)
+
+        _make_user(db_path, "alice")
+        token = _login(web_client, "alice")
+        body = web_client.get("/voice/config", headers=_h(token)).json()
+        raw = repr(body)
+        assert binary not in raw
+        assert model not in raw
+        assert config not in raw

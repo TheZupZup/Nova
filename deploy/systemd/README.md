@@ -73,7 +73,17 @@ this hardening to the container/VM host as well.
 | `RestrictSUIDSGID=true` | The unit cannot create files with the SUID/SGID bits or acquire them on exec. |
 | `ProtectKernelTunables=true` | `/proc/sys`, `/sys`, `/proc/sysrq-trigger` and similar kernel tunables become read-only or invisible. |
 | `ProtectKernelModules=true` | The unit cannot load or unload kernel modules. |
+| `ProtectKernelLogs=true` | Blocks access to the kernel log ring buffer (`dmesg` / `/dev/kmsg`). Nova never reads kernel messages. |
 | `ProtectControlGroups=true` | The cgroup hierarchy becomes read-only, so the unit cannot rewrite or escape its own resource limits. |
+| `PrivateDevices=true` | Hides raw block devices and most of `/dev`; Nova only needs the standard streams and pseudo-terminals. |
+| `RestrictNamespaces=true` | Blocks creation of user / mount / ipc / pid / net / uts / cgroup namespaces — a common building block for container-escape and self-sandboxing tricks. |
+| `RemoveIPC=true` | Drops SysV IPC objects (shared memory, semaphores, message queues) on stop. Nova has no IPC peers. |
+| `ProtectProc=invisible` + `ProcSubset=pid` | Hides other users' processes in `/proc` and exposes only PID directories. Stops Nova (or a spawned tool) from enumerating unrelated host processes. |
+| `ProtectClock=true` | Refuses syscalls that would set the system clock. |
+| `RestrictRealtime=true` | Blocks acquisition of realtime scheduling priorities — a frequent DoS vector. |
+| `ProtectHostname=true` | The hostname becomes read-only for the unit. |
+| `UMask=0077` | Files Nova writes (nova.db, backups, logs) are owner-only by default instead of world-readable. |
+| `SystemCallFilter=@system-service` (+ denylist) | Allow-list of syscalls Nova needs (`@system-service`), with `@debug @mount @swap @reboot @raw-io @cpu-emulation @obsolete` explicitly removed. Filtered syscalls return `EPERM` rather than killing the process. |
 
 For the authoritative reference, see
 [`systemd.exec(5)`](https://www.freedesktop.org/software/systemd/man/systemd.exec.html).
@@ -116,6 +126,20 @@ better). Use it to confirm the directives above are picked up, and to spot
 anything you may want to tighten further on your specific host. A non-zero
 score is normal — it does not mean the unit is misconfigured.
 
+The unit shipped in this repo scores in the low single digits when
+analysed offline:
+
+```
+→ Overall exposure level for nova.service: 1.9 OK :-)
+```
+
+The remaining points are deliberate trade-offs — Nova needs IPv4/IPv6
+networking to reach Ollama, the weather API, and any optional
+read-only SilentGuard endpoint, so the families and `PrivateNetwork=`
+must stay open. If your host has no need for outbound traffic, you
+can add an egress allow-list with `IPAddressAllow=` / `IPAddressDeny=`
+on top of this unit.
+
 ## Troubleshooting
 
 - **`Read-only file system` on startup.** `nova.db` is being written
@@ -125,6 +149,16 @@ score is normal — it does not mean the unit is misconfigured.
   the Ollama service is up (`systemctl status ollama`). Network access
   itself is not blocked by this unit.
 - **Service fails immediately with no useful log.** Temporarily comment out
-  the `MemoryDenyWriteExecute=` and `SystemCallArchitectures=` lines and
-  restart; some Python extensions built with JIT or non-native wheels can
-  trip those. Re-enable one at a time once you've identified the culprit.
+  the `MemoryDenyWriteExecute=`, `SystemCallArchitectures=`, and
+  `SystemCallFilter=` lines and restart; some Python extensions built
+  with JIT or non-native wheels can trip those. Re-enable one at a time
+  once you've identified the culprit. The denylist
+  (`~@debug @mount @swap @reboot @raw-io @cpu-emulation @obsolete`)
+  rejects syscalls a userspace app should never reach for — if you need
+  a tool from one of those groups, audit the dependency before relaxing
+  the filter.
+- **Files written by Nova look unreadable from another account.** The
+  hardened unit ships with `UMask=0077`, so newly created files are
+  owner-only. That is intentional — `nova.db` contains conversation
+  history. If you actively need group-readable backups, override with
+  `UMask=0027` (group-readable) and document the choice.

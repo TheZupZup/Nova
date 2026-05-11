@@ -153,9 +153,15 @@ sudo systemctl start nova
 ```
 
 For an optional hardened unit file with systemd sandbox restrictions
-(`NoNewPrivileges`, `ProtectSystem=strict`, capability drop, etc.), see
-[deploy/systemd/README.md](deploy/systemd/README.md). It is a drop-in
-replacement for the minimal unit above and does not change Nova's behavior.
+(`NoNewPrivileges`, `ProtectSystem=strict`, capability drop, syscall
+filter, etc.), see [deploy/systemd/README.md](deploy/systemd/README.md).
+It is a drop-in replacement for the minimal unit above and does not
+change Nova's behavior.
+
+For the broader deployment story — recommended local-only setups,
+VPN / Zero Trust gateways, least privilege, backups, and the explicit
+list of things Nova will never do (no firewall changes, no `sudo`, no
+cloud TTS, …) — see [docs/secure-deployment.md](docs/secure-deployment.md).
 
 ## Voice / read-aloud
 
@@ -164,11 +170,26 @@ the browser's built-in `speechSynthesis` API — zero install, fully
 local, and pleasant on most platforms (Apple Samantha, Microsoft Aria,
 Google Female, …).
 
+While Nova is reading, a small calm indicator with a soft cyan orb and
+waveform appears beside the message ("Nova is speaking" / "Lecture en
+cours") with an inline Stop control. The animation is lightweight CSS
+and respects `prefers-reduced-motion`; it disappears the moment
+playback stops, the user switches conversations, or they log out.
+
 On Fedora and other Linux desktops the platform voices sometimes fall
-back to a robotic engine. In that case Nova can drive a local
+back to a robotic engine. Nova detects that and surfaces a gentle
+hint under Settings → Voice recommending the optional local Piper
+path; it never auto-installs anything. The hint is informational only.
+
+In that case Nova can drive a local
 [Piper](https://github.com/rhasspy/piper) neural voice instead. Piper
 is opt-in, runs entirely on this host, and is never downloaded
 automatically.
+
+Settings → Voice also shows an **Active engine** chip next to the
+engine selector so the active TTS pipeline (Browser or Piper) is
+unambiguous, plus a **Test voice** button to compare voices
+side-by-side without leaving the panel.
 
 ### Optional: enable Piper
 
@@ -218,6 +239,8 @@ the read-aloud experience is never lost.
 
 - Piper runs offline. No audio bytes leave this host.
 - Nova never auto-installs a Piper binary or voice model.
+- Nova does not use any cloud TTS service — neither for the
+  "Read aloud" button nor for the Settings preview.
 - No telemetry, no microphone capture, no always-on listening — the
   read-aloud button is the only voice surface in Nova today.
 
