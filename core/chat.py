@@ -61,6 +61,7 @@ def _iter_content_chunks(stream) -> Iterator[str]:
         if chunk:
             yield chunk
 
+
 MEMORY_EXTRACTION_PROMPT = """Analyse cette conversation et extrait UNIQUEMENT les informations personnelles importantes sur l'utilisateur.
 
 Si tu trouves quelque chose d'important, réponds avec ce format exact:

@@ -662,14 +662,12 @@ def chat_stream_endpoint(
 
         final_reply = ""
         final_model: str | None = None
-        sent_conversation_id = False
 
         try:
             for event in events:
                 etype = event.get("type")
                 if etype == "meta":
                     final_model = event.get("model") or final_model
-                    sent_conversation_id = True
                     yield _stream_event({
                         "type": "meta",
                         "model": final_model,
