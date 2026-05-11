@@ -15,7 +15,6 @@ brackets, ``#`` comments), so we parse it inline.
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import pytest
