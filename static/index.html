@@ -1338,6 +1338,83 @@
 
         .msg-action-status.is-positive { color: var(--cyan); }
 
+        /* Lightweight inline form that follows a thumbs-down. Keeps the
+           same calm visual language as the action row — soft border, no
+           hard shadows, and a tight footprint so it never overwhelms the
+           message bubble. The form is optional: skipping it is fine,
+           the rating is already saved. */
+        .msg-feedback-reason {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            margin-top: 8px;
+            padding: 8px 10px;
+            border: 1px solid var(--border-soft);
+            border-radius: var(--r-sm);
+            background: rgba(255, 255, 255, 0.02);
+            width: 100%;
+            max-width: 480px;
+        }
+
+        .msg-feedback-reason-input {
+            width: 100%;
+            min-height: 36px;
+            resize: vertical;
+            padding: 6px 8px;
+            background: transparent;
+            color: var(--text);
+            border: 1px solid var(--border-soft);
+            border-radius: var(--r-sm);
+            font: inherit;
+            font-size: 0.82rem;
+            line-height: 1.35;
+        }
+
+        .msg-feedback-reason-input:focus {
+            outline: none;
+            border-color: var(--cyan-glow);
+            box-shadow: 0 0 0 1px var(--cyan-glow);
+        }
+
+        .msg-feedback-reason-btns {
+            display: flex;
+            justify-content: flex-end;
+            gap: 6px;
+        }
+
+        .msg-feedback-reason-submit,
+        .msg-feedback-reason-skip {
+            appearance: none;
+            -webkit-appearance: none;
+            background: transparent;
+            border: 1px solid var(--border-soft);
+            color: var(--text-dim);
+            border-radius: var(--r-sm);
+            padding: 4px 10px;
+            font: inherit;
+            font-size: 0.74rem;
+            letter-spacing: 0.02em;
+            cursor: pointer;
+            transition:
+                color var(--t-base),
+                border-color var(--t-base),
+                background var(--t-base);
+        }
+
+        .msg-feedback-reason-submit:hover,
+        .msg-feedback-reason-skip:hover {
+            color: var(--text);
+        }
+
+        .msg-feedback-reason-submit {
+            color: var(--cyan);
+            border-color: var(--cyan-glow);
+        }
+
+        .msg-feedback-reason-submit:hover {
+            background: var(--cyan-soft);
+        }
+
         /* ── "Nova is speaking" indicator ──
            Sits inside the assistant message row, just below the bubble and
            above the action row, only while audio is playing. Designed to
@@ -3042,8 +3119,13 @@
             stop_reading: "Arrêter la lecture",
             like_response: "Réponse utile",
             dislike_response: "Réponse à améliorer",
-            feedback_positive: "Merci — Nova a pris note.",
-            feedback_negative: "Merci — Nova ajustera.",
+            feedback_positive: "Préférence enregistrée.",
+            feedback_negative: "Préférence enregistrée.",
+            feedback_reason_placeholder: "Que doit améliorer Nova ?",
+            feedback_reason_submit: "Enregistrer",
+            feedback_reason_skip: "Passer",
+            feedback_reason_saved: "Préférence enregistrée.",
+            feedback_reason_error: "Impossible d'enregistrer la préférence.",
             nova_actions: "Actions du message",
             mode: "Mode",
             mode_auto_desc: "Choisit automatiquement le bon mode",
@@ -3210,8 +3292,13 @@
             stop_reading: "Stop reading",
             like_response: "Helpful response",
             dislike_response: "Needs improvement",
-            feedback_positive: "Thanks — Nova noted this.",
-            feedback_negative: "Thanks — Nova will adjust.",
+            feedback_positive: "Preference noted.",
+            feedback_negative: "Preference noted.",
+            feedback_reason_placeholder: "What should Nova improve?",
+            feedback_reason_submit: "Save",
+            feedback_reason_skip: "Skip",
+            feedback_reason_saved: "Preference noted.",
+            feedback_reason_error: "Could not save preference.",
             nova_actions: "Message actions",
             mode: "Mode",
             mode_auto_desc: "Picks the right mode automatically",
@@ -4147,7 +4234,13 @@
 
         for (const msg of msgs) {
             if (msg.role !== "system") {
-                appendMessage(msg.role === "user" ? "user" : "nova", msg.content, msg.model);
+                appendMessage(
+                    msg.role === "user" ? "user" : "nova",
+                    msg.content,
+                    msg.model,
+                    null,
+                    msg.id || null,
+                );
             }
         }
 
@@ -5193,6 +5286,31 @@
         }, ttl);
     }
 
+    // POST the rating to the local feedback endpoint. Network errors are
+    // swallowed deliberately — the UI state is the source of truth for
+    // what the user clicked, and a transient backend hiccup must not
+    // turn a calm acknowledgement into a scary error toast.
+    async function postFeedback(payload) {
+        try {
+            const res = await fetch("/feedback", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "Authorization": `Bearer ${token}`,
+                },
+                body: JSON.stringify(payload),
+            });
+            if (!res.ok) {
+                let detail = "";
+                try { detail = (await res.json())?.detail || ""; } catch {}
+                return { ok: false, detail };
+            }
+            return { ok: true };
+        } catch {
+            return { ok: false, detail: "" };
+        }
+    }
+
     function setFeedback(actions, primary, secondary, kind) {
         const wasActive = primary.classList.contains("is-active");
         if (wasActive) {
@@ -5210,17 +5328,71 @@
         showActionStatus(actions, message, { positive: kind === "like" });
     }
 
+    // Builds (and toggles) the small inline reason input that follows a
+    // thumbs-down click. The textarea is short, single-purpose, and
+    // intentionally non-modal — the user can ignore it and continue
+    // chatting; the rating is already recorded.
+    function buildReasonInput(actions, onSubmit) {
+        const existing = actions.querySelector(".msg-feedback-reason");
+        if (existing) {
+            existing.querySelector("textarea")?.focus();
+            return existing;
+        }
+        const wrap = document.createElement("div");
+        wrap.className = "msg-feedback-reason";
+        const ta = document.createElement("textarea");
+        ta.className = "msg-feedback-reason-input";
+        ta.rows = 2;
+        ta.maxLength = 280;
+        ta.placeholder = t("feedback_reason_placeholder");
+        ta.setAttribute("aria-label", t("feedback_reason_placeholder"));
+        const submit = document.createElement("button");
+        submit.type = "button";
+        submit.className = "msg-feedback-reason-submit";
+        submit.textContent = t("feedback_reason_submit");
+        const skip = document.createElement("button");
+        skip.type = "button";
+        skip.className = "msg-feedback-reason-skip";
+        skip.textContent = t("feedback_reason_skip");
+        wrap.appendChild(ta);
+        const btns = document.createElement("div");
+        btns.className = "msg-feedback-reason-btns";
+        btns.appendChild(skip);
+        btns.appendChild(submit);
+        wrap.appendChild(btns);
+        actions.appendChild(wrap);
+        ta.focus();
+        const close = () => { if (wrap.isConnected) wrap.remove(); };
+        skip.onclick = (e) => { e.stopPropagation(); close(); };
+        submit.onclick = (e) => {
+            e.stopPropagation();
+            const text = ta.value.trim();
+            close();
+            onSubmit(text);
+        };
+        return wrap;
+    }
+
     // Builds and attaches the per-message action row. The row sits as a
     // sibling of the bubble inside `.message-row.nova` so it visually
     // belongs to the response without competing with markdown content
     // (lists, code blocks, etc.) inside the bubble itself.
-    function buildAssistantActions(row, bubble, rawText) {
+    //
+    // ``messageId`` is the backend's assistant_message_id (when known).
+    // It is passed to the /feedback endpoint so the rating attaches to
+    // a specific message. Older messages that predate the feedback
+    // column may have a null id; the row still renders, ratings just
+    // are not stored.
+    function buildAssistantActions(row, bubble, rawText, messageId) {
         if (!rawText) return null;
 
         const actions = document.createElement("div");
         actions.className = "message-actions";
         actions.setAttribute("role", "toolbar");
         actions.setAttribute("aria-label", t("nova_actions"));
+        if (messageId != null) {
+            actions.dataset.messageId = String(messageId);
+        }
 
         // Feedback group ----------------------------------------------------
         const feedbackGroup = document.createElement("div");
@@ -5231,13 +5403,70 @@
         const dislikeBtn = makeActionButton("dislike", t("dislike_response"), ACTION_SVG.thumbDown);
         dislikeBtn.setAttribute("aria-pressed", "false");
 
+        const resolveMessageId = () => {
+            const raw = actions.dataset.messageId;
+            const n = raw ? parseInt(raw, 10) : NaN;
+            return Number.isFinite(n) ? n : null;
+        };
+
         likeBtn.onclick = (e) => {
             e.stopPropagation();
+            const wasActive = likeBtn.classList.contains("is-active");
             setFeedback(actions, likeBtn, dislikeBtn, "like");
+            // Drop the reason input if it was open from a previous
+            // thumbs-down — toggling to thumbs-up means the user is
+            // happy now, no follow-up needed.
+            actions.querySelector(".msg-feedback-reason")?.remove();
+            if (wasActive) return;
+            const mid = resolveMessageId();
+            if (mid == null) return;
+            postFeedback({
+                sentiment: "positive",
+                message_id: mid,
+                conversation_id: currentConvId,
+            });
         };
         dislikeBtn.onclick = (e) => {
             e.stopPropagation();
+            const wasActive = dislikeBtn.classList.contains("is-active");
             setFeedback(actions, dislikeBtn, likeBtn, "dislike");
+            if (wasActive) {
+                // User unselected dislike — close any open reason input.
+                actions.querySelector(".msg-feedback-reason")?.remove();
+                return;
+            }
+            const mid = resolveMessageId();
+            if (mid == null) return;
+            // Record the bare thumbs-down immediately so the rating is
+            // persisted even if the user never types a reason. The
+            // optional reason form then re-records with the same
+            // message id, overwriting the empty reason.
+            postFeedback({
+                sentiment: "negative",
+                message_id: mid,
+                conversation_id: currentConvId,
+            });
+            buildReasonInput(actions, async (text) => {
+                if (!text) return;
+                const result = await postFeedback({
+                    sentiment: "negative",
+                    message_id: mid,
+                    conversation_id: currentConvId,
+                    reason: text,
+                });
+                if (result.ok) {
+                    showActionStatus(actions, t("feedback_reason_saved"), {
+                        positive: true,
+                        ttl: 2000,
+                    });
+                } else {
+                    showActionStatus(
+                        actions,
+                        result.detail || t("feedback_reason_error"),
+                        { ttl: 2400 },
+                    );
+                }
+            });
         };
 
         feedbackGroup.appendChild(likeBtn);
@@ -5349,7 +5578,7 @@
         });
     }
 
-    function appendMessage(role, content, model, imageB64) {
+    function appendMessage(role, content, model, imageB64, messageId) {
         const emptyState = document.getElementById("empty-state");
         if (emptyState) emptyState.remove();
 
@@ -5399,7 +5628,7 @@
             // sits as a sibling of the bubble inside the row. Skipping it
             // for image-only assistant turns keeps the surface uncluttered
             // when there's nothing to copy or read.
-            buildAssistantActions(row, bubble, content);
+            buildAssistantActions(row, bubble, content, messageId || null);
         }
 
         messagesEl.appendChild(row);
@@ -5474,7 +5703,7 @@
                 textNode.data = "";
                 bubble.dataset.rawText = "";
             },
-            finalise(model) {
+            finalise(model, messageId) {
                 bubble.classList.remove("streaming");
                 if (caret.parentNode) caret.parentNode.removeChild(caret);
 
@@ -5497,7 +5726,7 @@
                 bubble.appendChild(rendered);
                 attachCodeBlockCopyButtons(rendered);
 
-                buildAssistantActions(row, bubble, buffer);
+                buildAssistantActions(row, bubble, buffer, messageId || null);
                 if (isScrolledNearBottom(messagesEl)) {
                     messagesEl.scrollTop = messagesEl.scrollHeight;
                 }
@@ -5638,6 +5867,7 @@
         const result = {
             conversationId: null,
             model: null,
+            assistantMessageId: null,
             errored: false,
             errorDetail: "",
             completed: false,
@@ -5673,6 +5903,9 @@
                         result.conversationId = event.conversation_id;
                     }
                     if (event.model) result.model = event.model;
+                    if (event.assistant_message_id != null) {
+                        result.assistantMessageId = event.assistant_message_id;
+                    }
                     if (userCancelledChat) break;
                     if (!activeStreamBubble) {
                         // No deltas reached us (e.g. short-circuit reply
@@ -5683,7 +5916,10 @@
                         activeThinkingRow = null;
                         activeStreamBubble = createStreamingAssistantBubble();
                     }
-                    activeStreamBubble.finalise(result.model);
+                    activeStreamBubble.finalise(
+                        result.model,
+                        result.assistantMessageId || null,
+                    );
                     break;
                 }
                 case "error": {

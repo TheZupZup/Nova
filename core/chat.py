@@ -7,6 +7,7 @@ from core.ollama_client import client
 from core.memory import format_memories_for_prompt, parse_and_save
 from core.identity import IDENTITY_CONTRACT
 from core.nova_contract import build_personalization_block
+from core.feedback import build_feedback_preferences_block
 from core.policies import ADMIN_POLICY, Policy
 from core.settings import get_personalization
 from core.router import route
@@ -136,6 +137,7 @@ def build_messages(
     context_type: str = None,
     natural_memories=None,
     personalization: dict | None = None,
+    feedback_preferences: str | None = None,
 ) -> list[dict]:
     """Construit la liste de messages à envoyer à Ollama.
 
@@ -143,6 +145,13 @@ def build_messages(
     `core.settings.get_personalization`. It produces an extra block appended
     after the identity contract. Defaults / empty payloads contribute
     nothing, so existing single-user behaviour is preserved.
+
+    `feedback_preferences` is the short, deterministic preference block
+    built from this user's thumbs-up / thumbs-down history (see
+    ``core.feedback.build_feedback_preferences_block``). It is appended
+    *below* the identity contract and the personalization block so it
+    cannot override safety rules, identity rules, or capability bounds —
+    feedback shapes style, not power.
     """
     if context_type == "weather":
         system_prompt = WEATHER_SYSTEM_PROMPT.format(weather_data=extra_context)
@@ -160,6 +169,10 @@ def build_messages(
     pers_block = build_personalization_block(personalization)
     if pers_block:
         parts.append(pers_block)
+    if feedback_preferences:
+        # Sits below identity + personalization on purpose: the system
+        # prompt is ordered so safety/identity rules always win.
+        parts.append(feedback_preferences)
     parts.append(format_time_context())
 
     # Read-only SilentGuard context. Probes the local provider on
@@ -223,6 +236,10 @@ def chat(history: list[dict], user_input: str, memories: list[dict], user_id: in
             personalization = get_personalization(user_id)
         except Exception:
             personalization = None
+        try:
+            feedback_prefs = build_feedback_preferences_block(user_id)
+        except Exception:
+            feedback_prefs = ""
 
         # Weather is gated; restricted users with weather disabled fall
         # straight through to the regular chat branch.
@@ -231,7 +248,11 @@ def chat(history: list[dict], user_input: str, memories: list[dict], user_id: in
             if isinstance(weather_result, tuple):
                 lat, lon, city = weather_result
                 weather_data = get_weather(lat, lon, city)
-                messages = build_messages(history, user_input, memories, weather_data, "weather", personalization=personalization)
+                messages = build_messages(
+                    history, user_input, memories, weather_data, "weather",
+                    personalization=personalization,
+                    feedback_preferences=feedback_prefs,
+                )
                 response = client.chat(model=model, messages=messages)
                 reply = response["message"]["content"]
                 return reply, model
@@ -248,7 +269,11 @@ def chat(history: list[dict], user_input: str, memories: list[dict], user_id: in
         if is_security_query(user_input):
             security_data = silentguard_integration.recent_events_summary(user_id)
             if security_data:
-                messages = build_messages(history, user_input, memories, security_data, "security", personalization=personalization)
+                messages = build_messages(
+                    history, user_input, memories, security_data, "security",
+                    personalization=personalization,
+                    feedback_preferences=feedback_prefs,
+                )
                 response = client.chat(model=model, messages=messages)
                 reply = response["message"]["content"]
                 return reply, model
@@ -257,13 +282,22 @@ def chat(history: list[dict], user_input: str, memories: list[dict], user_id: in
         # auto-detected `should_search` path require web_search_enabled.
         if policy.web_search_enabled and (force_search or should_search(user_input)):
             search_results = web_search(user_input)
-            messages = build_messages(history, user_input, memories, search_results, "search", personalization=personalization)
+            messages = build_messages(
+                history, user_input, memories, search_results, "search",
+                personalization=personalization,
+                feedback_preferences=feedback_prefs,
+            )
             response = client.chat(model=model, messages=messages)
             reply = response["message"]["content"]
             return reply, model
 
         # Chat normal — inject relevant natural memories into context
-        messages = build_messages(history, user_input, memories, natural_memories=natural_mems, personalization=personalization)
+        messages = build_messages(
+            history, user_input, memories,
+            natural_memories=natural_mems,
+            personalization=personalization,
+            feedback_preferences=feedback_prefs,
+        )
         response = client.chat(model=model, messages=messages)
         reply = response["message"]["content"]
 
@@ -271,7 +305,11 @@ def chat(history: list[dict], user_input: str, memories: list[dict], user_id: in
         if policy.web_search_enabled and _reply_is_uncertain(reply):
             search_results = web_search(user_input)
             if search_results and "Aucun résultat" not in search_results:
-                messages = build_messages(history, user_input, memories, search_results, "search", personalization=personalization)
+                messages = build_messages(
+                    history, user_input, memories, search_results, "search",
+                    personalization=personalization,
+                    feedback_preferences=feedback_prefs,
+                )
                 response = client.chat(model=model, messages=messages)
                 reply = response["message"]["content"]
 
@@ -343,6 +381,10 @@ def chat_stream(
             personalization = get_personalization(user_id)
         except Exception:
             personalization = None
+        try:
+            feedback_prefs = build_feedback_preferences_block(user_id)
+        except Exception:
+            feedback_prefs = ""
 
         # Weather branch — single short reply, stream it.
         if policy.weather_enabled:
@@ -353,6 +395,7 @@ def chat_stream(
                 messages = build_messages(
                     history, user_input, memories, weather_data,
                     "weather", personalization=personalization,
+                    feedback_preferences=feedback_prefs,
                 )
                 reply = yield from _stream_and_accumulate(model, messages)
                 yield {"type": "done", "reply": reply, "model": model}
@@ -377,6 +420,7 @@ def chat_stream(
                 messages = build_messages(
                     history, user_input, memories, security_data,
                     "security", personalization=personalization,
+                    feedback_preferences=feedback_prefs,
                 )
                 reply = yield from _stream_and_accumulate(model, messages)
                 yield {"type": "done", "reply": reply, "model": model}
@@ -388,6 +432,7 @@ def chat_stream(
             messages = build_messages(
                 history, user_input, memories, search_results,
                 "search", personalization=personalization,
+                feedback_preferences=feedback_prefs,
             )
             reply = yield from _stream_and_accumulate(model, messages)
             yield {"type": "done", "reply": reply, "model": model}
@@ -397,6 +442,7 @@ def chat_stream(
         messages = build_messages(
             history, user_input, memories,
             natural_memories=natural_mems, personalization=personalization,
+            feedback_preferences=feedback_prefs,
         )
         reply = yield from _stream_and_accumulate(model, messages)
 
@@ -411,6 +457,7 @@ def chat_stream(
                 messages = build_messages(
                     history, user_input, memories, search_results,
                     "search", personalization=personalization,
+                    feedback_preferences=feedback_prefs,
                 )
                 reply = yield from _stream_and_accumulate(model, messages)
 

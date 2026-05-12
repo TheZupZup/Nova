@@ -59,6 +59,15 @@ Shipped today:
   enthusiasm, emoji density, and free-text custom instructions are
   stored per user and shape Nova's tone without leaking into other
   accounts.
+- **Local response feedback.** Thumbs up / thumbs down under each
+  assistant message records a per-user preference signal in the local
+  SQLite database; a thumbs-down accepts an optional short reason such
+  as *"focus on this project, not generic advice"*. The data feeds a
+  short, deterministic preference block in future system prompts — it
+  never leaves the host, never triggers model training, and cannot
+  override the identity contract or the Nova Safety and Trust Contract.
+  See [docs/nova-safety-and-trust-contract.md](docs/nova-safety-and-trust-contract.md)
+  for the boundaries this layer sits inside.
 - **Voice / read-aloud.** Every assistant message has a "Read aloud"
   button. The default engine is the browser's local
   `speechSynthesis` API; an optional local [Piper](https://github.com/rhasspy/piper)
@@ -98,6 +107,7 @@ core/
   memory_command.py   Manual memory command parser
   memory_importer.py  Local-only Markdown memory pack importer
   nova_contract.py    Nova identity + personalization prompt blocks
+  feedback.py         Local response feedback (thumbs up/down) → preference block
   identity.py         Identity contract constant
   auth.py             JWT creation and verification
   github_oauth.py     Optional GitHub OAuth gate (alpha channel)

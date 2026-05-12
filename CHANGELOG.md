@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+### Added
+- Local response feedback turns thumbs up / thumbs down into a per-user
+  preference signal. Ratings are stored locally in SQLite (scoped per
+  user, never sent off-host), and a short, deterministic preference
+  block is appended to future system prompts below the identity
+  contract and the personalization block. Thumbs-down accepts an
+  optional short reason; reasons that look like they contain a
+  credential are refused at write time. Ratings can be listed and
+  deleted via `GET /feedback` and `DELETE /feedback/{id}`.
+
 ## v0.4.0 - 2026-04-24
 ### Added
 - Manual web search button in interface

@@ -14,6 +14,7 @@ from core.model_registry import (
 from core.model_pulls import migrate as _migrate_model_pulls
 from core.model_access import migrate as _migrate_model_access
 from core.local_models import migrate as _migrate_local_models
+from core.feedback import migrate as _migrate_feedback
 
 DB_PATH = "nova.db"
 
@@ -105,6 +106,7 @@ def initialize_db():
     _migrate_model_pulls(DB_PATH)
     _migrate_model_access(DB_PATH)
     _migrate_local_models(DB_PATH)
+    _migrate_feedback(DB_PATH)
     _init_natural_memory(DB_PATH)
 
 
@@ -292,14 +294,16 @@ def update_conversation_timestamp(conversation_id: int):
         )
 
 
-def save_message(conversation_id: int, role: str, content: str, model: str = None):
-    """Sauvegarde un message dans une conversation."""
+def save_message(conversation_id: int, role: str, content: str, model: str = None) -> int:
+    """Sauvegarde un message dans une conversation et retourne son id."""
     with _get_connection() as conn:
-        conn.execute(
+        cur = conn.execute(
             "INSERT INTO messages (conversation_id, role, content, model, created) VALUES (?, ?, ?, ?, ?)",
             (conversation_id, role, content, model, datetime.now().isoformat())
         )
+        new_id = int(cur.lastrowid)
     update_conversation_timestamp(conversation_id)
+    return new_id
 
 
 def load_conversations(user_id: int) -> list[dict]:
@@ -337,10 +341,13 @@ def load_conversation_messages(
         return None
     with _get_connection() as conn:
         rows = conn.execute(
-            "SELECT role, content, model FROM messages WHERE conversation_id = ? ORDER BY created ASC",
+            "SELECT id, role, content, model FROM messages WHERE conversation_id = ? ORDER BY created ASC",
             (conversation_id,)
         ).fetchall()
-    return [{"role": row["role"], "content": row["content"], "model": row["model"]} for row in rows]
+    return [
+        {"id": row["id"], "role": row["role"], "content": row["content"], "model": row["model"]}
+        for row in rows
+    ]
 
 
 def delete_conversation(conversation_id: int, user_id: int) -> bool:

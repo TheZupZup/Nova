@@ -207,6 +207,18 @@ humans.
   Per-user settings, family-controls roles, admin-only endpoints, and
   the policy gating in `core/policies.py` are owned by the operator
   and the user, not by the model.
+- Nova **must not let user feedback rewrite Nova.** The thumbs-up /
+  thumbs-down feedback layer in `core/feedback.py` only contributes a
+  short, deterministic preference block placed *below* the identity
+  contract and the personalization block in the system prompt; the
+  block must explicitly re-state that preferences cannot override
+  identity, safety rules, or capability boundaries. Feedback never
+  fine-tunes a model, never edits system prompts on disk, never
+  enables a new capability, and is never sent off-host. Reasons that
+  look like credentials are refused at write time so the local SQLite
+  file never accumulates a token the user pasted by accident. The
+  feedback table is local and per-user; the user can list and delete
+  their entries at any time.
 
 ---
 

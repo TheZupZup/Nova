@@ -31,6 +31,7 @@ from core.memory import (
     get_setting, save_setting,
     list_memories, update_memory, delete_memory,
 )
+from core import feedback as _feedback
 from core.settings import (
     get_user_setting, save_user_setting,
     get_personalization,
@@ -280,6 +281,45 @@ class MemoryUpdateRequest(BaseModel):
 class MemoryAddRequest(BaseModel):
     category: str
     content: str
+
+
+class FeedbackRequest(BaseModel):
+    """Body for ``POST /feedback`` — one assistant-message rating.
+
+    ``sentiment`` is required; the rest is optional metadata used to
+    attach the rating to a specific message and to let the user explain
+    a thumbs-down. The free-text ``reason`` is sanitised + length-capped
+    server-side by ``core.feedback.sanitise_reason`` before storage.
+    """
+    model_config = {"extra": "forbid"}
+
+    sentiment: str
+    conversation_id: int | None = None
+    message_id: int | None = None
+    reason: str | None = None
+
+    @field_validator("sentiment")
+    @classmethod
+    def validate_sentiment(cls, v):
+        if v not in (_feedback.SENTIMENT_POSITIVE, _feedback.SENTIMENT_NEGATIVE):
+            raise ValueError("sentiment must be 'positive' or 'negative'")
+        return v
+
+    @field_validator("reason")
+    @classmethod
+    def validate_reason(cls, v):
+        if v is None:
+            return v
+        if not isinstance(v, str):
+            raise ValueError("reason must be a string")
+        if len(v) > _feedback.REASON_MAX_LEN * 4:
+            # Reject obviously-oversized blobs before the sanitiser sees
+            # them; the sanitiser would cap them anyway, but rejecting
+            # early protects the DB from megabyte-shaped payloads.
+            raise ValueError(
+                f"reason too long (max {_feedback.REASON_MAX_LEN} characters)"
+            )
+        return v
 
 
 class SettingsUpdateRequest(BaseModel):
@@ -582,7 +622,9 @@ def chat_endpoint(request: ChatRequest, user: CurrentUser = Depends(get_current_
     )
 
     save_message(conversation_id, "user", request.message)
-    save_message(conversation_id, "assistant", response, model_used)
+    assistant_message_id = save_message(
+        conversation_id, "assistant", response, model_used
+    )
 
     if len(history) == 0:
         update_conversation_title(conversation_id, request.message[:40])
@@ -591,6 +633,7 @@ def chat_endpoint(request: ChatRequest, user: CurrentUser = Depends(get_current_
         "response": response,
         "model": model_used,
         "conversation_id": conversation_id,
+        "assistant_message_id": assistant_message_id,
     }
 
 
@@ -689,7 +732,7 @@ def chat_stream_endpoint(
                     # cleanly. A client disconnect at this point is
                     # acceptable: the response is already saved.
                     save_message(conversation_id, "user", request.message)
-                    save_message(
+                    assistant_message_id = save_message(
                         conversation_id, "assistant",
                         final_reply, final_model,
                     )
@@ -697,10 +740,15 @@ def chat_stream_endpoint(
                         update_conversation_title(
                             conversation_id, request.message[:40]
                         )
+                    # The assistant_message_id is what the feedback
+                    # endpoint accepts; surface it on `done` so the
+                    # client can wire thumbs up / thumbs down to the
+                    # exact row that was just persisted.
                     yield _stream_event({
                         "type": "done",
                         "model": final_model,
                         "conversation_id": conversation_id,
+                        "assistant_message_id": assistant_message_id,
                     })
                 elif etype == "error":
                     yield _stream_event({
@@ -779,6 +827,50 @@ def add_memory(
             detail="Memory saving is disabled for this account.",
         )
     save_memory(request.category, request.content, user.id)
+    return {"ok": True}
+
+
+# ── FEEDBACK ENDPOINTS ──
+#
+# Thumbs up / thumbs down on assistant messages, stored locally and
+# scoped per user. The data feeds a short, deterministic preference
+# block in the chat system prompt (see `core.feedback`); it never
+# leaves the host and never triggers any kind of model training.
+
+@app.post("/feedback")
+def record_feedback_endpoint(
+    request: FeedbackRequest,
+    user: CurrentUser = Depends(get_current_user),
+):
+    # Reasons that look like they contain a credential are rejected, so
+    # we never persist a token the user pasted in by accident.
+    try:
+        feedback_id = _feedback.record_feedback(
+            user.id,
+            request.sentiment,
+            conversation_id=request.conversation_id,
+            message_id=request.message_id,
+            reason=request.reason,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"ok": True, "feedback_id": feedback_id}
+
+
+@app.get("/feedback")
+def list_feedback_endpoint(user: CurrentUser = Depends(get_current_user)):
+    return _feedback.list_feedback(user.id)
+
+
+@app.delete("/feedback/{feedback_id}")
+def delete_feedback_endpoint(
+    feedback_id: int,
+    user: CurrentUser = Depends(get_current_user),
+):
+    # 404 instead of 403 so cross-user access cannot probe for the
+    # existence of another user's feedback row.
+    if not _feedback.delete_feedback(feedback_id, user.id):
+        raise HTTPException(status_code=404, detail="Feedback not found.")
     return {"ok": True}
 
 
