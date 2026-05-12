@@ -96,7 +96,7 @@ core/
   chat.py             Conversation logic, streaming, system prompt
   memory.py           SQLite memory: facts, conversations, settings
   memory_command.py   Manual memory command parser
-  memory_importer.py  Bulk memory import helper
+  memory_importer.py  Local-only Markdown memory pack importer
   nova_contract.py    Nova identity + personalization prompt blocks
   identity.py         Identity contract constant
   auth.py             JWT creation and verification
@@ -307,6 +307,12 @@ feature exists.
 
 - **Natural-language memory pipeline.** Hardening the `memory/`
   package for production use.
+- **Memory pack import (v1 backend).** A local-only Markdown memory
+  pack parser, safety scanner, and confirmation-gated commit step
+  lives in [`core/memory_importer.py`](core/memory_importer.py).
+  Format and safety rules are documented in
+  [docs/memory-pack-import.md](docs/memory-pack-import.md). UI / API
+  wiring is intentionally a follow-up.
 - **Multi-user UX polish.** The data model and admin endpoints exist;
   the design document
   [docs/multi-user-architecture.md](docs/multi-user-architecture.md)

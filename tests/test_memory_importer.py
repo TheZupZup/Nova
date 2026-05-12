@@ -1,8 +1,11 @@
 from core.memory_importer import (
     MemoryImportCandidate,
+    MemoryImportCommitResult,
     MemoryImportPreview,
     build_memory_import_preview,
+    commit_memory_import,
     parse_markdown_memory_pack,
+    scan_content_for_flags,
 )
 
 
@@ -348,3 +351,254 @@ def test_no_sqlite_usage_in_importer():
         source = f.read()
     assert "sqlite3" not in source
     assert "save_memory" not in source
+
+
+# ---------------------------------------------------------------------------
+# Granular safety flags
+# ---------------------------------------------------------------------------
+
+def test_scan_returns_empty_tuple_for_clean_content():
+    assert scan_content_for_flags("The user prefers dark mode.") == ()
+
+
+def test_password_emits_possible_password_flag():
+    flags = scan_content_for_flags("My password is hunter2 for the work account.")
+    assert "possible_password" in flags
+    # Umbrella flag still present for callers that only check the generic one.
+    assert "possible_secret" in flags
+
+
+def test_passphrase_emits_possible_password_flag():
+    flags = scan_content_for_flags("The passphrase for the disk is on a sticky note.")
+    assert "possible_password" in flags
+
+
+def test_api_key_emits_possible_token_flag():
+    flags = scan_content_for_flags("The api key is stored in the config file.")
+    assert "possible_token" in flags
+    assert "possible_secret" in flags
+
+
+def test_bearer_token_emits_possible_token_flag():
+    flags = scan_content_for_flags("Send the bearer token in the Authorization header.")
+    assert "possible_token" in flags
+
+
+def test_private_key_emits_possible_private_key_flag():
+    flags = scan_content_for_flags("The private key lives at ~/.ssh/id_rsa.")
+    assert "possible_private_key" in flags
+    assert "possible_secret" in flags
+
+
+def test_pem_header_emits_possible_private_key_flag():
+    flags = scan_content_for_flags("-----BEGIN OPENSSH PRIVATE KEY----- pasted here")
+    assert "possible_private_key" in flags
+
+
+def test_email_emits_possible_sensitive_personal_data_flag():
+    flags = scan_content_for_flags("Contact me at jane.doe@example.com for questions.")
+    assert "possible_sensitive_personal_data" in flags
+
+
+def test_phone_number_emits_possible_sensitive_personal_data_flag():
+    flags = scan_content_for_flags("Reach me at +1 555-123-4567 anytime.")
+    assert "possible_sensitive_personal_data" in flags
+
+
+def test_ssn_emits_possible_sensitive_personal_data_flag():
+    flags = scan_content_for_flags("My SSN is 123-45-6789, do not share.")
+    assert "possible_sensitive_personal_data" in flags
+
+
+def test_credit_card_emits_possible_sensitive_personal_data_flag():
+    flags = scan_content_for_flags("Card number 4111 1111 1111 1111 expires soon.")
+    assert "possible_sensitive_personal_data" in flags
+
+
+def test_long_alphanumeric_emits_possible_token_flag():
+    token = "a" * 25
+    flags = scan_content_for_flags(f"The pasted value is {token} here.")
+    assert "possible_token" in flags
+    # Existing umbrella flag is also kept.
+    assert "possible_secret" in flags
+    assert "suspicious_string" in flags
+
+
+def test_preview_personal_data_increments_flagged_count():
+    text = "## Contacts\n- Email me at jane.doe@example.com please.\n"
+    preview = build_memory_import_preview(text)
+    assert preview.flagged_count == 1
+    assert "possible_sensitive_personal_data" in preview.candidates[0].flags
+
+
+def test_preview_emits_specific_password_flag():
+    text = "## Creds\n- My password is hunter2 for the work account.\n"
+    preview = build_memory_import_preview(text)
+    flags = preview.candidates[0].flags
+    assert "possible_password" in flags
+    assert "possible_secret" in flags
+
+
+def test_preview_emits_specific_private_key_flag():
+    text = "## Security\n- The private key is saved in the secrets folder.\n"
+    preview = build_memory_import_preview(text)
+    flags = preview.candidates[0].flags
+    assert "possible_private_key" in flags
+
+
+def test_duplicate_flag_appears_on_candidate_flags():
+    text = "## Info\n- The user wants main to stay stable.\n"
+    existing = ["The user wants main to stay stable."]
+    preview = build_memory_import_preview(text, existing_contents=existing)
+    assert "duplicate" in preview.candidates[0].flags
+    assert preview.candidates[0].duplicate is True
+
+
+def test_duplicate_only_flag_does_not_count_as_sensitive_flagged():
+    # A plain duplicate should not bump flagged_count — only sensitive flags do.
+    text = "## Info\n- The user wants main to stay stable.\n"
+    existing = ["The user wants main to stay stable."]
+    preview = build_memory_import_preview(text, existing_contents=existing)
+    assert preview.flagged_count == 0
+    assert preview.duplicate_count == 1
+
+
+def test_clean_entry_has_no_flags():
+    flags = scan_content_for_flags("The user prefers concise, direct answers.")
+    assert flags == ()
+
+
+# ---------------------------------------------------------------------------
+# commit_memory_import — explicit confirmation
+# ---------------------------------------------------------------------------
+
+class _RecorderSave:
+    """Stand-in for ``core.memory.save_memory(category, content, user_id)``."""
+
+    def __init__(self):
+        self.calls: list[tuple[str, str, int]] = []
+
+    def __call__(self, category: str, content: str, user_id: int) -> None:
+        self.calls.append((category, content, user_id))
+
+
+def test_commit_without_confirmation_saves_nothing():
+    preview = build_memory_import_preview(SAMPLE_PACK)
+    saver = _RecorderSave()
+    result = commit_memory_import(preview, user_id=1, save_fn=saver)
+    assert isinstance(result, MemoryImportCommitResult)
+    assert result.saved_count == 0
+    assert result.skipped_unconfirmed == preview.total
+    assert saver.calls == []
+
+
+def test_commit_with_confirmation_saves_clean_candidates():
+    preview = build_memory_import_preview(SAMPLE_PACK)
+    saver = _RecorderSave()
+    result = commit_memory_import(preview, user_id=7, save_fn=saver, confirm=True)
+    assert result.saved_count == preview.total
+    assert len(saver.calls) == preview.total
+    assert all(call[2] == 7 for call in saver.calls)
+    categories = {call[0] for call in saver.calls}
+    assert "Git workflow" in categories
+    assert "Response style" in categories
+
+
+def test_commit_skips_flagged_by_default():
+    text = (
+        "## Notes\n"
+        "- The user prefers concise answers always.\n"
+        "## Creds\n"
+        "- My password is hunter2 for the work account.\n"
+    )
+    preview = build_memory_import_preview(text)
+    saver = _RecorderSave()
+    result = commit_memory_import(preview, user_id=1, save_fn=saver, confirm=True)
+    assert result.saved_count == 1
+    assert result.skipped_flagged == 1
+    saved_contents = [c[1] for c in saver.calls]
+    assert "My password is hunter2 for the work account." not in saved_contents
+
+
+def test_commit_skips_duplicates_by_default():
+    text = "## Info\n- The user wants main to stay stable.\n"
+    existing = ["The user wants main to stay stable."]
+    preview = build_memory_import_preview(text, existing_contents=existing)
+    saver = _RecorderSave()
+    result = commit_memory_import(preview, user_id=1, save_fn=saver, confirm=True)
+    assert result.saved_count == 0
+    assert result.skipped_duplicate == 1
+    assert saver.calls == []
+
+
+def test_commit_allow_flagged_persists_flagged_entries():
+    text = "## Creds\n- My password is hunter2 for the work account.\n"
+    preview = build_memory_import_preview(text)
+    saver = _RecorderSave()
+    result = commit_memory_import(
+        preview, user_id=1, save_fn=saver, confirm=True, allow_flagged=True,
+    )
+    assert result.saved_count == 1
+    assert result.skipped_flagged == 0
+    assert len(saver.calls) == 1
+
+
+def test_commit_allow_duplicates_persists_duplicate_entries():
+    text = "## Info\n- The user wants main to stay stable.\n"
+    existing = ["The user wants main to stay stable."]
+    preview = build_memory_import_preview(text, existing_contents=existing)
+    saver = _RecorderSave()
+    result = commit_memory_import(
+        preview, user_id=1, save_fn=saver, confirm=True, allow_duplicates=True,
+    )
+    assert result.saved_count == 1
+    assert result.skipped_duplicate == 0
+
+
+def test_commit_returns_zero_counts_on_empty_preview():
+    preview = build_memory_import_preview("")
+    saver = _RecorderSave()
+    result = commit_memory_import(preview, user_id=1, save_fn=saver, confirm=True)
+    assert result.saved_count == 0
+    assert result.skipped_flagged == 0
+    assert result.skipped_duplicate == 0
+    assert saver.calls == []
+
+
+def test_commit_passes_category_and_content_to_save_fn():
+    text = "## Workflow\n- The user wants warnings before risky Git actions.\n"
+    preview = build_memory_import_preview(text)
+    saver = _RecorderSave()
+    commit_memory_import(preview, user_id=42, save_fn=saver, confirm=True)
+    assert saver.calls == [
+        ("Workflow", "The user wants warnings before risky Git actions.", 42),
+    ]
+
+
+def test_commit_does_not_save_on_confirm_false_even_with_allow_flags():
+    text = "## Creds\n- My password is hunter2 for the work account.\n"
+    preview = build_memory_import_preview(text)
+    saver = _RecorderSave()
+    result = commit_memory_import(
+        preview,
+        user_id=1,
+        save_fn=saver,
+        confirm=False,
+        allow_flagged=True,
+        allow_duplicates=True,
+    )
+    assert result.saved_count == 0
+    assert saver.calls == []
+
+
+def test_commit_skipped_flagged_counts_each_flagged_candidate():
+    text = (
+        "## A\n- My password is hunter2 for the work account.\n"
+        "## B\n- The api key is stored in config_file_here.\n"
+        "## C\n- The user prefers concise replies always.\n"
+    )
+    preview = build_memory_import_preview(text)
+    saver = _RecorderSave()
+    result = commit_memory_import(preview, user_id=1, save_fn=saver, confirm=True)
+    assert result.saved_count == 1
+    assert result.skipped_flagged == 2
