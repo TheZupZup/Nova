@@ -31,7 +31,6 @@ for _mod in ("ddgs", "ollama", "sgmllib", "feedparser"):
         sys.modules[_mod] = MagicMock()
 
 from core import chat as chat_module  # noqa: E402
-from core import feedback as feedback_module  # noqa: E402
 from core import memory as core_memory, users  # noqa: E402
 from core.chat import build_messages, chat  # noqa: E402
 from core.feedback import (  # noqa: E402
