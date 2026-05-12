@@ -24,6 +24,12 @@
 >
 > **Posture, in one line.** Transparency, safety, local-first design,
 > and user control over automatic behaviour beat convenience every time.
+>
+> **Related contract.** Every rule in this roadmap inherits from the
+> broader Nova boundaries in
+> [`docs/nova-safety-and-trust-contract.md`](nova-safety-and-trust-contract.md).
+> The future quarantine and honeypot boundaries (§9 of that document)
+> are the canonical limits any later phase here must respect.
 
 ---
 

@@ -281,6 +281,9 @@ SilentGuard integration roadmap; nothing in this guide depends on it.
 
 - [`deploy/systemd/README.md`](../deploy/systemd/README.md) — the
   per-directive walkthrough for the hardened unit.
+- [`docs/nova-safety-and-trust-contract.md`](nova-safety-and-trust-contract.md)
+  — the safety and trust boundaries every Nova feature must respect,
+  including the future-quarantine / honeypot rules.
 - [`docs/silentguard-integration-roadmap.md`](silentguard-integration-roadmap.md)
   — the architectural rationale for keeping enforcement out of Nova.
 - [`docs/silentguard-background-service.md`](silentguard-background-service.md)

@@ -146,6 +146,14 @@ covers recommended setups, VPN / Zero-Trust gateways, least privilege,
 backups, and the systemd hardening that ships in
 [deploy/systemd/nova.service](deploy/systemd/nova.service).
 
+The broader safety boundaries — human-control rules, honesty
+requirements, defensive-security-only posture, prompt-injection
+resistance, and the strict limits any future quarantine or honeypot
+feature must respect — live in
+[docs/nova-safety-and-trust-contract.md](docs/nova-safety-and-trust-contract.md).
+That document is the checklist new features are reviewed against; a
+PR that would violate it is the wrong PR for Nova.
+
 The boundaries below are firm. They are commitments, not future work:
 
 - Nova does **not** run as root.
