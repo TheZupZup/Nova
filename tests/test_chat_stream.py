@@ -294,6 +294,161 @@ class TestChatStreamEndpoint:
         assert len(assistant) == 1
         assert assistant[0]["content"] == "full reply"
 
+    def test_empty_model_output_surfaces_error_and_persists_nothing(
+        self, db_path, web_client
+    ):
+        # When Ollama yields no content tokens at all, the endpoint must
+        # NOT save an empty assistant row (it would render as a stray
+        # Nova bubble on reload). Instead it surfaces an `error` event
+        # so the frontend can render a calm fallback message.
+        _make_user(db_path, "alice")
+        token = _login(web_client, "alice")
+
+        with stub_chat_stream_runtime([]):
+            resp = web_client.post(
+                "/chat/stream",
+                json={"message": "hi", "mode": "chat"},
+                headers=_h(token),
+            )
+        assert resp.status_code == 200
+        events = _decode_ndjson(resp.content)
+        types = [e["type"] for e in events]
+        assert "error" in types
+        assert "done" not in types
+        # No deltas — nothing reached the bubble.
+        assert not any(e["type"] == "delta" for e in events)
+
+        # No conversation should hold any messages: empty reply means
+        # the turn is dropped on the floor, identical to a mid-stream
+        # error. The frontend re-asks; we don't pollute history.
+        with sqlite3.connect(db_path) as conn:
+            count = conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
+        assert count == 0
+
+    def test_whitespace_only_reply_is_treated_as_error(
+        self, db_path, web_client
+    ):
+        # Models occasionally emit whitespace-only deltas (e.g. just
+        # newlines). Those carry no information so the endpoint should
+        # treat them the same as an empty reply.
+        _make_user(db_path, "alice")
+        token = _login(web_client, "alice")
+
+        with stub_chat_stream_runtime(["   ", "\n"]):
+            resp = web_client.post(
+                "/chat/stream",
+                json={"message": "hi", "mode": "chat"},
+                headers=_h(token),
+            )
+        assert resp.status_code == 200
+        events = _decode_ndjson(resp.content)
+        types = [e["type"] for e in events]
+        assert "error" in types
+        assert "done" not in types
+        with sqlite3.connect(db_path) as conn:
+            count = conn.execute(
+                "SELECT COUNT(*) FROM messages WHERE role = 'assistant'"
+            ).fetchone()[0]
+        assert count == 0
+
+    def test_reload_after_empty_reply_has_no_assistant_rows(
+        self, db_path, web_client
+    ):
+        # Bug guard: previously an empty model output left an empty
+        # assistant message in the DB, so reloading the conversation
+        # would render a stray empty bubble alongside the user message.
+        _make_user(db_path, "alice")
+        token = _login(web_client, "alice")
+
+        cid = web_client.post(
+            "/conversations", json={"title": "alice"}, headers=_h(token)
+        ).json()["id"]
+
+        with stub_chat_stream_runtime([]):
+            resp = web_client.post(
+                "/chat/stream",
+                json={"message": "hi", "conversation_id": cid, "mode": "chat"},
+                headers=_h(token),
+            )
+        assert resp.status_code == 200
+
+        msgs = web_client.get(
+            f"/conversations/{cid}/messages", headers=_h(token)
+        ).json()
+        assistant = [m for m in msgs if m["role"] == "assistant"]
+        assert assistant == []
+
+    def test_error_event_during_stream_does_not_persist(
+        self, db_path, web_client
+    ):
+        # Mid-stream backend failure (Ollama unreachable) → endpoint
+        # forwards an `error` event and persists nothing.
+        import ollama as _ollama
+
+        class _FakeResponseError(Exception):
+            pass
+
+        _make_user(db_path, "alice")
+        token = _login(web_client, "alice")
+
+        with patch.object(_ollama, "ResponseError", _FakeResponseError), \
+                patch.object(
+                    chat_module.client, "chat",
+                    side_effect=_FakeResponseError("nope"),
+                ), \
+                patch.object(chat_module, "route", lambda _msg: "default"), \
+                patch.object(chat_module, "should_search", lambda _msg: False), \
+                patch.object(chat_module, "is_security_query", lambda _msg: False), \
+                patch.object(chat_module, "detect_weather_city", lambda _msg: None), \
+                patch.object(chat_module, "get_relevant_memories", lambda *_a, **_k: []):
+            resp = web_client.post(
+                "/chat/stream",
+                json={"message": "hi", "mode": "chat"},
+                headers=_h(token),
+            )
+        assert resp.status_code == 200
+        events = _decode_ndjson(resp.content)
+        types = [e["type"] for e in events]
+        assert "error" in types
+        assert "done" not in types
+        with sqlite3.connect(db_path) as conn:
+            count = conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
+        assert count == 0
+
+    def test_assistant_message_id_only_emitted_when_persisted(
+        self, db_path, web_client
+    ):
+        # Feedback wiring requires the assistant_message_id surfaced on
+        # `done` to match a real saved row. Make sure the empty-reply
+        # path never emits a stale or fabricated id.
+        _make_user(db_path, "alice")
+        token = _login(web_client, "alice")
+
+        with stub_chat_stream_runtime([]):
+            resp = web_client.post(
+                "/chat/stream",
+                json={"message": "hi", "mode": "chat"},
+                headers=_h(token),
+            )
+        for ev in _decode_ndjson(resp.content):
+            assert "assistant_message_id" not in ev or ev.get("type") == "done"
+
+        # And the happy path *does* emit one tied to the saved row.
+        with stub_chat_stream_runtime(["yo"]):
+            resp = web_client.post(
+                "/chat/stream",
+                json={"message": "ping", "mode": "chat"},
+                headers=_h(token),
+            )
+        done = next(e for e in _decode_ndjson(resp.content) if e["type"] == "done")
+        assert isinstance(done.get("assistant_message_id"), int)
+        with sqlite3.connect(db_path) as conn:
+            row = conn.execute(
+                "SELECT role, content FROM messages WHERE id = ?",
+                (done["assistant_message_id"],),
+            ).fetchone()
+        assert row == ("assistant", "yo")
+
 
 # ── /chat fallback still works ──────────────────────────────────────────────
 

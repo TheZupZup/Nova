@@ -5704,6 +5704,15 @@
                 bubble.dataset.rawText = "";
             },
             finalise(model, messageId) {
+                if (!buffer) {
+                    // Nothing was streamed — drop the bubble entirely
+                    // so we never leave a stray Nova label with no
+                    // content. The caller is responsible for surfacing
+                    // an error message if appropriate.
+                    if (row.parentNode) row.parentNode.removeChild(row);
+                    return;
+                }
+
                 bubble.classList.remove("streaming");
                 if (caret.parentNode) caret.parentNode.removeChild(caret);
 
@@ -5715,8 +5724,6 @@
                         badge.dataset.model = model;
                     }
                 }
-
-                if (!buffer) return;
 
                 // Swap raw text for rendered markdown in a single pass
                 // so the final layout matches a non-streamed reply.
@@ -5907,14 +5914,22 @@
                         result.assistantMessageId = event.assistant_message_id;
                     }
                     if (userCancelledChat) break;
-                    if (!activeStreamBubble) {
-                        // No deltas reached us (e.g. short-circuit reply
-                        // delivered as a single payload, or empty
-                        // response). Promote the thinking row into a
-                        // bubble now so finalise() can settle layout.
+                    // No deltas + empty buffer means the model produced
+                    // nothing usable; surface a calm error instead of
+                    // leaving an empty Nova bubble in the transcript.
+                    // The backend is expected to send `error` for this
+                    // case but the guard keeps the UI robust against
+                    // any future regression.
+                    if (!activeStreamBubble || !activeStreamBubble.getBuffer()) {
+                        if (activeStreamBubble && activeStreamBubble.row.isConnected) {
+                            activeStreamBubble.row.remove();
+                        }
                         if (thinkingRow.isConnected) thinkingRow.remove();
                         activeThinkingRow = null;
-                        activeStreamBubble = createStreamingAssistantBubble();
+                        result.errored = true;
+                        result.errorDetail = result.errorDetail
+                            || "Nova didn't produce a reply. Please try again.";
+                        break;
                     }
                     activeStreamBubble.finalise(
                         result.model,
@@ -5929,6 +5944,8 @@
                         && !activeStreamBubble.getBuffer()) {
                         activeStreamBubble.row.remove();
                     }
+                    if (thinkingRow.isConnected) thinkingRow.remove();
+                    activeThinkingRow = null;
                     break;
                 }
                 default:
@@ -5966,13 +5983,22 @@
         }
 
         // If the stream ended without a `done` event and without an
-        // explicit error, treat what we have as the final reply so the
-        // bubble still settles into its final layout (no caret, with
-        // actions). The server would also have persisted nothing in
-        // that case — matches existing /chat behaviour on connection
-        // drop mid-reply.
-        if (!result.completed && !result.errored && activeStreamBubble && !userCancelledChat) {
-            activeStreamBubble.finalise(result.model);
+        // explicit error, do not leave the user staring at a half-baked
+        // bubble: finalise whatever text we have, or — if nothing
+        // arrived — mark the result as errored so sendMessage() can
+        // surface a calm fallback message. The server would also have
+        // persisted nothing on a mid-stream drop.
+        if (!result.completed && !result.errored && !userCancelledChat) {
+            if (activeStreamBubble && activeStreamBubble.getBuffer()) {
+                activeStreamBubble.finalise(result.model);
+            } else {
+                if (activeStreamBubble && activeStreamBubble.row.isConnected) {
+                    activeStreamBubble.row.remove();
+                }
+                result.errored = true;
+                result.errorDetail = result.errorDetail
+                    || "Nova didn't produce a reply. Please try again.";
+            }
         }
         if (thinkingRow.isConnected) thinkingRow.remove();
         activeThinkingRow = null;

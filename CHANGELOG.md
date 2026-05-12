@@ -11,6 +11,14 @@
   credential are refused at write time. Ratings can be listed and
   deleted via `GET /feedback` and `DELETE /feedback/{id}`.
 
+### Fixed
+- Streaming chat: empty model output no longer leaves a stray empty
+  Nova bubble in the transcript or persists a blank assistant row.
+  The `/chat/stream` endpoint now surfaces an `error` event when the
+  reply is empty or whitespace-only, and the frontend renders a calm
+  fallback message instead of an unanswered bubble. Reloading a
+  conversation no longer shows duplicate or empty assistant rows.
+
 ## v0.4.0 - 2026-04-24
 ### Added
 - Manual web search button in interface

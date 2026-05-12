@@ -649,6 +649,15 @@ def _stream_event(payload: dict) -> bytes:
     return (json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8")
 
 
+# Surfaced when the model returned no usable text (empty or whitespace
+# only). The streaming endpoint converts that case to an `error` event
+# and persists nothing — an empty bubble in the chat UI would otherwise
+# look like Nova silently failing to answer.
+EMPTY_REPLY_DETAIL = (
+    "Nova didn't produce a reply. Please try again."
+)
+
+
 @app.post("/chat/stream")
 def chat_stream_endpoint(
     request: ChatRequest,
@@ -728,6 +737,16 @@ def chat_stream_endpoint(
                 elif etype == "done":
                     final_reply = event.get("reply", "") or ""
                     final_model = event.get("model") or final_model
+                    if not final_reply.strip():
+                        # Empty model output: surface a calm error
+                        # instead of a silent empty bubble, and persist
+                        # nothing so reloading the conversation does
+                        # not show a stray empty assistant row.
+                        yield _stream_event({
+                            "type": "error",
+                            "detail": EMPTY_REPLY_DETAIL,
+                        })
+                        return
                     # Persist only once we know the full reply landed
                     # cleanly. A client disconnect at this point is
                     # acceptable: the response is already saved.
@@ -750,6 +769,7 @@ def chat_stream_endpoint(
                         "conversation_id": conversation_id,
                         "assistant_message_id": assistant_message_id,
                     })
+                    return
                 elif etype == "error":
                     yield _stream_event({
                         "type": "error",
@@ -763,14 +783,13 @@ def chat_stream_endpoint(
             return
 
         # Defensive fallthrough — chat_stream should always end with
-        # either `done` or `error`, but if it doesn't, signal completion
-        # so the frontend won't hang forever.
-        if not final_reply:
-            yield _stream_event({
-                "type": "done",
-                "model": final_model,
-                "conversation_id": conversation_id,
-            })
+        # either `done` or `error`. If it does not (e.g. generator
+        # exhausted without a terminal event), surface an error so the
+        # frontend renders a clear message instead of waiting forever.
+        yield _stream_event({
+            "type": "error",
+            "detail": EMPTY_REPLY_DETAIL,
+        })
 
     headers = {
         # Disable any reverse-proxy buffering that would batch our chunks
