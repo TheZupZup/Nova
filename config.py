@@ -30,6 +30,55 @@ NEXANOTE_API_URL = os.getenv("NEXANOTE_API_URL", "").strip().rstrip("/")
 NEXANOTE_API_TOKEN = os.getenv("NEXANOTE_API_TOKEN", "").strip()
 NEXANOTE_TIMEOUT_SECONDS = float(os.getenv("NEXANOTE_TIMEOUT_SECONDS", "3.0"))
 
+# ── Optional GitHub connector (read-only by default) ───────────────
+# A small, opt-in bridge that lets Nova help maintainers *read* the
+# state of a repository (issues, pull requests, basic metadata) from
+# the GitHub REST API. Nova is a local maintainer assistant, not an
+# autonomous bot: this v1 ships read-only methods only. Writes,
+# auto-merge, comments, and any background polling are out of scope.
+#
+# Every switch defaults to OFF so an unconfigured Nova install never
+# contacts GitHub. When ``NOVA_GITHUB_ENABLED`` is on but
+# ``NOVA_GITHUB_TOKEN`` is missing the status endpoint reports
+# ``not_configured`` — Nova does not fall back to anonymous access,
+# both to avoid the strict unauthenticated rate limit and to make the
+# "no token configured" state visible to the admin.
+#
+# ``NOVA_GITHUB_TOKEN`` must never be:
+#   * returned in any HTTP response body,
+#   * embedded in any log line,
+#   * included in any error message surfaced to the frontend / chat,
+#   * persisted to the database in this PR.
+#
+#   NOVA_GITHUB_ENABLED       — host-wide opt-in. False → connector
+#                               disabled for everyone.
+#   NOVA_GITHUB_TOKEN         — personal-access / fine-grained token
+#                               with read-only scopes (``repo:read`` /
+#                               ``read:org`` is enough for v1).
+#   NOVA_GITHUB_DEFAULT_REPO  — optional ``owner/name`` used when an
+#                               endpoint is called without an explicit
+#                               repo. Empty disables the fallback.
+#   NOVA_GITHUB_READ_ONLY     — belt-and-braces switch. Defaults to
+#                               True; v1 never performs writes so the
+#                               flag is purely informational today.
+#                               Future write helpers will refuse when
+#                               this is True.
+#   NOVA_GITHUB_TIMEOUT_SECONDS — per-request HTTP timeout (default 5).
+NOVA_GITHUB_ENABLED = (
+    os.getenv("NOVA_GITHUB_ENABLED", "false").strip().lower() == "true"
+)
+NOVA_GITHUB_TOKEN = os.getenv("NOVA_GITHUB_TOKEN", "").strip()
+NOVA_GITHUB_DEFAULT_REPO = os.getenv("NOVA_GITHUB_DEFAULT_REPO", "").strip()
+NOVA_GITHUB_READ_ONLY = (
+    os.getenv("NOVA_GITHUB_READ_ONLY", "true").strip().lower() != "false"
+)
+try:
+    NOVA_GITHUB_TIMEOUT_SECONDS = float(
+        os.getenv("NOVA_GITHUB_TIMEOUT_SECONDS", "5.0")
+    )
+except ValueError:
+    NOVA_GITHUB_TIMEOUT_SECONDS = 5.0
+
 # SilentGuard local read-only HTTP API (optional; off by default).
 # An empty value keeps the file-based probe in place. Setting a URL
 # (typically loopback, e.g. http://127.0.0.1:8767) enables the HTTP

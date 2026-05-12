@@ -57,6 +57,7 @@ from core import local_models as _local_models
 from core.ollama_client import OllamaUnavailable
 from core.integrations import silentguard as _silentguard_integration
 from core.integrations import nexanote as _nexanote_integration
+from core.integrations import github as _github_integration
 from core.security import ensure_silentguard_running as _ensure_silentguard_running
 from core.security import lifecycle as _silentguard_lifecycle
 from core.security import SilentGuardProvider as _SilentGuardProvider
@@ -891,14 +892,33 @@ def update_settings(
 
 @app.get("/integrations/status")
 def integrations_status(user: CurrentUser = Depends(get_current_user)):
-    """Per-integration availability snapshot for the caller."""
-    return {
+    """Per-integration availability snapshot for the caller.
+
+    The GitHub connector is host-level and admin-only; non-admin
+    callers see only that it is ``disabled`` so the UI can hide the
+    card without leaking the configured state.
+    """
+    payload: dict = {
         "silentguard": _silentguard_integration.status(user.id).as_dict(),
         "nexanote": {
             **_nexanote_integration.status(user.id).as_dict(),
             "write_enabled": _nexanote_integration.is_write_enabled(user.id),
         },
     }
+    if user.role == "admin":
+        payload["github"] = _github_integration.status().as_dict()
+    else:
+        payload["github"] = {
+            "name": _github_integration.NAME,
+            "enabled": False,
+            "state": _github_integration.STATE_DISABLED,
+            "detail": "GitHub connector is admin-only.",
+            "default_repo": "",
+            "read_only": True,
+            "authenticated_login": None,
+            "scopes": [],
+        }
+    return payload
 
 
 @app.get("/integrations/silentguard/lifecycle")
@@ -1783,6 +1803,156 @@ def admin_get_pull(
     if job is None:
         raise HTTPException(status_code=404, detail="Pull job not found.")
     return job
+
+
+# ── ADMIN: OPTIONAL GITHUB CONNECTOR (read-only, #119) ─────────────
+# Phase-1 admin-only window into a GitHub repository. Every endpoint is
+# wrapped with ``require_admin`` so non-admin / restricted users get a
+# 403 — never a leak of the configured repo or the connector state. The
+# underlying ``core.integrations.github`` module is strictly read-only:
+# no helper in this PR creates, comments on, merges, approves, or
+# otherwise mutates anything on GitHub. The token configured in
+# ``NOVA_GITHUB_TOKEN`` is never serialised into any response, header,
+# or log line surfaced here — it lives only inside the connector's
+# private ``Authorization`` header.
+#
+# This connector is intentionally *separate* from the alpha-channel
+# GitHub OAuth gate (``GITHUB_CLIENT_ID`` / ``GITHUB_CLIENT_SECRET`` /
+# ``/auth/github`` flow). The OAuth flow is about *logging into Nova*;
+# this connector is about reading a maintainer's repo state via the
+# GitHub REST API. They share neither config keys nor code paths.
+
+def _resolve_repo_or_400(repo: str | None) -> tuple[str, str]:
+    """Validate ``owner/name`` or fall back to ``NOVA_GITHUB_DEFAULT_REPO``.
+
+    Raises a 400 when neither source produces a valid slug pair, so a
+    misconfigured admin sees a clear error rather than a silent empty
+    response.
+    """
+    resolved = _github_integration.resolve_repo(repo)
+    if resolved is None:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "No GitHub repository specified. Provide ?repo=owner/name "
+                "or set NOVA_GITHUB_DEFAULT_REPO."
+            ),
+        )
+    return resolved
+
+
+def _require_github_ready(status: _github_integration.GitHubStatus) -> None:
+    """Translate a non-connected connector status into a clean 503/404.
+
+    Keeps the response shape consistent so the UI never has to peek at
+    ``status.state`` to know whether to retry.
+    """
+    if status.state == _github_integration.STATE_DISABLED:
+        raise HTTPException(
+            status_code=404,
+            detail="GitHub connector is disabled on this Nova host.",
+        )
+    if status.state == _github_integration.STATE_NOT_CONFIGURED:
+        raise HTTPException(
+            status_code=503,
+            detail="GitHub connector is not configured (no token).",
+        )
+    if status.state == _github_integration.STATE_UNAVAILABLE:
+        raise HTTPException(
+            status_code=503,
+            detail="GitHub connector is unavailable.",
+        )
+
+
+@app.get("/integrations/github/status")
+def github_status(_: CurrentUser = Depends(require_admin)):
+    """Calm read-only snapshot of the GitHub connector.
+
+    Returns one of the four documented states — ``disabled``,
+    ``not_configured``, ``unavailable``, ``connected_read_only`` —
+    plus the configured default repo and the ``read_only`` flag. The
+    token is intentionally absent from the payload.
+    """
+    return _github_integration.status().as_dict()
+
+
+@app.get("/integrations/github/issues")
+def github_list_issues(
+    repo: str | None = None,
+    state: str = "open",
+    limit: int = 30,
+    _: CurrentUser = Depends(require_admin),
+):
+    """List sanitised issues for ``repo`` (or the default repo).
+
+    Read-only. Pull requests are filtered out — use ``/pulls`` for
+    those. ``state`` accepts ``open`` / ``closed`` / ``all``. ``limit``
+    is clamped to the GitHub per_page cap of 100.
+    """
+    owner, name = _resolve_repo_or_400(repo)
+    _require_github_ready(_github_integration.status())
+    return {
+        "repo": f"{owner}/{name}",
+        "state": state,
+        "issues": _github_integration.list_issues(
+            owner, name, state=state, limit=limit
+        ),
+        "read_only": True,
+    }
+
+
+@app.get("/integrations/github/issues/{number}")
+def github_get_issue(
+    number: int,
+    repo: str | None = None,
+    _: CurrentUser = Depends(require_admin),
+):
+    """Fetch one sanitised issue. 404 when the issue cannot be read."""
+    if number <= 0:
+        raise HTTPException(status_code=400, detail="Issue number must be positive.")
+    owner, name = _resolve_repo_or_400(repo)
+    _require_github_ready(_github_integration.status())
+    issue = _github_integration.get_issue(owner, name, number)
+    if issue is None:
+        raise HTTPException(status_code=404, detail="Issue not found.")
+    return {"repo": f"{owner}/{name}", "issue": issue, "read_only": True}
+
+
+@app.get("/integrations/github/pulls")
+def github_list_pulls(
+    repo: str | None = None,
+    state: str = "open",
+    limit: int = 30,
+    _: CurrentUser = Depends(require_admin),
+):
+    """List sanitised pull requests for ``repo`` (or the default repo)."""
+    owner, name = _resolve_repo_or_400(repo)
+    _require_github_ready(_github_integration.status())
+    return {
+        "repo": f"{owner}/{name}",
+        "state": state,
+        "pull_requests": _github_integration.list_pull_requests(
+            owner, name, state=state, limit=limit
+        ),
+        "read_only": True,
+    }
+
+
+@app.get("/integrations/github/pulls/{number}")
+def github_get_pull(
+    number: int,
+    repo: str | None = None,
+    _: CurrentUser = Depends(require_admin),
+):
+    """Fetch one sanitised pull request. 404 when it cannot be read."""
+    if number <= 0:
+        raise HTTPException(status_code=400, detail="PR number must be positive.")
+    owner, name = _resolve_repo_or_400(repo)
+    _require_github_ready(_github_integration.status())
+    pull = _github_integration.get_pull_request(owner, name, number)
+    if pull is None:
+        raise HTTPException(status_code=404, detail="Pull request not found.")
+    return {"repo": f"{owner}/{name}", "pull_request": pull, "read_only": True}
 
 
 @app.get("/channel")

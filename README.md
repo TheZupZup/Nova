@@ -226,6 +226,84 @@ read-only API as a user service, see
 an example unit lives at
 [`deploy/systemd/silentguard-api.service`](deploy/systemd/silentguard-api.service).
 
+## Optional GitHub maintainer connector
+
+Nova ships an **optional**, **admin-only**, **read-only** GitHub
+connector (issue #119). The connector lets a maintainer ask Nova
+calm questions about a repository — open issues, open pull
+requests, basic metadata — without turning Nova into an autonomous
+bot.
+
+Important: this is **not** the alpha-channel GitHub OAuth login
+gate (`GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` /
+`/auth/github`). The OAuth flow is about *signing users into Nova*
+on the alpha channel. The connector below is about *reading a
+repo's state on the maintainer's behalf*. They share neither code
+paths nor config keys.
+
+The connector is disabled by default. To enable it on a local
+Nova install, add the following to your `.env`:
+
+```ini
+NOVA_GITHUB_ENABLED=true
+NOVA_GITHUB_TOKEN=ghp_your_local_token
+NOVA_GITHUB_DEFAULT_REPO=owner/name      # optional fallback
+NOVA_GITHUB_READ_ONLY=true               # default; v1 has no writes
+NOVA_GITHUB_TIMEOUT_SECONDS=5.0
+```
+
+The token only needs **read** scopes (`repo:read` is enough for v1)
+because Nova never performs write operations against GitHub in this
+phase. Use a fine-grained personal access token scoped to the
+repositories you want Nova to read; do not give the token write,
+admin, or organisation-management scopes.
+
+Once configured, Nova exposes five admin-only endpoints:
+
+- `GET /integrations/github/status` — calm snapshot of the
+  connector. The `state` field is one of `disabled`,
+  `not_configured`, `unavailable`, or `connected_read_only`.
+- `GET /integrations/github/issues` — list open issues for
+  `?repo=owner/name` (or the default repo).
+- `GET /integrations/github/pulls` — list open pull requests.
+- `GET /integrations/github/issues/{number}` — single issue.
+- `GET /integrations/github/pulls/{number}` — single pull request.
+
+All endpoints are auth-gated and admin-only. Non-admin and
+restricted users receive a 403; the aggregate
+`/integrations/status` response surfaces `state: "disabled"` for
+the GitHub entry to non-admin callers so the UI can hide the card
+without leaking the configured state.
+
+Token safety contract:
+
+- The token is read from `NOVA_GITHUB_TOKEN` and **never** returned
+  in any HTTP response body, chat context, log line, or error
+  message.
+- The token only ever appears inside the connector's private
+  request `Authorization` header — never in URLs, query params, or
+  JSON bodies.
+- The connector stores the token in environment-local config only.
+  This PR does not persist it to the database; future revisions
+  may add encrypted storage, but the v1 contract is local-first.
+- Sanitised error responses (e.g. invalid token, unreachable API)
+  surface a short, hard-coded summary like *"GitHub rejected the
+  configured token."* — never the raw exception, never the
+  response body.
+
+What this connector is **not** allowed to do (now or via this PR):
+
+- create, close, or comment on issues,
+- comment on, approve, reject, or merge pull requests,
+- change repository settings, labels, or permissions,
+- push, force-push, or run any git command,
+- run any background polling or scheduled maintenance.
+
+Any future write actions will be introduced behind their own
+opt-in switch, will require explicit user confirmation in the
+UI, and will carry audit logging. There is no autonomous
+maintainer behaviour planned.
+
 ## Voice and TTS
 
 Every assistant message has a "Read aloud" button. By default Nova uses
