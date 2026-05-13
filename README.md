@@ -68,6 +68,16 @@ Shipped today:
   override the identity contract or the Nova Safety and Trust Contract.
   See [docs/nova-safety-and-trust-contract.md](docs/nova-safety-and-trust-contract.md)
   for the boundaries this layer sits inside.
+- **Edit and delete sent messages.** Every chat message can be edited
+  (user messages) or deleted (user and assistant messages) from the
+  chat UI. Deleting a user message can optionally remove the paired
+  assistant reply in the same exchange. Editing rewrites the message
+  in place; it does not regenerate Nova's reply — re-send the edited
+  text as a new message if you want a fresh answer. Memory cleanup is
+  intentionally a separate, explicit action: editing or deleting a
+  chat message never erases memories that were already extracted from
+  it. Endpoints: `PUT /messages/{id}` and `DELETE /messages/{id}`,
+  both auth-gated and scoped to the caller's conversations.
 - **Voice / read-aloud.** Every assistant message has a "Read aloud"
   button. The default engine is the browser's local
   `speechSynthesis` API; an optional local [Piper](https://github.com/rhasspy/piper)

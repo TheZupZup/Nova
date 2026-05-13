@@ -2,6 +2,22 @@
 
 ## Unreleased
 ### Added
+- Edit and delete sent chat messages from the chat UI (issue #94). Two
+  new auth-gated endpoints, `PUT /messages/{id}` and
+  `DELETE /messages/{id}`, accept content edits and message deletes
+  scoped to the caller's conversations. Cross-user requests return 404
+  to avoid leaking existence. Deleting a user message can optionally
+  remove the paired assistant reply by passing
+  `?cascade_assistant=true`; assistant deletes never cascade. Editing
+  rewrites the message in place — it does not regenerate Nova's reply
+  (regenerate-after-edit is left as an explicit follow-up). Memory
+  entries are deliberately untouched: editing or deleting a chat
+  message never removes memories already extracted from it. Feedback
+  rows attached to a deleted message id are cleaned up so the local
+  feedback table never carries dangling references. The chat-stream
+  `done` event now also surfaces `user_message_id` so the browser can
+  attach edit/delete controls to the just-sent user bubble without a
+  conversation reload.
 - Read-only GitHub maintainer triage helper (issue #119 follow-up).
   A new admin-only endpoint, `GET /integrations/github/recommendations`,
   surfaces a short ranked list of open issues a maintainer might want

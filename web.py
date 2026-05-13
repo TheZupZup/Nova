@@ -30,6 +30,8 @@ from core.memory import (
     conversation_belongs_to,
     get_setting, save_setting,
     list_memories, update_memory, delete_memory,
+    get_owned_message, update_message_content, delete_message,
+    MESSAGE_CONTENT_MAX_LEN,
 )
 from core import feedback as _feedback
 from core.settings import (
@@ -282,6 +284,33 @@ class MemoryUpdateRequest(BaseModel):
     content: str
 
 
+class MessageUpdateRequest(BaseModel):
+    """Body for ``PUT /messages/{id}`` — the new content for a message.
+
+    The textarea on the client is shown with a maxlength matching
+    ``MESSAGE_CONTENT_MAX_LEN``; the server re-applies the same cap so a
+    crafted client cannot smuggle a longer payload past the UI.
+    Whitespace-only edits are rejected to match the chat input's own
+    "non-empty after trim" guard.
+    """
+    model_config = {"extra": "forbid"}
+
+    content: str
+
+    @field_validator("content")
+    @classmethod
+    def validate_content(cls, v):
+        if not isinstance(v, str):
+            raise ValueError("content must be a string")
+        if not v.strip():
+            raise ValueError("content cannot be empty")
+        if len(v) > MESSAGE_CONTENT_MAX_LEN:
+            raise ValueError(
+                f"content too long (max {MESSAGE_CONTENT_MAX_LEN} characters)"
+            )
+        return v
+
+
 class MemoryAddRequest(BaseModel):
     category: str
     content: str
@@ -471,6 +500,81 @@ def remove_conversation(
     return {"ok": True}
 
 
+# ── MESSAGE EDIT / DELETE ──
+#
+# Per-message edit + delete endpoints (issue #94). Ownership is enforced
+# through the conversations table — a user can only touch messages from
+# a conversation they own. Editing only rewrites the row; it never
+# regenerates the assistant reply (regeneration is an explicit v2
+# follow-up). Deleting a user message optionally also removes the
+# paired assistant reply when the client passes
+# ``?cascade_assistant=true``; we keep the cascade off by default so the
+# behaviour is predictable from the API side.
+#
+# Memory entries are deliberately *not* touched here: editing or
+# deleting a chat message must not erase facts the user already chose
+# to remember. Memory cleanup remains a separate user action (see
+# ``/memories`` endpoints and the natural-memory "forget X" commands).
+
+@app.put("/messages/{message_id}")
+def update_message_endpoint(
+    message_id: int,
+    request: MessageUpdateRequest,
+    user: CurrentUser = Depends(get_current_user),
+):
+    """Replace the content of a chat message the caller owns.
+
+    Returns 404 (not 403) when the message either doesn't exist or
+    belongs to another user, so cross-user probing cannot reveal
+    existence. Pydantic has already enforced non-empty + length cap on
+    the body.
+    """
+    updated = update_message_content(message_id, user.id, request.content)
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Message introuvable.")
+    # The row is returned in the same shape the conversation-load
+    # endpoint emits, so the client can reuse its rendering helpers.
+    return {
+        "ok": True,
+        "id": updated["id"],
+        "conversation_id": updated["conversation_id"],
+        "role": updated["role"],
+        "content": updated["content"],
+        "model": updated["model"],
+    }
+
+
+@app.delete("/messages/{message_id}")
+def delete_message_endpoint(
+    message_id: int,
+    cascade_assistant: bool = False,
+    user: CurrentUser = Depends(get_current_user),
+):
+    """Remove a chat message owned by the caller.
+
+    When the caller passes ``?cascade_assistant=true`` and the deleted
+    row is a *user* message immediately followed by an assistant reply
+    in the same conversation, that paired assistant reply is also
+    removed. Assistant message deletes never cascade — the client is
+    expected to ignore the flag in that case, but the data layer
+    silently does the right thing regardless.
+
+    Memory entries are not touched. Feedback rows whose ``message_id``
+    is removed are cleaned up so the local feedback table never carries
+    a dangling reference.
+    """
+    result = delete_message(
+        message_id, user.id, cascade_assistant=cascade_assistant
+    )
+    if result is None:
+        raise HTTPException(status_code=404, detail="Message introuvable.")
+    return {
+        "ok": True,
+        "deleted_id": result["deleted_id"],
+        "cascaded_assistant_id": result["cascaded_assistant_id"],
+    }
+
+
 def _chat_preflight(request: ChatRequest, user: CurrentUser):
     """Shared validation + memory-command handling for chat endpoints.
 
@@ -625,7 +729,9 @@ def chat_endpoint(request: ChatRequest, user: CurrentUser = Depends(get_current_
         policy=policy,
     )
 
-    save_message(conversation_id, "user", request.message)
+    user_message_id = save_message(
+        conversation_id, "user", request.message
+    )
     assistant_message_id = save_message(
         conversation_id, "assistant", response, model_used
     )
@@ -637,6 +743,7 @@ def chat_endpoint(request: ChatRequest, user: CurrentUser = Depends(get_current_
         "response": response,
         "model": model_used,
         "conversation_id": conversation_id,
+        "user_message_id": user_message_id,
         "assistant_message_id": assistant_message_id,
     }
 
@@ -754,7 +861,9 @@ def chat_stream_endpoint(
                     # Persist only once we know the full reply landed
                     # cleanly. A client disconnect at this point is
                     # acceptable: the response is already saved.
-                    save_message(conversation_id, "user", request.message)
+                    user_message_id = save_message(
+                        conversation_id, "user", request.message
+                    )
                     assistant_message_id = save_message(
                         conversation_id, "assistant",
                         final_reply, final_model,
@@ -763,14 +872,16 @@ def chat_stream_endpoint(
                         update_conversation_title(
                             conversation_id, request.message[:40]
                         )
-                    # The assistant_message_id is what the feedback
-                    # endpoint accepts; surface it on `done` so the
-                    # client can wire thumbs up / thumbs down to the
-                    # exact row that was just persisted.
+                    # `assistant_message_id` is what the feedback
+                    # endpoint accepts; `user_message_id` lets the
+                    # browser attach the per-message edit/delete
+                    # controls to the user bubble it just rendered
+                    # without forcing a conversation reload.
                     yield _stream_event({
                         "type": "done",
                         "model": final_model,
                         "conversation_id": conversation_id,
+                        "user_message_id": user_message_id,
                         "assistant_message_id": assistant_message_id,
                     })
                     return

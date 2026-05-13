@@ -1415,6 +1415,208 @@
             background: var(--cyan-soft);
         }
 
+        /* ── PER-MESSAGE EDIT / DELETE ──
+           A second, smaller action row that appears next to each user
+           message (and a single delete control on assistant messages).
+           Kept visually quieter than the feedback row so it never
+           competes with the existing thumbs-up / thumbs-down chrome.
+
+           Visibility: actions are dimmed at rest and fade up on hover
+           or keyboard focus inside the row. Touch devices keep them
+           visible because hover state never resolves. */
+        .msg-edit-actions {
+            display: flex;
+            gap: 2px;
+            margin-top: 4px;
+            opacity: 0;
+            transition: opacity var(--t-base);
+        }
+        .message-row:hover .msg-edit-actions,
+        .message-row:focus-within .msg-edit-actions {
+            opacity: 1;
+        }
+        @media (hover: none) {
+            .msg-edit-actions { opacity: 0.8; }
+        }
+        .message-row.user .msg-edit-actions {
+            align-self: flex-end;
+        }
+        .message-row.nova .msg-edit-actions {
+            align-self: flex-start;
+            /* Sits between the bubble and the feedback row to keep the
+               visual hierarchy: bubble → quick actions → feedback. */
+            margin-top: 2px;
+        }
+
+        .msg-edit-action {
+            appearance: none;
+            -webkit-appearance: none;
+            background: transparent;
+            border: none;
+            border-radius: var(--r-sm);
+            color: var(--text-dim);
+            cursor: pointer;
+            padding: 0;
+            width: 26px;
+            height: 26px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            transition:
+                color var(--t-base),
+                background var(--t-base),
+                transform var(--t-fast);
+        }
+        .msg-edit-action svg {
+            width: 14px;
+            height: 14px;
+            display: block;
+            stroke: currentColor;
+        }
+        .msg-edit-action:hover {
+            color: var(--text);
+            background: rgba(255, 255, 255, 0.05);
+        }
+        .msg-edit-action:focus { outline: none; }
+        .msg-edit-action:focus-visible {
+            color: var(--text);
+            box-shadow: 0 0 0 2px var(--cyan-glow);
+        }
+        .msg-edit-action.danger:hover {
+            color: var(--danger);
+            background: rgba(224, 136, 129, 0.07);
+        }
+        .msg-edit-action:active { transform: scale(0.94); }
+
+        /* Inline edit form replacing the user bubble while editing.
+           Mirrors the calm visual language of the feedback reason
+           form: soft border, gentle background, no hard shadows. */
+        .msg-edit-form {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            width: 100%;
+            max-width: 75%;
+            padding: 8px 10px;
+            border: 1px solid var(--border-soft);
+            border-radius: var(--r-md);
+            background: rgba(255, 255, 255, 0.025);
+        }
+        .message-row.user .msg-edit-form { align-self: flex-end; }
+        .message-row.nova .msg-edit-form { align-self: flex-start; }
+        .msg-edit-input {
+            width: 100%;
+            min-height: 60px;
+            max-height: 240px;
+            resize: vertical;
+            padding: 6px 8px;
+            background: transparent;
+            color: var(--text);
+            border: 1px solid var(--border-soft);
+            border-radius: var(--r-sm);
+            font: inherit;
+            font-size: 0.9rem;
+            line-height: 1.45;
+        }
+        .msg-edit-input:focus {
+            outline: none;
+            border-color: var(--cyan-glow);
+            box-shadow: 0 0 0 1px var(--cyan-glow);
+        }
+        .msg-edit-btns {
+            display: flex;
+            justify-content: flex-end;
+            gap: 6px;
+        }
+        .msg-edit-save,
+        .msg-edit-cancel {
+            appearance: none;
+            -webkit-appearance: none;
+            background: transparent;
+            border: 1px solid var(--border-soft);
+            color: var(--text-dim);
+            border-radius: var(--r-sm);
+            padding: 4px 12px;
+            font: inherit;
+            font-size: 0.78rem;
+            letter-spacing: 0.02em;
+            cursor: pointer;
+            transition:
+                color var(--t-base),
+                border-color var(--t-base),
+                background var(--t-base);
+        }
+        .msg-edit-save:hover,
+        .msg-edit-cancel:hover { color: var(--text); }
+        .msg-edit-save {
+            color: var(--cyan);
+            border-color: var(--cyan-glow);
+        }
+        .msg-edit-save:hover { background: var(--cyan-soft); }
+        .msg-edit-save:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+        .msg-edit-note {
+            font-size: 0.7rem;
+            color: var(--text-dim);
+            line-height: 1.35;
+            margin-top: -2px;
+        }
+
+        /* Inline confirmation that replaces the action row when the
+           user clicks "delete". Reuses the same visual language as
+           the conversation-delete confirm in the sidebar. */
+        .msg-delete-confirm {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-top: 4px;
+            padding: 4px 8px;
+            border: 1px solid var(--border-soft);
+            border-radius: var(--r-sm);
+            background: rgba(224, 136, 129, 0.05);
+            font-size: 0.75rem;
+            color: var(--text-dim);
+        }
+        .message-row.user .msg-delete-confirm { align-self: flex-end; }
+        .message-row.nova .msg-delete-confirm { align-self: flex-start; }
+        .msg-delete-confirm-text {
+            line-height: 1.35;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            max-width: 360px;
+        }
+        .msg-delete-confirm-btns {
+            display: inline-flex;
+            gap: 4px;
+            flex-shrink: 0;
+        }
+        .msg-delete-confirm-yes,
+        .msg-delete-confirm-no {
+            appearance: none;
+            -webkit-appearance: none;
+            background: transparent;
+            border: 1px solid var(--border-soft);
+            color: var(--text-dim);
+            border-radius: var(--r-sm);
+            padding: 2px 8px;
+            font: inherit;
+            font-size: 0.74rem;
+            cursor: pointer;
+            transition:
+                color var(--t-base),
+                border-color var(--t-base),
+                background var(--t-base);
+        }
+        .msg-delete-confirm-no:hover { color: var(--text); }
+        .msg-delete-confirm-yes:hover {
+            color: var(--danger);
+            border-color: rgba(224, 136, 129, 0.4);
+            background: rgba(224, 136, 129, 0.08);
+        }
+
         /* ── "Nova is speaking" indicator ──
            Sits inside the assistant message row, just below the bubble and
            above the action row, only while audio is playing. Designed to
@@ -3173,6 +3375,17 @@
             feedback_reason_saved: "Préférence enregistrée.",
             feedback_reason_error: "Impossible d'enregistrer la préférence.",
             nova_actions: "Actions du message",
+            message_actions_label: "Modifier ou supprimer ce message",
+            edit_message: "Modifier ce message",
+            delete_message: "Supprimer ce message",
+            edit_save: "Enregistrer",
+            edit_cancel: "Annuler",
+            edit_empty_error: "Le message ne peut pas être vide.",
+            edit_save_error: "Impossible d'enregistrer la modification.",
+            edit_no_regenerate_note: "Modifier ne régénère pas la réponse de Nova. Envoie le texte modifié comme nouveau message pour obtenir une nouvelle réponse.",
+            delete_confirm: "Supprimer ce message ?",
+            delete_confirm_with_reply: "Supprimer ce message et la réponse de Nova qui le suit ?",
+            delete_error: "Impossible de supprimer ce message.",
             mode: "Mode",
             mode_auto_desc: "Choisit automatiquement le bon mode",
             mode_chat_desc: "Conversation et questions du jour",
@@ -3346,6 +3559,17 @@
             feedback_reason_saved: "Preference noted.",
             feedback_reason_error: "Could not save preference.",
             nova_actions: "Message actions",
+            message_actions_label: "Edit or delete this message",
+            edit_message: "Edit this message",
+            delete_message: "Delete this message",
+            edit_save: "Save",
+            edit_cancel: "Cancel",
+            edit_empty_error: "Message cannot be empty.",
+            edit_save_error: "Could not save the edit.",
+            edit_no_regenerate_note: "Editing does not regenerate Nova's reply. Send the edited text as a new message to get a fresh answer.",
+            delete_confirm: "Delete this message?",
+            delete_confirm_with_reply: "Delete this message and the Nova reply that follows it?",
+            delete_error: "Could not delete this message.",
             mode: "Mode",
             mode_auto_desc: "Picks the right mode automatically",
             mode_chat_desc: "Everyday chat and questions",
@@ -5295,6 +5519,8 @@
         check: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4 4 10-10"/></svg>`,
         speaker: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 5L6 9H4a1 1 0 0 0-1 1v4a1 1 0 0 0 1 1h2l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18.5 5.5a9 9 0 0 1 0 13"/></svg>`,
         stop: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6.5" y="6.5" width="11" height="11" rx="2"/></svg>`,
+        edit: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.5 4.5l5 5"/><path d="M4 20l4.5-1 11-11a1.8 1.8 0 0 0 0-2.5l-1-1a1.8 1.8 0 0 0-2.5 0l-11 11L4 20z"/></svg>`,
+        trash: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16"/><path d="M9 7V5a1.5 1.5 0 0 1 1.5-1.5h3A1.5 1.5 0 0 1 15 5v2"/><path d="M6 7l1 12.5A1.5 1.5 0 0 0 8.5 21h7a1.5 1.5 0 0 0 1.5-1.5L18 7"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>`,
     };
 
     function makeActionButton(kind, label, html) {
@@ -5634,6 +5860,10 @@
         // Raw model id is kept on the row for devtools-only inspection;
         // it is intentionally not rendered in the user-facing label.
         if (model) row.dataset.model = model;
+        // Stable message id (when known) drives the edit/delete
+        // endpoints. Kept on the row dataset so the inline edit/delete
+        // helpers can find it regardless of which descendant was clicked.
+        if (messageId != null) row.dataset.messageId = String(messageId);
 
         const label = document.createElement("div");
         label.className = "message-label";
@@ -5645,6 +5875,9 @@
         // message-level copy button reproduces exactly what Nova returned,
         // without the noise of injected copy-button labels.
         if (role === "nova" && content) bubble.dataset.rawText = content;
+        // User bubbles need the raw text too so the inline editor can
+        // populate its textarea with the exact original message.
+        if (role === "user" && content) bubble.dataset.rawText = content;
 
         if (imageB64) {
             const img = document.createElement("img");
@@ -5669,6 +5902,16 @@
         row.appendChild(label);
         row.appendChild(bubble);
 
+        // Per-message edit/delete row. User messages get edit + delete,
+        // assistant messages get delete only (editing the model's reply
+        // is intentionally out of scope for v1 — see issue #94). Image
+        // only turns and rows without a known message id show no
+        // controls so the user can never click against a non-targetable
+        // bubble.
+        if (messageId != null && content) {
+            buildEditDeleteActions(row, bubble, role);
+        }
+
         if (role === "nova" && content) {
             // The integrated action row (like / dislike / copy / read-aloud)
             // sits as a sibling of the bubble inside the row. Skipping it
@@ -5686,6 +5929,273 @@
             badge.dataset.model = model;
         }
         return bubble;
+    }
+
+    // ── PER-MESSAGE EDIT / DELETE ──
+    //
+    // Adds the quiet "edit" / "delete" pair next to a rendered message
+    // row. The handlers below talk to the PUT/DELETE /messages/{id}
+    // endpoints and update the DOM in place — there is no full page
+    // reload, but reloading the conversation must produce the same
+    // state because the backend is the source of truth.
+    //
+    // A few small invariants:
+    //   * The row's `data-message-id` is required for any action; if
+    //     it is missing (image-only turns, mid-stream rows) the
+    //     controls are not built at all.
+    //   * `cascade_assistant` is requested only when deleting a user
+    //     message whose immediate sibling in the DOM is a Nova row —
+    //     this mirrors the "same exchange" rule the backend enforces.
+    //   * Memory entries are intentionally never touched by these
+    //     handlers; the user controls memory cleanup separately.
+
+    function getMessageId(row) {
+        const raw = row && row.dataset ? row.dataset.messageId : null;
+        const n = raw ? parseInt(raw, 10) : NaN;
+        return Number.isFinite(n) ? n : null;
+    }
+
+    function hasFollowingAssistantSibling(row) {
+        const next = row.nextElementSibling;
+        return !!(next && next.classList && next.classList.contains("message-row")
+            && next.classList.contains("nova"));
+    }
+
+    function buildEditDeleteActions(row, bubble, role) {
+        const actions = document.createElement("div");
+        actions.className = "msg-edit-actions";
+        actions.setAttribute("role", "toolbar");
+        actions.setAttribute("aria-label", t("message_actions_label"));
+
+        if (role === "user") {
+            const editBtn = document.createElement("button");
+            editBtn.type = "button";
+            editBtn.className = "msg-edit-action";
+            editBtn.setAttribute("aria-label", t("edit_message"));
+            editBtn.setAttribute("title", t("edit_message"));
+            editBtn.innerHTML = ACTION_SVG.edit;
+            editBtn.onclick = (e) => {
+                e.stopPropagation();
+                openInlineEditor(row, bubble);
+            };
+            actions.appendChild(editBtn);
+        }
+
+        const deleteBtn = document.createElement("button");
+        deleteBtn.type = "button";
+        deleteBtn.className = "msg-edit-action danger";
+        deleteBtn.setAttribute("aria-label", t("delete_message"));
+        deleteBtn.setAttribute("title", t("delete_message"));
+        deleteBtn.innerHTML = ACTION_SVG.trash;
+        deleteBtn.onclick = (e) => {
+            e.stopPropagation();
+            openDeleteConfirm(row, role);
+        };
+        actions.appendChild(deleteBtn);
+
+        row.appendChild(actions);
+        return actions;
+    }
+
+    function openInlineEditor(row, bubble) {
+        const id = getMessageId(row);
+        if (id == null) return;
+        // Replace the bubble with a textarea + save/cancel pair. The
+        // raw text is taken from the bubble dataset so we recover the
+        // exact original (no markdown re-parsing artefacts for user
+        // messages, which are plain text anyway).
+        if (row.querySelector(".msg-edit-form")) return;
+
+        const original = bubble.dataset.rawText || bubble.innerText || "";
+
+        const form = document.createElement("div");
+        form.className = "msg-edit-form";
+
+        const ta = document.createElement("textarea");
+        ta.className = "msg-edit-input";
+        ta.value = original;
+        ta.maxLength = 32000;
+        ta.setAttribute("aria-label", t("edit_message"));
+
+        const note = document.createElement("div");
+        note.className = "msg-edit-note";
+        note.textContent = t("edit_no_regenerate_note");
+
+        const btns = document.createElement("div");
+        btns.className = "msg-edit-btns";
+        const cancelBtn = document.createElement("button");
+        cancelBtn.type = "button";
+        cancelBtn.className = "msg-edit-cancel";
+        cancelBtn.textContent = t("edit_cancel");
+        const saveBtn = document.createElement("button");
+        saveBtn.type = "button";
+        saveBtn.className = "msg-edit-save";
+        saveBtn.textContent = t("edit_save");
+
+        btns.appendChild(cancelBtn);
+        btns.appendChild(saveBtn);
+        form.appendChild(ta);
+        form.appendChild(note);
+        form.appendChild(btns);
+
+        // Hide the bubble and the action row while editing — keeps the
+        // surface uncluttered and prevents the user from interacting
+        // with stale rendered content.
+        bubble.style.display = "none";
+        const editActions = row.querySelector(".msg-edit-actions");
+        if (editActions) editActions.style.display = "none";
+
+        row.appendChild(form);
+        ta.focus();
+        // Place caret at the end so the textarea feels like a natural
+        // continuation of the original message.
+        try { ta.setSelectionRange(ta.value.length, ta.value.length); } catch {}
+
+        const restoreBubble = () => {
+            if (form.isConnected) form.remove();
+            bubble.style.display = "";
+            if (editActions) editActions.style.display = "";
+        };
+
+        cancelBtn.onclick = (e) => {
+            e.stopPropagation();
+            restoreBubble();
+        };
+
+        ta.addEventListener("keydown", (e) => {
+            if (e.key === "Escape") {
+                e.preventDefault();
+                restoreBubble();
+            } else if ((e.key === "Enter") && (e.metaKey || e.ctrlKey)) {
+                e.preventDefault();
+                saveBtn.click();
+            }
+        });
+
+        saveBtn.onclick = async (e) => {
+            e.stopPropagation();
+            const next = ta.value;
+            if (!next.trim()) {
+                showInlineError(form, t("edit_empty_error"));
+                return;
+            }
+            if (next === original) {
+                restoreBubble();
+                return;
+            }
+            saveBtn.disabled = true;
+            try {
+                const res = await fetch(`/messages/${id}`, {
+                    method: "PUT",
+                    headers: {
+                        "Content-Type": "application/json",
+                        "Authorization": `Bearer ${token}`,
+                    },
+                    body: JSON.stringify({ content: next }),
+                });
+                if (res.status === 401) { logout(); return; }
+                if (!res.ok) {
+                    let detail = "";
+                    try { detail = (await res.json())?.detail || ""; } catch {}
+                    showInlineError(form, detail || t("edit_save_error"));
+                    saveBtn.disabled = false;
+                    return;
+                }
+                // Success: update the bubble text + dataset, restore.
+                bubble.dataset.rawText = next;
+                bubble.textContent = "";
+                const span = document.createElement("span");
+                span.textContent = next;
+                bubble.appendChild(span);
+                restoreBubble();
+            } catch {
+                showInlineError(form, t("edit_save_error"));
+                saveBtn.disabled = false;
+            }
+        };
+    }
+
+    function showInlineError(container, text) {
+        let err = container.querySelector(".msg-edit-error");
+        if (!err) {
+            err = document.createElement("div");
+            err.className = "msg-edit-error msg-edit-note";
+            err.style.color = "var(--danger)";
+            container.appendChild(err);
+        }
+        err.textContent = text;
+    }
+
+    function openDeleteConfirm(row, role) {
+        const id = getMessageId(row);
+        if (id == null) return;
+        if (row.querySelector(".msg-delete-confirm")) return;
+
+        const editActions = row.querySelector(".msg-edit-actions");
+        if (editActions) editActions.style.display = "none";
+
+        const willCascade = role === "user" && hasFollowingAssistantSibling(row);
+        const confirm = document.createElement("div");
+        confirm.className = "msg-delete-confirm";
+
+        const text = document.createElement("span");
+        text.className = "msg-delete-confirm-text";
+        text.textContent = willCascade
+            ? t("delete_confirm_with_reply")
+            : t("delete_confirm");
+        confirm.appendChild(text);
+
+        const btns = document.createElement("span");
+        btns.className = "msg-delete-confirm-btns";
+        const noBtn = document.createElement("button");
+        noBtn.type = "button";
+        noBtn.className = "msg-delete-confirm-no";
+        noBtn.textContent = t("confirm_no");
+        const yesBtn = document.createElement("button");
+        yesBtn.type = "button";
+        yesBtn.className = "msg-delete-confirm-yes";
+        yesBtn.textContent = t("confirm_yes");
+        btns.appendChild(noBtn);
+        btns.appendChild(yesBtn);
+        confirm.appendChild(btns);
+        row.appendChild(confirm);
+
+        const restore = () => {
+            if (confirm.isConnected) confirm.remove();
+            if (editActions) editActions.style.display = "";
+        };
+        noBtn.onclick = (e) => {
+            e.stopPropagation();
+            restore();
+        };
+        yesBtn.onclick = async (e) => {
+            e.stopPropagation();
+            yesBtn.disabled = true;
+            try {
+                const qs = willCascade ? "?cascade_assistant=true" : "";
+                const res = await fetch(`/messages/${id}${qs}`, {
+                    method: "DELETE",
+                    headers: { "Authorization": `Bearer ${token}` },
+                });
+                if (res.status === 401) { logout(); return; }
+                if (!res.ok) {
+                    yesBtn.disabled = false;
+                    text.textContent = t("delete_error");
+                    return;
+                }
+                // Drop this row from the DOM, and the next assistant
+                // row too if we asked the backend to cascade.
+                const next = row.nextElementSibling;
+                if (row.parentNode) row.parentNode.removeChild(row);
+                if (willCascade && next && next.classList.contains("message-row")
+                    && next.classList.contains("nova")) {
+                    if (next.parentNode) next.parentNode.removeChild(next);
+                }
+            } catch {
+                yesBtn.disabled = false;
+                text.textContent = t("delete_error");
+            }
+        };
     }
 
     // Append an empty Nova bubble that the streaming reader will fill in
@@ -5779,6 +6289,18 @@
                 bubble.appendChild(rendered);
                 attachCodeBlockCopyButtons(rendered);
 
+                // Stamp the row with the assistant message id so the
+                // edit/delete helpers can target it later. The user
+                // bubble immediately above will also have its id set
+                // by the next conversation reload; for now, the user
+                // row stays editable through whatever id was assigned
+                // when the message was first sent (which is null until
+                // the conversation is reloaded — that's fine for v1).
+                if (messageId != null) {
+                    row.dataset.messageId = String(messageId);
+                    buildEditDeleteActions(row, bubble, "nova");
+                }
+
                 buildAssistantActions(row, bubble, buffer, messageId || null);
                 if (isScrolledNearBottom(messagesEl)) {
                     messagesEl.scrollTop = messagesEl.scrollHeight;
@@ -5821,7 +6343,12 @@
         userCancelledChat = false;
         setSendButtonToStop();
 
-        appendMessage("user", text || "", null, currentImage);
+        // The just-rendered user bubble; once the stream's `done`
+        // event arrives we stamp the row with its persisted id so the
+        // edit/delete controls have a target.
+        const userBubble = appendMessage("user", text || "", null, currentImage);
+        const userRow = userBubble && userBubble.parentNode
+            ? userBubble.parentNode : null;
 
         const messagesEl = document.getElementById("messages");
         const thinkingRow = document.createElement("div");
@@ -5869,7 +6396,7 @@
                 return;
             }
 
-            const result = await consumeChatStream(res.body, thinkingRow);
+            const result = await consumeChatStream(res.body, thinkingRow, userRow);
 
             if (!userCancelledChat && result.conversationId) {
                 currentConvId = result.conversationId;
@@ -5912,7 +6439,7 @@
     // uses to decide post-stream actions (refresh sidebar, surface
     // errors). Resolves cleanly on `done`, `error`, or end-of-stream;
     // throws only on AbortError (handled upstream).
-    async function consumeChatStream(body, thinkingRow) {
+    async function consumeChatStream(body, thinkingRow, userRow) {
         const reader = body.getReader();
         const decoder = new TextDecoder("utf-8");
         let pending = "";
@@ -5920,6 +6447,7 @@
         const result = {
             conversationId: null,
             model: null,
+            userMessageId: null,
             assistantMessageId: null,
             errored: false,
             errorDetail: "",
@@ -5956,6 +6484,9 @@
                         result.conversationId = event.conversation_id;
                     }
                     if (event.model) result.model = event.model;
+                    if (event.user_message_id != null) {
+                        result.userMessageId = event.user_message_id;
+                    }
                     if (event.assistant_message_id != null) {
                         result.assistantMessageId = event.assistant_message_id;
                     }
@@ -5976,6 +6507,18 @@
                         result.errorDetail = result.errorDetail
                             || "Nova didn't produce a reply. Please try again.";
                         break;
+                    }
+                    // Stamp the user bubble with its persisted id and
+                    // attach the same quiet edit/delete controls the
+                    // conversation-reload path uses. The user row is
+                    // already in the DOM at this point.
+                    if (userRow && result.userMessageId != null
+                            && !userRow.dataset.messageId) {
+                        userRow.dataset.messageId = String(result.userMessageId);
+                        const userBubble = userRow.querySelector(".message.user");
+                        if (userBubble) {
+                            buildEditDeleteActions(userRow, userBubble, "user");
+                        }
                     }
                     activeStreamBubble.finalise(
                         result.model,

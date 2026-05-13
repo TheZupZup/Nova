@@ -370,6 +370,171 @@ def delete_conversation(conversation_id: int, user_id: int) -> bool:
     return True
 
 
+# Cap on edited message length. The textarea in the chat input is
+# unbounded, but a server-side cap stops a crafted client from writing a
+# multi-megabyte row that would later inflate the prompt history.
+MESSAGE_CONTENT_MAX_LEN = 32_000
+
+
+def get_owned_message(message_id: int, user_id: int) -> Optional[dict]:
+    """Return ``{id, conversation_id, role, content, model, created}`` for
+    a message that belongs to a conversation owned by ``user_id``, else
+    ``None``.
+
+    The ownership check goes through the conversations table so a user
+    cannot read or mutate another user's message even if they guessed
+    the id.
+    """
+    with _get_connection() as conn:
+        row = conn.execute(
+            "SELECT m.id, m.conversation_id, m.role, m.content, m.model, "
+            "       m.created "
+            "FROM messages m "
+            "JOIN conversations c ON c.id = m.conversation_id "
+            "WHERE m.id = ? AND c.user_id = ?",
+            (message_id, user_id),
+        ).fetchone()
+    if row is None:
+        return None
+    return {
+        "id": row["id"],
+        "conversation_id": row["conversation_id"],
+        "role": row["role"],
+        "content": row["content"],
+        "model": row["model"],
+        "created": row["created"],
+    }
+
+
+def update_message_content(
+    message_id: int, user_id: int, content: str
+) -> Optional[dict]:
+    """
+    Replace the content of an owned message and return its new state.
+
+    Ownership is enforced via ``get_owned_message`` so a foreign user
+    cannot mutate someone else's row. The conversation's ``updated``
+    timestamp is bumped so the sidebar reflects the recent activity.
+
+    Returns ``None`` when the message does not exist or does not belong
+    to ``user_id``. The caller is responsible for length / emptiness
+    validation: this helper trusts its inputs.
+    """
+    existing = get_owned_message(message_id, user_id)
+    if existing is None:
+        return None
+    with _get_connection() as conn:
+        conn.execute(
+            "UPDATE messages SET content = ? WHERE id = ?",
+            (content, message_id),
+        )
+    update_conversation_timestamp(existing["conversation_id"])
+    existing["content"] = content
+    return existing
+
+
+def find_following_assistant_message(message_id: int) -> Optional[int]:
+    """
+    Return the id of the assistant message that immediately follows
+    ``message_id`` within the same conversation, or ``None`` if the
+    next message is not from the assistant (or there is no next
+    message).
+
+    Used by the optional cascade in :func:`delete_message` so deleting a
+    user message can clean up the paired assistant reply in the same
+    exchange.
+    """
+    with _get_connection() as conn:
+        row = conn.execute(
+            "SELECT conversation_id, created FROM messages WHERE id = ?",
+            (message_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        # The "next" message is the one with the smallest (created, id)
+        # tuple strictly greater than the current row's. Tie-breaking on
+        # id keeps the order deterministic when two rows share a
+        # timestamp (which can happen in fast tests).
+        nxt = conn.execute(
+            "SELECT id, role FROM messages "
+            "WHERE conversation_id = ? "
+            "  AND (created > ? OR (created = ? AND id > ?)) "
+            "ORDER BY created ASC, id ASC "
+            "LIMIT 1",
+            (row["conversation_id"], row["created"], row["created"], message_id),
+        ).fetchone()
+    if nxt is None or nxt["role"] != "assistant":
+        return None
+    return int(nxt["id"])
+
+
+def delete_message(
+    message_id: int,
+    user_id: int,
+    cascade_assistant: bool = False,
+) -> Optional[dict]:
+    """
+    Delete an owned message. When ``cascade_assistant`` is True and the
+    deleted message is a user message whose next sibling is an assistant
+    reply, that assistant reply is removed as part of the same
+    transaction.
+
+    Any feedback rows attached to a deleted message id are removed too,
+    so the local feedback table never carries an entry whose target is
+    gone. Memory entries are deliberately left alone — memory cleanup
+    is a separate, explicit user action (see issue #94).
+
+    Returns a small summary dict on success:
+
+      ``{"deleted_id": <id>, "cascaded_assistant_id": <id or None>}``
+
+    Returns ``None`` if the message does not exist or does not belong to
+    ``user_id`` — the caller translates that into a 404 so cross-user
+    access never leaks existence.
+    """
+    existing = get_owned_message(message_id, user_id)
+    if existing is None:
+        return None
+
+    cascaded_assistant_id: Optional[int] = None
+    if cascade_assistant and existing["role"] == "user":
+        cascaded_assistant_id = find_following_assistant_message(message_id)
+
+    with _get_connection() as conn:
+        conn.execute(
+            "DELETE FROM messages WHERE id = ?", (message_id,),
+        )
+        # Best-effort cleanup of any feedback row whose target message
+        # is now gone. The table exists once the feedback migration has
+        # run; on a partially-initialised DB the OperationalError is
+        # ignored so message deletion still succeeds.
+        try:
+            conn.execute(
+                "DELETE FROM message_feedback WHERE message_id = ?",
+                (message_id,),
+            )
+        except sqlite3.OperationalError:
+            pass
+        if cascaded_assistant_id is not None:
+            conn.execute(
+                "DELETE FROM messages WHERE id = ?",
+                (cascaded_assistant_id,),
+            )
+            try:
+                conn.execute(
+                    "DELETE FROM message_feedback WHERE message_id = ?",
+                    (cascaded_assistant_id,),
+                )
+            except sqlite3.OperationalError:
+                pass
+
+    update_conversation_timestamp(existing["conversation_id"])
+    return {
+        "deleted_id": message_id,
+        "cascaded_assistant_id": cascaded_assistant_id,
+    }
+
+
 def list_memories(user_id: int) -> list[dict]:
     """Liste les souvenirs de `user_id` avec id et created — pour l'interface web."""
     with _get_connection() as conn:
