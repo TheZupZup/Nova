@@ -1,6 +1,18 @@
 # Changelog
 
 ## Unreleased
+### Fixed
+- Streaming chat no longer surfaces "Nova didn't produce a reply." for
+  every prompt. The chunk extractor used to filter Ollama events with
+  `isinstance(event, dict)`, but `ollama-python>=0.4` streams Pydantic
+  `ChatResponse` objects — subscriptable, but not `dict` instances.
+  That filter silently dropped every production chunk, leaving the
+  accumulator empty and tripping the empty-reply fallback even for a
+  trivial "bonjour". The extractor now duck-types on the `.get` API
+  both shapes expose, with a `getattr` fallback for unexpected event
+  types. Regression tests cover both the dict (legacy) and
+  `SubscriptableBaseModel` (production) shapes end-to-end.
+
 ### Added
 - Smoother streamed chat experience: the streaming bubble now coalesces
   incoming Ollama tokens on a short flush window (~28 ms) and only

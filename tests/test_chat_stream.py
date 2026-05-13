@@ -76,20 +76,56 @@ def _h(token):
     return {"Authorization": f"Bearer {token}"}
 
 
+class _SubscriptableEvent:
+    """Stand-in for ``ollama.ChatResponse`` (a ``SubscriptableBaseModel``).
+
+    Real ollama-python streams Pydantic objects that expose ``.get()``
+    and ``[key]`` access but are **not** ``dict`` instances. The plain
+    dict mocks elsewhere in this file happen to satisfy any
+    ``isinstance(event, dict)`` filter; production ``ChatResponse``
+    objects do not — that mismatch was the root cause of empty replies
+    in production. Using this shape in regression tests pins the
+    contract without importing the live ollama package.
+    """
+
+    def __init__(self, **fields):
+        self._fields = fields
+
+    def get(self, key, default=None):
+        return self._fields.get(key, default)
+
+    def __getitem__(self, key):
+        return self._fields[key]
+
+
 @contextlib.contextmanager
-def stub_chat_stream_runtime(chunks):
+def stub_chat_stream_runtime(chunks, *, event_shape="dict"):
     """Replace Ollama's chat() with a fake streaming iterator.
 
     ``chunks`` is a list of strings to surface as message.content
-    fragments. Routing, weather, search, security and memory hooks are
-    all neutralised so the generator follows the plain chat path.
+    fragments. ``event_shape`` controls whether each streamed event is a
+    plain ``dict`` (legacy) or a ``_SubscriptableEvent`` mirroring the
+    real ``ollama.ChatResponse`` Pydantic model — the latter is the
+    shape that ships in production and the one that broke generation
+    before this guardrail existed. Routing, weather, search, security
+    and memory hooks are all neutralised so the generator follows the
+    plain chat path.
     """
+    def _wrap(content, done):
+        payload = {"message": {"content": content}, "done": done}
+        if event_shape == "subscriptable":
+            return _SubscriptableEvent(
+                message=_SubscriptableEvent(content=content),
+                done=done,
+            )
+        return payload
+
     def fake_chat(*args, **kwargs):
         if kwargs.get("stream"):
             def gen():
                 for c in chunks:
-                    yield {"message": {"content": c}, "done": False}
-                yield {"message": {"content": ""}, "done": True}
+                    yield _wrap(c, False)
+                yield _wrap("", True)
             return gen()
         # Non-streaming fallback (e.g. memory extractor) — return single shot.
         return {"message": {"content": "".join(chunks)}}
@@ -132,6 +168,25 @@ class TestChatStreamGenerator:
         assert events[0]["type"] == "meta"
         assert events[-1]["type"] == "done"
         assert events[-1]["reply"] == ""
+
+    def test_subscriptable_chat_response_events_are_not_dropped(self, db_path):
+        # Regression guard: ``ollama>=0.4`` streams ``ChatResponse``
+        # Pydantic objects, which are subscriptable but **not** ``dict``
+        # instances. A previous implementation used
+        # ``isinstance(event, dict)`` to filter the stream and silently
+        # dropped every production chunk — leaving the final accumulator
+        # empty and surfacing "Nova didn't produce a reply." for even a
+        # trivial "bonjour". This exercises the same shape end-to-end.
+        alice = _make_user(db_path, "alice")
+        with stub_chat_stream_runtime(
+            ["bon", "jour"], event_shape="subscriptable",
+        ):
+            events = list(chat_stream([], "bonjour", [], alice))
+        deltas = [e["content"] for e in events if e["type"] == "delta"]
+        assert deltas == ["bon", "jour"]
+        done = events[-1]
+        assert done["type"] == "done"
+        assert done["reply"] == "bonjour"
 
     def test_ollama_unreachable_yields_error(self, db_path):
         alice = _make_user(db_path, "alice")
@@ -444,6 +499,41 @@ class TestChatStreamEndpoint:
         with sqlite3.connect(db_path) as conn:
             count = conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
         assert count == 0
+
+    def test_bonjour_produces_reply_not_empty_fallback(
+        self, db_path, web_client,
+    ):
+        # End-to-end regression: a simple "bonjour" prompt against a
+        # production-shaped Ollama stream (``ChatResponse`` Pydantic
+        # objects, not dicts) must produce a real assistant reply and
+        # **not** the "Nova didn't produce a reply." fallback. This is
+        # the exact user-visible bug that motivated this regression set.
+        _make_user(db_path, "alice")
+        token = _login(web_client, "alice")
+
+        with stub_chat_stream_runtime(
+            ["Bon", "jour", " !"], event_shape="subscriptable",
+        ):
+            resp = web_client.post(
+                "/chat/stream",
+                json={"message": "bonjour", "mode": "chat"},
+                headers=_h(token),
+            )
+        assert resp.status_code == 200
+        events = _decode_ndjson(resp.content)
+        types = [e["type"] for e in events]
+        assert "done" in types
+        assert "error" not in types
+        deltas = [e["content"] for e in events if e["type"] == "delta"]
+        assert "".join(deltas) == "Bonjour !"
+
+        done = next(e for e in events if e["type"] == "done")
+        with sqlite3.connect(db_path) as conn:
+            row = conn.execute(
+                "SELECT role, content FROM messages WHERE id = ?",
+                (done["assistant_message_id"],),
+            ).fetchone()
+        assert row == ("assistant", "Bonjour !")
 
     def test_assistant_message_id_only_emitted_when_persisted(
         self, db_path, web_client

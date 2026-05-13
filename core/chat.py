@@ -48,19 +48,46 @@ def _reply_is_uncertain(reply: str) -> bool:
 def _iter_content_chunks(stream) -> Iterator[str]:
     """Yield non-empty `message.content` strings from an Ollama stream.
 
-    Ollama's chat-stream generator yields dicts shaped like
-    ``{"message": {"content": "..."}, "done": bool}``. Some intermediate
-    events have empty content (e.g. metadata frames) and the final
-    ``done`` event also carries a synthetic empty content — skipping
-    empties keeps the wire format tidy without affecting correctness.
+    Ollama's chat-stream generator yields events shaped like
+    ``{"message": {"content": "..."}, "done": bool}`` — but the concrete
+    type depends on the installed ollama-python client. ``ollama>=0.4``
+    streams ``ChatResponse`` Pydantic models (subscriptable but **not**
+    ``dict`` instances); older releases and our tests yield plain dicts.
+    We duck-type on the ``.get`` API both shapes expose so neither one
+    is silently dropped — an ``isinstance(event, dict)`` filter here was
+    the source of empty-reply regressions in production. Some
+    intermediate events have empty content (e.g. metadata frames) and
+    the final ``done`` event also carries a synthetic empty content —
+    skipping empties keeps the wire format tidy without affecting
+    correctness.
     """
     for event in stream:
-        if not isinstance(event, dict):
+        if event is None:
             continue
-        msg = event.get("message") or {}
-        chunk = msg.get("content") or ""
-        if chunk:
+        msg = _safe_get(event, "message") or {}
+        chunk = _safe_get(msg, "content") or ""
+        if isinstance(chunk, str) and chunk:
             yield chunk
+
+
+def _safe_get(obj, key: str):
+    """Read ``key`` from a dict-like or Pydantic ``SubscriptableBaseModel``.
+
+    Both shapes expose ``.get`` with the same contract, but a non-dict,
+    non-Pydantic object (e.g. an unexpected string event) would raise on
+    subscript. Falling back to ``getattr`` keeps the streaming loop
+    robust without re-introducing an ``isinstance(dict)`` filter that
+    silently drops valid ``ChatResponse`` events.
+    """
+    if obj is None:
+        return None
+    getter = getattr(obj, "get", None)
+    if callable(getter):
+        try:
+            return getter(key)
+        except TypeError:
+            pass
+    return getattr(obj, key, None)
 
 
 MEMORY_EXTRACTION_PROMPT = """Analyse cette conversation et extrait UNIQUEMENT les informations personnelles importantes sur l'utilisateur.
