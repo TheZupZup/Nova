@@ -6,6 +6,10 @@ Each module in this package is a passive bridge to an external tool:
   * nexanote   — HTTP API for notes (read by default; writes opt-in).
   * github     — read-only HTTP bridge to the GitHub REST API for
                  admin-only issue / PR visibility (no writes in v1).
+  * github_triage — read-only ranking helper that turns the connector's
+                 issue list into a short list of maintainer
+                 recommendations. Heuristics only — no LLM call, no
+                 background polling, no GitHub mutations.
 
 Every integration is gated behind a per-user or host-level switch and
 is safe to import even when the underlying tool is missing or

@@ -2,6 +2,16 @@
 
 ## Unreleased
 ### Added
+- Read-only GitHub maintainer triage helper (issue #119 follow-up).
+  A new admin-only endpoint, `GET /integrations/github/recommendations`,
+  surfaces a short ranked list of open issues a maintainer might want
+  to work on next, with `difficulty`, `priority_reason`,
+  `recommended_next_step`, `risk_notes`, and `confidence` fields per
+  entry. Ranking is deterministic and label-driven — there is no LLM
+  call, no background polling, and no GitHub mutation. Optional query
+  params: `repo`, `label`, `difficulty`, `topic`, `limit`. The
+  underlying connector stays strictly read-only; the configured token
+  is never echoed back in the response.
 - Local response feedback turns thumbs up / thumbs down into a per-user
   preference signal. Ratings are stored locally in SQLite (scoped per
   user, never sent off-host), and a short, deterministic preference

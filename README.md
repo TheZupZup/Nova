@@ -276,7 +276,7 @@ phase. Use a fine-grained personal access token scoped to the
 repositories you want Nova to read; do not give the token write,
 admin, or organisation-management scopes.
 
-Once configured, Nova exposes five admin-only endpoints:
+Once configured, Nova exposes six admin-only endpoints:
 
 - `GET /integrations/github/status` — calm snapshot of the
   connector. The `state` field is one of `disabled`,
@@ -286,12 +286,62 @@ Once configured, Nova exposes five admin-only endpoints:
 - `GET /integrations/github/pulls` — list open pull requests.
 - `GET /integrations/github/issues/{number}` — single issue.
 - `GET /integrations/github/pulls/{number}` — single pull request.
+- `GET /integrations/github/recommendations` — short ranked list
+  of issues a maintainer might want to work on next (see below).
 
 All endpoints are auth-gated and admin-only. Non-admin and
 restricted users receive a 403; the aggregate
 `/integrations/status` response surfaces `state: "disabled"` for
 the GitHub entry to non-admin callers so the UI can hide the card
 without leaking the configured state.
+
+### Maintainer triage / recommendations
+
+`GET /integrations/github/recommendations` turns the open-issues
+list into a short ranked list of suggestions. Nova answers
+questions like *"find issues I could work on"*, *"which issues
+look easy"*, *"which issues are important"*, *"find
+beginner-friendly issues"*, or *"find issues related to memory /
+SilentGuard / security / UI"* by scoring each open issue with
+deterministic heuristics:
+
+- `good first issue`, `docs`, `tests`, `ui` → lower difficulty;
+- `architecture`, `refactor`, `migration`, `performance` → higher
+  difficulty;
+- `security`, `auth`, `admin`, `memory`, `github` → carry an
+  explicit caution / risk note even when the issue otherwise
+  looks easy;
+- vague titles (`Bug`, `Help`, `Fix`, etc.) and `wontfix` /
+  `duplicate` / `blocked` issues are flagged or excluded so the
+  list stays actionable;
+- many comments → "read the thread first" note;
+- recommendations are **open issues only**; closed issues are
+  ignored.
+
+Each entry carries: `number`, `title`, `url`, `labels`, `state`,
+`difficulty` (`low` / `medium` / `high`), `priority_reason`,
+`recommended_next_step`, `risk_notes`, and `confidence`.
+
+Optional query params:
+
+- `repo=owner/name` — override the default repo;
+- `label=memory` — filter to issues carrying that label;
+- `difficulty=low|medium|high` — filter to that difficulty;
+- `topic=memory` — case-insensitive title / label keyword match;
+- `limit=5` — clamp to 1..25 (default 5).
+
+This endpoint is **read-only**. Nova never:
+
+- creates, closes, or comments on issues,
+- edits labels, assigns users, or modifies repository settings,
+- approves or merges pull requests,
+- decides for the maintainer what to work on — it returns
+  suggestions; the maintainer picks.
+
+There is no background polling, no autonomous behaviour, and no
+LLM-only "magic" ranking — the score is computed from labels,
+title shape, and comment counts so the output is reproducible
+and explainable.
 
 Token safety contract:
 

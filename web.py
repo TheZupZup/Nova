@@ -59,6 +59,7 @@ from core.ollama_client import OllamaUnavailable
 from core.integrations import silentguard as _silentguard_integration
 from core.integrations import nexanote as _nexanote_integration
 from core.integrations import github as _github_integration
+from core.integrations import github_triage as _github_triage
 from core.security import ensure_silentguard_running as _ensure_silentguard_running
 from core.security import lifecycle as _silentguard_lifecycle
 from core.security import SilentGuardProvider as _SilentGuardProvider
@@ -2064,6 +2065,49 @@ def github_get_pull(
     if pull is None:
         raise HTTPException(status_code=404, detail="Pull request not found.")
     return {"repo": f"{owner}/{name}", "pull_request": pull, "read_only": True}
+
+
+@app.get("/integrations/github/recommendations")
+def github_recommendations(
+    repo: str | None = None,
+    label: str | None = None,
+    difficulty: str | None = None,
+    topic: str | None = None,
+    limit: int = 5,
+    _: CurrentUser = Depends(require_admin),
+):
+    """Return a short ranked list of issues a maintainer might work on.
+
+    Read-only and deterministic: the response is computed from the
+    sanitised output of ``list_issues`` with pure-Python heuristics
+    (label dictionaries, comment counts, title shape). Nova never
+    decides for the maintainer what to work on — this endpoint just
+    surfaces a short candidate list with explanations. No GitHub
+    mutation is performed and the configured token is never echoed
+    back in the response.
+
+    Optional query params:
+      * ``repo=owner/name``           — overrides ``NOVA_GITHUB_DEFAULT_REPO``.
+      * ``label=memory``              — keep only issues carrying that label.
+      * ``difficulty=low|medium|high`` — keep only issues at that difficulty.
+      * ``topic=memory``              — case-insensitive title/label match.
+      * ``limit=5``                   — clamp to 1..25; default 5.
+
+    Errors mirror the rest of the GitHub connector:
+      * 400 when no repo can be resolved,
+      * 503 when the connector is disabled / not configured / unreachable.
+    """
+    owner, name = _resolve_repo_or_400(repo)
+    _require_github_ready(_github_integration.status())
+    recommendations = _github_triage.recommend_issues(
+        owner, name,
+        label=label, difficulty=difficulty, topic=topic, limit=limit,
+    )
+    return {
+        "repo": f"{owner}/{name}",
+        "recommendations": recommendations,
+        "read_only": True,
+    }
 
 
 @app.get("/channel")
