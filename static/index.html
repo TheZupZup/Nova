@@ -3053,6 +3053,52 @@
                             <button class="memory-btn" id="settings-open-admin-btn" onclick="openAdminFromSettings()">Open</button>
                         </div>
                     </div>
+                    <!--
+                      Maintenance / Updates card. Disabled by default and
+                      opt-in via NOVA_MAINTENANCE_ENABLED. When the host
+                      operator has not enabled the feature, the card stays
+                      visible with a calm "off" state so admins can see
+                      that the surface exists; pull and restart buttons
+                      stay hidden until the corresponding switches are on.
+                      Pull and restart always go through an explicit
+                      confirm() prompt so a stray click cannot trigger
+                      either action.
+                    -->
+                    <div class="settings-row" id="maintenance-row" data-state="loading">
+                        <div class="settings-row-head">
+                            <div class="settings-row-label">
+                                <span class="settings-row-title" id="settings-maintenance-title">Maintenance &amp; Updates</span>
+                                <span class="settings-row-hint" id="settings-maintenance-headline">Checking maintenance status…</span>
+                            </div>
+                            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:flex-end;">
+                                <button type="button" class="memory-btn" id="maintenance-check-btn" onclick="maintenanceCheck()" style="white-space:nowrap;display:none;">
+                                    <span id="maintenance-check-label">Check for updates</span>
+                                </button>
+                                <button type="button" class="memory-btn" id="maintenance-pull-btn" onclick="maintenancePull()" style="white-space:nowrap;display:none;">
+                                    <span id="maintenance-pull-label">Pull update</span>
+                                </button>
+                                <button type="button" class="memory-btn" id="maintenance-restart-btn" onclick="maintenanceRestart()" style="white-space:nowrap;display:none;">
+                                    <span id="maintenance-restart-label">Restart Nova</span>
+                                </button>
+                            </div>
+                        </div>
+                        <div class="settings-row-foot" id="maintenance-details" style="margin-top:10px;font-size:0.78rem;color:var(--text-dim);line-height:1.55;display:none;">
+                            <div id="maintenance-detail-branch"></div>
+                            <div id="maintenance-detail-commit"></div>
+                            <div id="maintenance-detail-upstream"></div>
+                            <div id="maintenance-detail-clean"></div>
+                            <div id="maintenance-detail-availability"></div>
+                            <div id="maintenance-detail-incoming" style="margin-top:6px;display:none;">
+                                <div style="font-weight:500;color:var(--text);margin-bottom:4px;" id="maintenance-incoming-title">Incoming commits</div>
+                                <pre id="maintenance-incoming-commits" style="margin:0;padding:6px 8px;background:var(--bg-elev);border:1px solid var(--border);border-radius:6px;white-space:pre-wrap;word-break:break-word;font-size:0.72rem;max-height:180px;overflow:auto;"></pre>
+                            </div>
+                            <div id="maintenance-detail-changed" style="margin-top:6px;display:none;">
+                                <div style="font-weight:500;color:var(--text);margin-bottom:4px;" id="maintenance-changed-title">Changed files</div>
+                                <pre id="maintenance-changed-files" style="margin:0;padding:6px 8px;background:var(--bg-elev);border:1px solid var(--border);border-radius:6px;white-space:pre-wrap;word-break:break-word;font-size:0.72rem;max-height:180px;overflow:auto;"></pre>
+                            </div>
+                            <div id="maintenance-detail-status" style="margin-top:8px;color:var(--text);"></div>
+                        </div>
+                    </div>
                 </section>
 
                 <!-- ACCOUNT -->
@@ -6845,6 +6891,12 @@
         // background polling — the card stays fresh because every open
         // re-pulls and the Refresh button is the only other trigger.
         refreshSilentGuardStatus().catch(() => {});
+        // Maintenance card: admin-only and opt-in. The endpoint is
+        // admin-gated, so refresh only when the current user is an
+        // admin — otherwise the call would 403 noisily.
+        if (currentUser && currentUser.role === "admin") {
+            refreshMaintenanceStatus().catch(() => {});
+        }
         await loadSystemSettings();
         await loadMemories();
     }
@@ -6904,6 +6956,333 @@
         if (!currentUser || currentUser.role !== "admin") return;
         closeSettings();
         openAdmin();
+    }
+
+    // ── Maintenance / Update Center (admin-only, opt-in) ──────────
+    //
+    // The maintenance surface is admin-only on the server side too —
+    // every fetch carries the bearer token and a 403 response means
+    // the user lost their admin role between the open and the click.
+    // We never poll the endpoints in the background; the card is
+    // refreshed on Settings open and on each explicit user action.
+    let _maintenanceInFlight = false;
+
+    function _maintenanceSetMessage(text) {
+        const el = document.getElementById("settings-maintenance-headline");
+        if (el) el.textContent = text || "";
+    }
+
+    function _maintenanceSetStatusLine(text) {
+        const el = document.getElementById("maintenance-detail-status");
+        if (el) el.textContent = text || "";
+    }
+
+    function _maintenanceClearDetails() {
+        const ids = [
+            "maintenance-detail-branch",
+            "maintenance-detail-commit",
+            "maintenance-detail-upstream",
+            "maintenance-detail-clean",
+            "maintenance-detail-availability",
+        ];
+        ids.forEach((id) => {
+            const el = document.getElementById(id);
+            if (el) el.textContent = "";
+        });
+        const inc = document.getElementById("maintenance-detail-incoming");
+        if (inc) inc.style.display = "none";
+        const chg = document.getElementById("maintenance-detail-changed");
+        if (chg) chg.style.display = "none";
+        const wrap = document.getElementById("maintenance-details");
+        if (wrap) wrap.style.display = "none";
+    }
+
+    function _maintenanceRenderDetails(data) {
+        const wrap = document.getElementById("maintenance-details");
+        if (!wrap) return;
+        wrap.style.display = "";
+        const set = (id, text) => {
+            const el = document.getElementById(id);
+            if (el) el.textContent = text || "";
+        };
+        const shortSha = (sha) => (sha && sha.length >= 7 ? sha.slice(0, 7) : sha || "");
+        set("maintenance-detail-branch", "Branch: " + (data.branch || "—"));
+        set("maintenance-detail-commit", "Commit: " + shortSha(data.commit));
+        set(
+            "maintenance-detail-upstream",
+            "Upstream: " + (data.has_upstream ? (data.upstream || "—") : "(none)"),
+        );
+        set(
+            "maintenance-detail-clean",
+            data.working_tree_clean
+                ? "Working tree: clean"
+                : "Working tree: local changes detected",
+        );
+        let avail = "Update: unknown";
+        if (data.update_available === "up_to_date") {
+            avail = "Update: up to date";
+        } else if (data.update_available === "available") {
+            avail =
+                "Update: " + (data.behind_count || 0) +
+                " new commit" + ((data.behind_count || 0) === 1 ? "" : "s") +
+                " available";
+        } else if (data.update_available === "diverged") {
+            avail = "Update: branch diverged — manual intervention required";
+        } else if (data.update_available === "no_upstream") {
+            avail = "Update: no upstream branch configured";
+        }
+        set("maintenance-detail-availability", avail);
+
+        const incomingList = Array.isArray(data.incoming_commits)
+            ? data.incoming_commits : [];
+        const incomingWrap = document.getElementById("maintenance-detail-incoming");
+        const incomingPre = document.getElementById("maintenance-incoming-commits");
+        if (incomingWrap && incomingPre) {
+            if (incomingList.length > 0) {
+                incomingPre.textContent = incomingList.join("\n");
+                incomingWrap.style.display = "";
+            } else {
+                incomingPre.textContent = "";
+                incomingWrap.style.display = "none";
+            }
+        }
+        const changedList = Array.isArray(data.changed_files)
+            ? data.changed_files : [];
+        const changedWrap = document.getElementById("maintenance-detail-changed");
+        const changedPre = document.getElementById("maintenance-changed-files");
+        if (changedWrap && changedPre) {
+            if (changedList.length > 0) {
+                changedPre.textContent = changedList.join("\n");
+                changedWrap.style.display = "";
+            } else {
+                changedPre.textContent = "";
+                changedWrap.style.display = "none";
+            }
+        }
+    }
+
+    function _maintenanceApplyState(data) {
+        const row = document.getElementById("maintenance-row");
+        if (row) row.dataset.state = data.state || "unknown";
+
+        const checkBtn = document.getElementById("maintenance-check-btn");
+        const pullBtn = document.getElementById("maintenance-pull-btn");
+        const restartBtn = document.getElementById("maintenance-restart-btn");
+
+        // Hide all action buttons by default and re-show only the ones
+        // the server's structured response says are actually allowed.
+        // No client-side "guessing" — the server is the source of truth.
+        if (checkBtn) checkBtn.style.display = "none";
+        if (pullBtn) pullBtn.style.display = "none";
+        if (restartBtn) restartBtn.style.display = "none";
+
+        if (data.state === "disabled") {
+            _maintenanceSetMessage(
+                "Maintenance is disabled on this host."
+                + " Set NOVA_MAINTENANCE_ENABLED=true to opt in.",
+            );
+            _maintenanceClearDetails();
+            return;
+        }
+
+        if (data.state === "unavailable") {
+            _maintenanceSetMessage(data.detail || "Maintenance unavailable.");
+            _maintenanceClearDetails();
+            // Still allow re-checking so a transient miss can be retried.
+            if (checkBtn) checkBtn.style.display = "";
+            return;
+        }
+
+        // state === "ready"
+        _maintenanceSetMessage(data.detail || "Ready.");
+        _maintenanceRenderDetails(data);
+        _maintenanceSetStatusLine("");
+
+        if (checkBtn) checkBtn.style.display = "";
+
+        // Pull is only offered when:
+        //   * the host operator allowed it,
+        //   * the working tree is clean,
+        //   * an upstream is configured,
+        //   * the branch is strictly behind upstream.
+        const pullEligible =
+            data.allow_pull === true
+            && data.has_upstream === true
+            && data.working_tree_clean === true
+            && data.update_available === "available";
+        if (pullBtn) pullBtn.style.display = pullEligible ? "" : "none";
+
+        // Restart is only offered when:
+        //   * the host operator allowed it,
+        //   * a systemd-user mode is configured.
+        const restartEligible =
+            data.allow_restart === true
+            && data.restart_mode === "systemd-user";
+        if (restartBtn) restartBtn.style.display = restartEligible ? "" : "none";
+    }
+
+    async function refreshMaintenanceStatus() {
+        if (_maintenanceInFlight) return;
+        _maintenanceInFlight = true;
+        try {
+            const res = await fetch("/admin/maintenance/status", {
+                credentials: "include",
+                headers: { "Authorization": `Bearer ${token}` },
+            });
+            if (res.status === 403 || res.status === 401) {
+                _maintenanceSetMessage("Admin access required.");
+                _maintenanceClearDetails();
+                return;
+            }
+            if (!res.ok) {
+                _maintenanceSetMessage("Could not load maintenance status.");
+                _maintenanceClearDetails();
+                return;
+            }
+            const data = await res.json();
+            _maintenanceApplyState(data);
+        } catch (e) {
+            _maintenanceSetMessage("Could not load maintenance status.");
+            _maintenanceClearDetails();
+        } finally {
+            _maintenanceInFlight = false;
+        }
+    }
+
+    async function maintenanceCheck() {
+        if (_maintenanceInFlight) return;
+        _maintenanceInFlight = true;
+        _maintenanceSetStatusLine("Checking for updates…");
+        try {
+            const res = await fetch("/admin/maintenance/fetch", {
+                method: "POST",
+                credentials: "include",
+                headers: { "Authorization": `Bearer ${token}` },
+            });
+            if (!res.ok) {
+                _maintenanceSetStatusLine("Check failed.");
+                return;
+            }
+            const data = await res.json();
+            _maintenanceApplyState(data);
+        } catch (e) {
+            _maintenanceSetStatusLine("Check failed.");
+        } finally {
+            _maintenanceInFlight = false;
+        }
+    }
+
+    async function maintenancePull() {
+        // Explicit confirm() — a stray click never triggers a pull.
+        const ok = window.confirm(
+            "Apply available update with git pull --ff-only?\n\n"
+            + "Nova will only fast-forward; local changes or a diverged "
+            + "branch will block the update."
+        );
+        if (!ok) return;
+        if (_maintenanceInFlight) return;
+        _maintenanceInFlight = true;
+        _maintenanceSetStatusLine("Applying update…");
+        try {
+            const res = await fetch("/admin/maintenance/pull", {
+                method: "POST",
+                credentials: "include",
+                headers: {
+                    "Authorization": `Bearer ${token}`,
+                    "Content-Type": "application/json",
+                },
+                body: JSON.stringify({ confirm: true }),
+            });
+            if (!res.ok) {
+                _maintenanceSetStatusLine("Update failed.");
+                return;
+            }
+            const data = await res.json();
+            const detail = data.detail || "";
+            if (data.outcome === "success") {
+                _maintenanceSetStatusLine(
+                    "Update applied. Restart Nova to load the new code."
+                );
+            } else if (data.outcome === "dirty_working_tree") {
+                _maintenanceSetStatusLine(
+                    "Local changes detected. Manual intervention required."
+                );
+            } else if (data.outcome === "diverged") {
+                _maintenanceSetStatusLine(
+                    "Branch diverged. Manual intervention required."
+                );
+            } else if (data.outcome === "no_upstream") {
+                _maintenanceSetStatusLine("No upstream branch configured.");
+            } else if (data.outcome === "pull_not_allowed") {
+                _maintenanceSetStatusLine(
+                    "Pull is disabled in the host configuration."
+                );
+            } else {
+                _maintenanceSetStatusLine(detail || "Update did not apply.");
+            }
+            // Refresh the snapshot so the UI reflects the new state.
+            refreshMaintenanceStatus().catch(() => {});
+        } catch (e) {
+            _maintenanceSetStatusLine("Update failed.");
+        } finally {
+            _maintenanceInFlight = false;
+        }
+    }
+
+    async function maintenanceRestart() {
+        // Explicit confirm() — restart drops the connection.
+        const ok = window.confirm(
+            "Restart Nova now?\n\n"
+            + "Your session will drop while the unit cycles. "
+            + "Refresh the page after a few seconds to reconnect."
+        );
+        if (!ok) return;
+        if (_maintenanceInFlight) return;
+        _maintenanceInFlight = true;
+        _maintenanceSetStatusLine("Restart requested…");
+        try {
+            const res = await fetch("/admin/maintenance/restart", {
+                method: "POST",
+                credentials: "include",
+                headers: {
+                    "Authorization": `Bearer ${token}`,
+                    "Content-Type": "application/json",
+                },
+                body: JSON.stringify({ confirm: true }),
+            });
+            if (!res.ok) {
+                _maintenanceSetStatusLine("Restart failed.");
+                return;
+            }
+            const data = await res.json();
+            if (data.outcome === "accepted") {
+                _maintenanceSetStatusLine(
+                    "Restart accepted. Nova is restarting — refresh in a moment."
+                );
+            } else if (data.outcome === "restart_not_allowed") {
+                _maintenanceSetStatusLine(
+                    "Restart is disabled in the host configuration."
+                );
+            } else if (data.outcome === "restart_mode_disabled") {
+                _maintenanceSetStatusLine(
+                    "Restart mode is not configured."
+                );
+            } else if (data.outcome === "invalid_unit") {
+                _maintenanceSetStatusLine(
+                    "Configured systemd unit name is invalid."
+                );
+            } else if (data.outcome === "systemctl_missing") {
+                _maintenanceSetStatusLine(
+                    "systemctl is not available on this host."
+                );
+            } else {
+                _maintenanceSetStatusLine(data.detail || "Restart did not apply.");
+            }
+        } catch (e) {
+            _maintenanceSetStatusLine("Restart failed.");
+        } finally {
+            _maintenanceInFlight = false;
+        }
     }
 
     function filterMemories(query) {

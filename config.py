@@ -135,6 +135,70 @@ NOVA_SILENTGUARD_SYSTEMD_UNIT = (
     os.getenv("NOVA_SILENTGUARD_SYSTEMD_UNIT", "silentguard-api.service").strip()
 )
 
+# ── Admin-only Maintenance / Update Center (opt-in) ────────────────
+# Optional admin surface that lets a maintainer ask the local Nova
+# install whether new code is available on the configured upstream
+# branch, pull a fast-forward update, and (when configured) ask
+# systemd-user to restart Nova. Every switch defaults to OFF so an
+# unconfigured Nova install never executes any maintenance command,
+# even for an admin.
+#
+# Safety rules (enforced in ``core/maintenance.py``):
+#   * No shell interpretation — ``shell=False`` on every subprocess.
+#   * No ``sudo`` / ``pkexec`` / ``doas`` / ``su`` / ``runuser``.
+#   * No model-generated or chat-sourced command strings.
+#   * Only a small fixed allowlist of ``git`` subcommands runs:
+#       fetch, status --porcelain, rev-parse, log --oneline,
+#       diff --stat, pull --ff-only.
+#   * Only fast-forward pulls. A dirty working tree or a diverged
+#     branch surfaces a sanitised refusal — never a destructive reset
+#     or merge.
+#   * Restart is gated by its own switch and is restricted to
+#     ``systemctl --user restart <validated-unit>``. There is no
+#     system-level systemctl, no arbitrary restart command, no
+#     fallback to ``sudo``.
+#   * The admin role is still required at the endpoint layer.
+#
+#   NOVA_MAINTENANCE_ENABLED       — host-wide opt-in. False → every
+#                                     maintenance endpoint reports
+#                                     ``state="disabled"``.
+#   NOVA_MAINTENANCE_ALLOW_PULL    — gates ``POST /admin/maintenance/pull``.
+#                                     False → the endpoint refuses with
+#                                     ``pull_not_allowed`` even when the
+#                                     repo is clean and fast-forwardable.
+#   NOVA_MAINTENANCE_ALLOW_RESTART — gates ``POST /admin/maintenance/restart``.
+#                                     False → the endpoint refuses with
+#                                     ``restart_not_allowed``.
+#   NOVA_MAINTENANCE_REPO_PATH     — absolute path to the Nova checkout
+#                                     to operate on. Empty falls back to
+#                                     the directory containing this
+#                                     ``config.py`` (the install
+#                                     itself).
+#   NOVA_MAINTENANCE_RESTART_MODE  — ``systemd-user`` enables the
+#                                     ``systemctl --user restart`` path.
+#                                     Anything else normalises to
+#                                     ``disabled``.
+#   NOVA_MAINTENANCE_SYSTEMD_UNIT  — user-level unit name to restart.
+#                                     Validated against
+#                                     ``^[a-z0-9][a-z0-9._-]*\.service$``
+#                                     before any spawn.
+NOVA_MAINTENANCE_ENABLED = (
+    os.getenv("NOVA_MAINTENANCE_ENABLED", "false").strip().lower() == "true"
+)
+NOVA_MAINTENANCE_ALLOW_PULL = (
+    os.getenv("NOVA_MAINTENANCE_ALLOW_PULL", "false").strip().lower() == "true"
+)
+NOVA_MAINTENANCE_ALLOW_RESTART = (
+    os.getenv("NOVA_MAINTENANCE_ALLOW_RESTART", "false").strip().lower() == "true"
+)
+NOVA_MAINTENANCE_REPO_PATH = os.getenv("NOVA_MAINTENANCE_REPO_PATH", "").strip()
+NOVA_MAINTENANCE_RESTART_MODE = (
+    os.getenv("NOVA_MAINTENANCE_RESTART_MODE", "disabled").strip().lower()
+)
+NOVA_MAINTENANCE_SYSTEMD_UNIT = (
+    os.getenv("NOVA_MAINTENANCE_SYSTEMD_UNIT", "nova.service").strip()
+)
+
 # ── Optional local TTS: Piper ─────────────────────────────────────────
 # Browser speechSynthesis remains the safe default. Piper is an opt-in
 # local neural voice for hosts where the platform default sounds robotic

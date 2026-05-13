@@ -63,6 +63,7 @@ from core.integrations import github_triage as _github_triage
 from core.security import ensure_silentguard_running as _ensure_silentguard_running
 from core.security import lifecycle as _silentguard_lifecycle
 from core.security import SilentGuardProvider as _SilentGuardProvider
+from core import maintenance as _maintenance
 from core import voice as _voice
 import sqlite3 as _sqlite3
 from core import users as _users_mod
@@ -2108,6 +2109,102 @@ def github_recommendations(
         "recommendations": recommendations,
         "read_only": True,
     }
+
+
+# ── ADMIN: OPTIONAL MAINTENANCE / UPDATE CENTER ────────────────────
+# Tiny admin surface that lets a maintainer see (and after a visible
+# confirmation, apply) a fast-forward update to the local Nova
+# checkout. Every endpoint is wrapped with ``require_admin`` and the
+# underlying ``core.maintenance`` module enforces:
+#
+#   * NOVA_MAINTENANCE_ENABLED gates the whole surface,
+#   * NOVA_MAINTENANCE_ALLOW_PULL gates the pull action,
+#   * NOVA_MAINTENANCE_ALLOW_RESTART + NOVA_MAINTENANCE_RESTART_MODE
+#     gate the restart action,
+#   * git commands run from a fixed allowlist with ``shell=False``,
+#   * restart uses ``systemctl --user restart <validated-unit>`` only
+#     — never ``sudo``, never system-level systemctl.
+#
+# When the feature is disabled, every endpoint still resolves and
+# returns ``state="disabled"`` so the admin UI can render a calm
+# "off" card without guessing at the configured state. The pull and
+# restart endpoints additionally require an explicit ``{"confirm":
+# true}`` body so a stray click cannot trigger them.
+
+
+class MaintenanceConfirmRequest(BaseModel):
+    """Explicit confirmation payload for pull / restart endpoints.
+
+    The frontend is responsible for showing a visible confirmation
+    surface before posting ``{"confirm": true}``. The server rejects
+    any other shape (default ``False`` → 400) so a misbehaving client
+    cannot trigger a pull or restart by sending an empty body.
+    """
+
+    confirm: bool = False
+
+
+def _require_confirm(req: MaintenanceConfirmRequest) -> None:
+    if not req.confirm:
+        raise HTTPException(
+            status_code=400,
+            detail="Action requires explicit confirmation.",
+        )
+
+
+@app.get("/admin/maintenance/status")
+def maintenance_status(_: CurrentUser = Depends(require_admin)):
+    """Calm read-only snapshot of the maintenance surface.
+
+    Never reaches the network — equivalent to ``git fetch``-less
+    state. Returns the disabled snapshot when the feature is off so
+    the admin UI can render a stable shape either way.
+    """
+    return _maintenance.get_status().as_dict()
+
+
+@app.post("/admin/maintenance/fetch")
+def maintenance_fetch(_: CurrentUser = Depends(require_admin)):
+    """Run ``git fetch`` once and return a refreshed snapshot.
+
+    The only network-touching maintenance endpoint that does not need
+    a confirmation: fetching never modifies the working tree. The
+    response shape mirrors ``/admin/maintenance/status``.
+    """
+    return _maintenance.fetch().as_dict()
+
+
+@app.post("/admin/maintenance/pull")
+def maintenance_pull(
+    req: MaintenanceConfirmRequest,
+    _: CurrentUser = Depends(require_admin),
+):
+    """Apply a fast-forward update after an explicit confirmation.
+
+    Returns 400 when ``confirm`` is not True. The underlying helper
+    refuses on a dirty working tree, a diverged branch, or a missing
+    upstream — surfaced as ``outcome="dirty_working_tree" /
+    "diverged" / "no_upstream"`` rather than 500.
+    """
+    _require_confirm(req)
+    return _maintenance.pull().as_dict()
+
+
+@app.post("/admin/maintenance/restart")
+def maintenance_restart(
+    req: MaintenanceConfirmRequest,
+    _: CurrentUser = Depends(require_admin),
+):
+    """Restart the configured systemd-user unit after a confirmation.
+
+    Returns 400 when ``confirm`` is not True. The underlying helper
+    refuses unless the restart switch *and* the systemd-user mode
+    are both enabled with a valid unit name — surfaced as
+    ``outcome="restart_not_allowed" / "restart_mode_disabled" /
+    "invalid_unit"`` rather than 500.
+    """
+    _require_confirm(req)
+    return _maintenance.restart().as_dict()
 
 
 @app.get("/channel")

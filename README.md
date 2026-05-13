@@ -372,6 +372,69 @@ opt-in switch, will require explicit user confirmation in the
 UI, and will carry audit logging. There is no autonomous
 maintainer behaviour planned.
 
+## Optional admin Maintenance / Update Center
+
+Nova ships an **optional**, **admin-only**, **opt-in** Maintenance
+surface that lets an administrator inspect the local checkout's git
+state, fast-forward to upstream after an explicit confirmation, and
+(when explicitly configured) ask systemd-user to restart Nova — all
+from the web UI. Every switch defaults to off so an unconfigured
+Nova install never executes any maintenance command.
+
+The full walkthrough lives in
+[`docs/maintenance-center.md`](docs/maintenance-center.md). Setup is
+deliberately granular:
+
+```ini
+NOVA_MAINTENANCE_ENABLED=false          # default; flip to true to opt in
+NOVA_MAINTENANCE_ALLOW_PULL=false       # gates POST /admin/maintenance/pull
+NOVA_MAINTENANCE_ALLOW_RESTART=false    # gates POST /admin/maintenance/restart
+NOVA_MAINTENANCE_REPO_PATH=             # empty → use the install directory
+NOVA_MAINTENANCE_RESTART_MODE=disabled  # or systemd-user
+NOVA_MAINTENANCE_SYSTEMD_UNIT=nova.service
+```
+
+When enabled, the **Settings → Admin → Maintenance & Updates** card
+shows the configured branch, current commit, upstream tracking
+branch, working-tree cleanliness, incoming commits, and a diff-stat
+summary. Pull and restart actions each require a separate switch
+and a visible `confirm()` before the request is sent. The server
+re-checks every condition on the actual call — the UI is a
+convenience layer, not a security boundary.
+
+Safety boundaries (enforced in
+[`core/maintenance.py`](core/maintenance.py) and pinned by
+[`tests/test_maintenance.py`](tests/test_maintenance.py)):
+
+- **No web terminal.** Only a fixed allowlist of `git` subcommands
+  ever runs: `fetch`, `status --porcelain`, `rev-parse`,
+  `log --oneline`, `diff --stat`, and `pull --ff-only`.
+- **No arbitrary shell.** Every subprocess call uses an argv list
+  with `shell=False`. No string commands, no `os.system`.
+- **No `sudo` / `pkexec` / `doas` / `su` / `runuser`.** Nova never
+  asks for elevation.
+- **No system-level `systemctl`.** Restart, when enabled, is locked
+  to `systemctl --user restart <validated-unit>` with a strict
+  unit-name regex.
+- **Fast-forward only.** A dirty working tree or a diverged branch
+  blocks the pull with a calm "manual intervention required"
+  message — Nova never improvises a merge or reset.
+- **Admin-only.** Non-admin and restricted users receive a `403`.
+- **Confirmation-gated.** Pull and restart endpoints reject requests
+  that do not carry `{"confirm": true}`.
+- **No GitHub writes.** This feature reads the upstream tip via
+  `git fetch` and the local working tree. It never pushes, merges
+  PRs, or interacts with GitHub beyond `git fetch`.
+- **No auto-update.** Nothing happens until an admin clicks
+  through the confirmation. There is no background polling, no
+  scheduled update.
+
+`docs/maintenance-center.md` documents the recommended starting
+point (status-only, no pull, no restart) and explains how to
+optionally set up a user-level Nova unit if you want the restart
+button to work without leaving the secure-deployment guide's
+boundaries.
+
 ## Voice and TTS
 
 Every assistant message has a "Read aloud" button. By default Nova uses
