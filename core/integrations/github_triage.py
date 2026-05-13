@@ -51,10 +51,13 @@ _MAX_LIMIT = 25
 _FETCH_POOL_DEFAULT = 100
 
 
-# ── Label dictionaries (matched case-insensitively, underscore/space-tolerant) ─
+# ── Label dictionaries ──────────────────────────────────────────────
+# Entries are stored in the canonical normalised form (lowercase, with
+# both spaces and underscores collapsed to ``-``) so every lookup is
+# routed through ``_norm_label`` and matches regardless of how the
+# upstream GitHub label is punctuated.
 
 LOW_DIFFICULTY_LABELS = frozenset({
-    "good first issue",
     "good-first-issue",
     "beginner",
     "starter",
@@ -78,7 +81,6 @@ HIGH_DIFFICULTY_LABELS = frozenset({
     "rewrite",
     "migration",
     "breaking-change",
-    "breaking change",
     "performance",
     "perf",
     "complex",
@@ -109,7 +111,7 @@ RISK_LABELS = frozenset({
 # the top of a "what should I do next?" list.
 NON_ACTIONABLE_LABELS = frozenset({
     "wontfix",
-    "won't fix",
+    "won't-fix",
     "wont-fix",
     "invalid",
     "duplicate",
@@ -168,8 +170,14 @@ _WORD_RE = re.compile(r"[a-z0-9]+")
 
 
 def _norm_label(label: str) -> str:
-    """Lowercase + hyphen-normalise a single label so dictionary lookups match."""
-    return label.strip().lower().replace("_", "-")
+    """Lowercase + hyphen-normalise a single label so dictionary lookups match.
+
+    Spaces and underscores both collapse to ``-`` so a GitHub label
+    literal of ``good first issue`` matches a query like
+    ``?label=good-first-issue`` and the in-module label dictionaries
+    (which use the hyphenated canonical form).
+    """
+    return label.strip().lower().replace("_", "-").replace(" ", "-")
 
 
 def _norm_labels(labels: Iterable[str]) -> list[str]:

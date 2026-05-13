@@ -427,6 +427,25 @@ class TestRanker:
         recs = triage.rank_issues(issues, label="memory")
         assert [r["number"] for r in recs] == [1]
 
+    def test_label_filter_space_and_hyphen_interchangeable(self):
+        # GitHub labels are commonly space-separated ("good first issue")
+        # while query strings prefer hyphens. The matcher must collapse
+        # both to the same form so neither side gets surprise misses.
+        issues = [_sanitised(_issue(1, labels=["good first issue"]))]
+        assert [r["number"] for r in
+                triage.rank_issues(issues, label="good-first-issue")] == [1]
+        assert [r["number"] for r in
+                triage.rank_issues(issues, label="good first issue")] == [1]
+        assert [r["number"] for r in
+                triage.rank_issues(issues, label="GOOD_FIRST_ISSUE")] == [1]
+
+    def test_low_difficulty_from_space_separated_label(self):
+        rec = triage.analyze_issue(
+            _sanitised(_issue(2, labels=["good first issue"])),
+        )
+        assert rec is not None
+        assert rec["difficulty"] == triage.DIFFICULTY_LOW
+
     def test_difficulty_filter(self):
         issues = [
             _sanitised(_issue(1, title="Add tests for retry budget",
