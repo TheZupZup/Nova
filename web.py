@@ -60,6 +60,8 @@ from core.integrations import silentguard as _silentguard_integration
 from core.integrations import nexanote as _nexanote_integration
 from core.integrations import github as _github_integration
 from core.integrations import github_triage as _github_triage
+from core.integrations.media import jellyfin as _jellyfin_integration
+from core.integrations.media import recommendations as _media_recommendations
 from core.security import ensure_silentguard_running as _ensure_silentguard_running
 from core.security import lifecycle as _silentguard_lifecycle
 from core.security import SilentGuardProvider as _SilentGuardProvider
@@ -1020,6 +1022,7 @@ def integrations_status(user: CurrentUser = Depends(get_current_user)):
     }
     if user.role == "admin":
         payload["github"] = _github_integration.status().as_dict()
+        payload["jellyfin"] = _jellyfin_integration.status().as_dict()
     else:
         payload["github"] = {
             "name": _github_integration.NAME,
@@ -1030,6 +1033,18 @@ def integrations_status(user: CurrentUser = Depends(get_current_user)):
             "read_only": True,
             "authenticated_login": None,
             "scopes": [],
+        }
+        payload["jellyfin"] = {
+            "name": _jellyfin_integration.NAME,
+            "enabled": False,
+            "state": _jellyfin_integration.STATE_DISABLED,
+            "detail": "Jellyfin bridge is admin-only.",
+            "server_name": None,
+            "server_version": None,
+            "read_only": True,
+            "user_id_configured": False,
+            "base_url_configured": False,
+            "library_kinds": [],
         }
     return payload
 
@@ -2106,6 +2121,168 @@ def github_recommendations(
     )
     return {
         "repo": f"{owner}/{name}",
+        "recommendations": recommendations,
+        "read_only": True,
+    }
+
+
+# ── ADMIN: OPTIONAL LOCAL MEDIA ASSISTANT (Jellyfin, read-only) ────
+# Phase-1 admin-only window into a *local* Jellyfin music library and
+# a small deterministic playlist-suggestion helper. Every endpoint is
+# wrapped with ``require_admin`` so non-admin / restricted users get a
+# 403 — never a leak of the configured server URL, user GUID, or
+# bridge state. The underlying ``core.integrations.media`` modules
+# are strictly read-only: nothing in this PR creates, edits, or
+# deletes playlists on Jellyfin; nothing streams or copies media
+# files; nothing talks to any cloud music API. The API key configured
+# in ``NOVA_JELLYFIN_API_KEY`` is never serialised into any response,
+# header, or log line surfaced here — it lives only inside the
+# bridge's private ``X-Emby-Token`` header.
+
+
+def _require_jellyfin_ready(
+    status: _jellyfin_integration.JellyfinStatus,
+) -> None:
+    """Translate a non-connected bridge status into a clean 503/404.
+
+    Keeps the response shape consistent so the UI never has to peek at
+    ``status.state`` to know whether to retry.
+    """
+    if status.state == _jellyfin_integration.STATE_DISABLED:
+        raise HTTPException(
+            status_code=404,
+            detail="Jellyfin bridge is disabled on this Nova host.",
+        )
+    if status.state == _jellyfin_integration.STATE_NOT_CONFIGURED:
+        raise HTTPException(
+            status_code=503,
+            detail="Jellyfin bridge is not configured.",
+        )
+    if status.state == _jellyfin_integration.STATE_UNAVAILABLE:
+        raise HTTPException(
+            status_code=503,
+            detail="Jellyfin bridge is unavailable.",
+        )
+
+
+@app.get("/integrations/media/jellyfin/status")
+def jellyfin_status(_: CurrentUser = Depends(require_admin)):
+    """Calm read-only snapshot of the Jellyfin bridge.
+
+    Returns one of the four documented states — ``disabled``,
+    ``not_configured``, ``unavailable``, ``connected_read_only`` —
+    plus the server name / version (when reachable) and the
+    ``read_only`` flag. The API key is intentionally absent from
+    the payload.
+    """
+    return _jellyfin_integration.status().as_dict()
+
+
+@app.get("/integrations/media/jellyfin/artists")
+def jellyfin_list_artists(
+    limit: int = 50,
+    _: CurrentUser = Depends(require_admin),
+):
+    """List sanitised music artists from the configured Jellyfin library."""
+    _require_jellyfin_ready(_jellyfin_integration.status())
+    return {
+        "artists": _jellyfin_integration.list_artists(limit=limit),
+        "read_only": True,
+    }
+
+
+@app.get("/integrations/media/jellyfin/albums")
+def jellyfin_list_albums(
+    limit: int = 50,
+    _: CurrentUser = Depends(require_admin),
+):
+    """List sanitised music albums from the configured Jellyfin library."""
+    _require_jellyfin_ready(_jellyfin_integration.status())
+    return {
+        "albums": _jellyfin_integration.list_albums(limit=limit),
+        "read_only": True,
+    }
+
+
+@app.get("/integrations/media/jellyfin/tracks")
+def jellyfin_list_tracks(
+    limit: int = 50,
+    _: CurrentUser = Depends(require_admin),
+):
+    """List sanitised music tracks (Audio items) from the library."""
+    _require_jellyfin_ready(_jellyfin_integration.status())
+    return {
+        "tracks": _jellyfin_integration.list_tracks(limit=limit),
+        "read_only": True,
+    }
+
+
+@app.get("/integrations/media/jellyfin/genres")
+def jellyfin_list_genres(
+    limit: int = 50,
+    _: CurrentUser = Depends(require_admin),
+):
+    """List sanitised music genres available in the library."""
+    _require_jellyfin_ready(_jellyfin_integration.status())
+    return {
+        "genres": _jellyfin_integration.list_genres(limit=limit),
+        "read_only": True,
+    }
+
+
+@app.get("/integrations/media/jellyfin/playlists")
+def jellyfin_list_playlists(
+    limit: int = 50,
+    _: CurrentUser = Depends(require_admin),
+):
+    """List sanitised playlists from the library.
+
+    Phase 1 *reads* playlists only. The endpoint never creates,
+    edits, or deletes playlists on the Jellyfin server.
+    """
+    _require_jellyfin_ready(_jellyfin_integration.status())
+    return {
+        "playlists": _jellyfin_integration.list_playlists(limit=limit),
+        "read_only": True,
+    }
+
+
+@app.get("/integrations/media/recommendations")
+def media_recommendations(
+    mood: str | None = None,
+    limit: int = 8,
+    per_playlist: int = 12,
+    _: CurrentUser = Depends(require_admin),
+):
+    """Return deterministic playlist suggestions for the local library.
+
+    Read-only and deterministic: the response is computed from the
+    sanitised output of the configured local media provider (Jellyfin
+    in Phase 1) with pure-Python heuristics (genre dictionaries,
+    title-token signals, track-duration nudges). Nova never decides
+    *for* the user what to play — this endpoint just surfaces a short
+    list of playlist *ideas* with reasons. No media-server mutation
+    is performed and the configured API key is never echoed back in
+    the response.
+
+    Optional query params:
+      * ``mood=chill,focus``    — comma-separated filter; entries not
+                                  in the catalogue are dropped.
+      * ``limit=8``             — clamp to 1..12; default 8.
+      * ``per_playlist=12``     — clamp to 3..25; default 12.
+
+    Errors mirror the rest of the Jellyfin bridge:
+      * 404 when the bridge is disabled,
+      * 503 when the bridge is not configured / unreachable.
+    """
+    _require_jellyfin_ready(_jellyfin_integration.status())
+    moods_filter = None
+    if mood:
+        moods_filter = [m.strip() for m in mood.split(",") if m.strip()]
+    recommendations = _media_recommendations.recommend_from_jellyfin(
+        moods=moods_filter, limit=limit, per_playlist=per_playlist,
+    )
+    return {
         "recommendations": recommendations,
         "read_only": True,
     }

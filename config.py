@@ -199,6 +199,57 @@ NOVA_MAINTENANCE_SYSTEMD_UNIT = (
     os.getenv("NOVA_MAINTENANCE_SYSTEMD_UNIT", "nova.service").strip()
 )
 
+# ── Optional local media: Jellyfin (read-only Phase 1) ────────────
+# Nova is a *local media assistant*, not an autonomous media manager.
+# The Phase-1 Jellyfin bridge is intentionally narrow: it can only
+# read library metadata (artists, albums, tracks, genres, playlists)
+# and surface deterministic playlist suggestions computed from that
+# metadata. Nothing in this PR creates, edits, or deletes playlists
+# on Jellyfin; nothing streams or copies media files; nothing talks
+# to cloud music services.
+#
+# Every switch defaults to OFF so an unconfigured Nova install never
+# contacts Jellyfin. When ``NOVA_JELLYFIN_ENABLED`` is on but
+# ``NOVA_JELLYFIN_API_KEY`` is missing the status endpoint reports
+# ``not_configured`` — Nova does not fall back to anonymous access.
+#
+# ``NOVA_JELLYFIN_API_KEY`` must never be:
+#   * returned in any HTTP response body,
+#   * embedded in any log line,
+#   * included in any error message surfaced to the frontend / chat,
+#   * stored in the database in this PR.
+#
+#   NOVA_JELLYFIN_ENABLED         — host-wide opt-in. False → bridge
+#                                   disabled for everyone.
+#   NOVA_JELLYFIN_URL             — base URL of the local Jellyfin
+#                                   server. Typically loopback or LAN.
+#   NOVA_JELLYFIN_API_KEY         — Jellyfin API key with read scopes.
+#                                   No write scopes are ever required.
+#   NOVA_JELLYFIN_USER_ID         — optional Jellyfin user GUID. When
+#                                   set, library queries are scoped to
+#                                   this user; empty falls back to
+#                                   server-wide read endpoints.
+#   NOVA_JELLYFIN_READ_ONLY       — belt-and-braces switch. Defaults to
+#                                   True; Phase 1 never performs
+#                                   writes so the flag is purely
+#                                   informational today.
+#   NOVA_JELLYFIN_TIMEOUT_SECONDS — per-request HTTP timeout (default 5).
+NOVA_JELLYFIN_ENABLED = (
+    os.getenv("NOVA_JELLYFIN_ENABLED", "false").strip().lower() == "true"
+)
+NOVA_JELLYFIN_URL = os.getenv("NOVA_JELLYFIN_URL", "").strip().rstrip("/")
+NOVA_JELLYFIN_API_KEY = os.getenv("NOVA_JELLYFIN_API_KEY", "").strip()
+NOVA_JELLYFIN_USER_ID = os.getenv("NOVA_JELLYFIN_USER_ID", "").strip()
+NOVA_JELLYFIN_READ_ONLY = (
+    os.getenv("NOVA_JELLYFIN_READ_ONLY", "true").strip().lower() != "false"
+)
+try:
+    NOVA_JELLYFIN_TIMEOUT_SECONDS = float(
+        os.getenv("NOVA_JELLYFIN_TIMEOUT_SECONDS", "5.0")
+    )
+except ValueError:
+    NOVA_JELLYFIN_TIMEOUT_SECONDS = 5.0
+
 # ── Optional local TTS: Piper ─────────────────────────────────────────
 # Browser speechSynthesis remains the safe default. Piper is an opt-in
 # local neural voice for hosts where the platform default sounds robotic

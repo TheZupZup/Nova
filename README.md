@@ -129,6 +129,7 @@ core/
   security_feed.py    Read-only SilentGuard JSON parser
   security/           Read-only security provider package
   integrations/       Per-user gates for optional integrations
+    media/            Local-first media bridges (Jellyfin, read-only)
   voice/              TTS provider abstraction (browser + Piper)
 
 memory/
@@ -180,6 +181,9 @@ The boundaries below are firm. They are commitments, not future work:
   third-party cloud service.
 - Nova does **not** require SilentGuard to function. SilentGuard is an
   optional, off-by-default integration.
+- Nova does **not** stream, transcode, or copy media files. The
+  optional Jellyfin bridge reads library metadata only and never
+  contacts a cloud music API.
 
 The hardened systemd unit drops capabilities, enables
 `ProtectSystem=strict`, restricts namespaces, applies a syscall
@@ -371,6 +375,139 @@ Any future write actions will be introduced behind their own
 opt-in switch, will require explicit user confirmation in the
 UI, and will carry audit logging. There is no autonomous
 maintainer behaviour planned.
+
+## Optional local media assistant (Jellyfin, read-only)
+
+Nova ships an **optional**, **admin-only**, **read-only** bridge to a
+local Jellyfin music library, plus a small deterministic helper that
+turns library metadata into playlist suggestions. Nova is a *local
+media assistant*, not an autonomous media manager — Phase 1 is
+strictly read-only and works entirely against your local server.
+
+This is **not** a cloud music client. Nova does **not** send your
+library data to any third-party music service. Nova does **not**
+stream, transcode, or copy media files. Nova **only** reads metadata
+(artists, albums, tracks, genres, playlists) and computes playlist
+*ideas* you can choose to use.
+
+The bridge is disabled by default. To enable it on a local Nova
+install, add the following to your `.env`:
+
+```ini
+NOVA_JELLYFIN_ENABLED=true
+NOVA_JELLYFIN_URL=http://127.0.0.1:8096
+NOVA_JELLYFIN_API_KEY=your_local_jellyfin_api_key
+NOVA_JELLYFIN_USER_ID=                   # optional; scopes reads to one user
+NOVA_JELLYFIN_READ_ONLY=true             # default; Phase 1 has no writes
+NOVA_JELLYFIN_TIMEOUT_SECONDS=5.0
+```
+
+The API key only needs **read** scopes because Nova never performs
+write operations against Jellyfin in this phase. Generate the key
+from Jellyfin's *Dashboard → API Keys* page; do not give the key
+admin or playback-control scopes.
+
+Once configured, Nova exposes six admin-only endpoints:
+
+- `GET /integrations/media/jellyfin/status` — calm snapshot of the
+  bridge. The `state` field is one of `disabled`, `not_configured`,
+  `unavailable`, or `connected_read_only`.
+- `GET /integrations/media/jellyfin/artists` — list music artists.
+- `GET /integrations/media/jellyfin/albums` — list music albums.
+- `GET /integrations/media/jellyfin/tracks` — list music tracks
+  with title, artist, album, year, genres, and whole-second duration.
+- `GET /integrations/media/jellyfin/genres` — list music genres.
+- `GET /integrations/media/jellyfin/playlists` — list playlists
+  (read-only; this endpoint never creates or edits playlists).
+- `GET /integrations/media/recommendations` — deterministic playlist
+  suggestions computed from the local library (see below).
+
+All endpoints are auth-gated and admin-only. Non-admin and
+restricted users receive a 403; the aggregate `/integrations/status`
+response surfaces `state: "disabled"` for the Jellyfin entry to
+non-admin callers so the UI can hide the card without leaking the
+configured state.
+
+### Playlist recommendations
+
+`GET /integrations/media/recommendations` answers questions like
+*"give me some chill playlist ideas"* or *"what could I play for a
+late-night coding session?"* by scoring each track in your local
+library against a small mood catalogue:
+
+- `chill`, `focus`, `gym`, `dark`, `upbeat`, `sad`, `night drive`,
+  `coding`.
+
+Each playlist suggestion carries: `title`, `mood`, `description`,
+`estimated_duration` (when track durations are available), a list
+of `tracks` (each with `title`, `artist`, `album`, `duration`, and
+a short `reason`), and a `confidence` label.
+
+Optional query params:
+
+- `mood=chill,focus` — comma-separated filter; entries not in the
+  catalogue are dropped.
+- `limit=8` — clamp to 1..12 (default 8).
+- `per_playlist=12` — clamp to 3..25 (default 12).
+
+The heuristics are deterministic — identical libraries produce
+identical suggestions. There is **no** LLM call, **no** embedding
+model, and **no** cloud lookup involved. The score is computed from
+genre dictionaries, title-token signals, and track-duration nudges
+so the output is reproducible and explainable.
+
+This endpoint is **read-only**. Nova never:
+
+- creates, edits, or deletes playlists on Jellyfin,
+- streams, transcodes, or copies any media file,
+- starts playback, queues tracks, or autoplays anything,
+- decides for the user what to play — it surfaces ideas; the
+  user picks.
+
+There is no background polling, no autonomous behaviour, no autoplay.
+
+### API-key safety contract
+
+- The API key is read from `NOVA_JELLYFIN_API_KEY` and **never**
+  returned in any HTTP response body, chat context, log line, or
+  error message.
+- The key only ever appears inside the bridge's private request
+  `X-Emby-Token` header — never in URLs, query params, or JSON
+  bodies.
+- The bridge stores the key in environment-local config only.
+  This PR does not persist it to the database; future revisions
+  may add encrypted storage, but the Phase-1 contract is
+  local-first.
+- Sanitised error responses (e.g. invalid key, unreachable server)
+  surface a short, hard-coded summary like *"Jellyfin rejected the
+  configured API key."* — never the raw exception, never the
+  response body.
+
+### What this bridge is **not** allowed to do (now or via this PR)
+
+- create, edit, or delete playlists on Jellyfin,
+- stream, transcode, or copy any media file,
+- start playback or queue tracks for playback,
+- change Jellyfin server settings,
+- talk to any cloud music API (Spotify, Tidal, Deezer, etc.),
+- scan local disk outside of Jellyfin's own metadata,
+- poll Jellyfin in the background or run scheduled work.
+
+### Future direction (NOT in this PR)
+
+- **Plex** support behind the same provider interface. The
+  recommendation module operates on a sanitised-track dict shape,
+  so a future Plex provider can plug in without touching playlist
+  logic.
+- **Playlist creation** behind an explicit per-request confirmation
+  in the UI and a separate write switch. Nova will never create a
+  playlist without an explicit "yes" from the user.
+- **Auryn-led library population** as a separate project. Auryn
+  remains independent; this bridge does not change Auryn's
+  behaviour.
+
+The full walkthrough lives in
+[`docs/jellyfin-integration.md`](docs/jellyfin-integration.md).
 
 ## Optional admin Maintenance / Update Center
 
