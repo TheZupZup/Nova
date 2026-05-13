@@ -325,6 +325,55 @@ class TestForgetCommand:
         count = delete_memories_matching("kubernetes", uid, db_path=tmp_db)
         assert count == 0
 
+    def test_forget_empty_query_returns_zero(self, tmp_db, uid):
+        save_memory(_mem(topic="fedora", content="User prefers Fedora."), uid, db_path=tmp_db)
+        assert delete_memories_matching("", uid, db_path=tmp_db) == 0
+        assert delete_memories_matching("   ", uid, db_path=tmp_db) == 0
+        # Memory must remain untouched.
+        assert len(list_memories(uid, db_path=tmp_db)) == 1
+
+    def test_forget_one_match_deletes_only_that_memory(self, tmp_db, uid):
+        save_memory(_mem(topic="fedora", content="User prefers Fedora KDE."), uid, db_path=tmp_db)
+        save_memory(_mem(topic="neovim", content="User uses neovim."), uid, db_path=tmp_db)
+        save_memory(_mem(topic="hardware", content="User has 32GB RAM."), uid, db_path=tmp_db)
+        count = delete_memories_matching("fedora", uid, db_path=tmp_db)
+        assert count == 1
+        remaining = list_memories(uid, db_path=tmp_db)
+        assert len(remaining) == 2
+        assert all("Fedora" not in m.content for m in remaining)
+
+    def test_forget_does_not_open_a_connection_per_match(self, tmp_db, uid):
+        """
+        Regression for issue #68: deleting N matching memories must not
+        delegate to `delete_memory()` in a loop (which would open a new
+        SQLite connection per row).
+        """
+        save_memory(_mem(topic="ubuntu", content="User tried Ubuntu once."), uid, db_path=tmp_db)
+        save_memory(_mem(topic="ubuntu2", content="User disliked Ubuntu."), uid, db_path=tmp_db)
+        save_memory(_mem(topic="ubuntu3", content="User uninstalled Ubuntu."), uid, db_path=tmp_db)
+        with patch("memory.store.delete_memory") as mock_delete:
+            count = delete_memories_matching("ubuntu", uid, db_path=tmp_db)
+        assert count == 3
+        mock_delete.assert_not_called()
+        assert list_memories(uid, db_path=tmp_db) == []
+
+    def test_forget_does_not_touch_other_users(self, tmp_db, uid):
+        # Second user with an Ubuntu memory must survive a forget by `uid`.
+        with sqlite3.connect(tmp_db) as conn:
+            users.create_user(conn, "bob", "pw", role=users.ROLE_USER)
+            other_uid = conn.execute(
+                "SELECT id FROM users WHERE username = ?", ("bob",)
+            ).fetchone()[0]
+        save_memory(_mem(topic="ubuntu", content="Alice tried Ubuntu."), uid, db_path=tmp_db)
+        save_memory(_mem(topic="ubuntu", content="Bob loves Ubuntu."), other_uid, db_path=tmp_db)
+
+        count = delete_memories_matching("ubuntu", uid, db_path=tmp_db)
+        assert count == 1
+        assert list_memories(uid, db_path=tmp_db) == []
+        remaining_other = list_memories(other_uid, db_path=tmp_db)
+        assert len(remaining_other) == 1
+        assert "Bob" in remaining_other[0].content
+
 
 # ── v2: embeddings ─────────────────────────────────────────────────────────────
 

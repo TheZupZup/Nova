@@ -203,30 +203,39 @@ def delete_memories_matching(query: str, user_id: int, db_path: str | None = Non
     Deletes ALL of `user_id`'s memories matching the query keywords.
     Returns the count deleted. Memories belonging to other users are
     never touched.
+
+    Uses a single connection/transaction: the read + matching scan + delete
+    all happen on the same `sqlite3.Connection` to avoid the N+1 reconnect
+    pattern that opened a fresh connection per deleted row.
     """
     db_path = _resolve_db_path(db_path)
     words = _tokenize(query)
     if not words:
         return 0
 
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    try:
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
         rows = conn.execute(
-            "SELECT * FROM natural_memories WHERE user_id = ?",
+            "SELECT id, topic, content FROM natural_memories WHERE user_id = ?",
             (user_id,),
         ).fetchall()
-    finally:
-        conn.close()
 
-    to_delete = [
-        _row_to_memory(r).id
-        for r in rows
-        if any(w in set(_tokenize(f"{r['topic']} {r['content']}")) for w in words)
-    ]
-    for memory_id in to_delete:
-        delete_memory(memory_id, user_id, db_path=db_path)
-    return len(to_delete)
+        to_delete = [
+            r["id"]
+            for r in rows
+            if any(w in set(_tokenize(f"{r['topic']} {r['content']}")) for w in words)
+        ]
+        if not to_delete:
+            return 0
+
+        # Placeholders are built from a fixed `?` literal, never user input,
+        # so this remains a fully parameterized query.
+        placeholders = ",".join(["?"] * len(to_delete))
+        conn.execute(
+            f"DELETE FROM natural_memories WHERE user_id = ? AND id IN ({placeholders})",
+            (user_id, *to_delete),
+        )
+        return len(to_delete)
 
 
 # ── private helpers ────────────────────────────────────────────────────────────
