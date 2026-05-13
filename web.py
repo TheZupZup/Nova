@@ -30,7 +30,7 @@ from core.memory import (
     conversation_belongs_to,
     get_setting, save_setting,
     list_memories, update_memory, delete_memory,
-    get_owned_message, update_message_content, delete_message,
+    update_message_content, delete_message,
     MESSAGE_CONTENT_MAX_LEN,
 )
 from core import feedback as _feedback
