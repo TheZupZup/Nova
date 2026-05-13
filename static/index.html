@@ -543,10 +543,10 @@
         #messages {
             flex: 1;
             overflow-y: auto;
-            padding: 24px 26px 14px;
+            padding: 24px 26px 16px;
             display: flex;
             flex-direction: column;
-            gap: 14px;
+            gap: 18px;
             scroll-behavior: smooth;
         }
 
@@ -562,6 +562,14 @@
             to   { opacity: 1; transform: translateY(0); }
         }
 
+        /* Users with prefers-reduced-motion shouldn't see bubbles slide up
+           on every message; keep them present, just static. The streaming
+           caret has its own reduced-motion override below. */
+        @media (prefers-reduced-motion: reduce) {
+            .message-row { animation: none; }
+            #messages { scroll-behavior: auto; }
+        }
+
         .message-row.user { align-items: flex-end; }
         .message-row.nova { align-items: flex-start; }
 
@@ -575,13 +583,14 @@
         }
 
         .message {
-            max-width: 75%;
-            padding: 10px 14px;
+            max-width: 76%;
+            padding: 11px 16px;
             border-radius: var(--r-lg);
-            line-height: 1.55;
+            line-height: 1.62;
             white-space: pre-wrap;
             word-break: break-word;
-            font-size: 0.92rem;
+            font-size: 0.94rem;
+            letter-spacing: 0.005em;
         }
 
         .message.user {
@@ -633,6 +642,13 @@
 
         @keyframes caret-blink {
             50% { opacity: 0; }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            .streaming-caret {
+                animation: none;
+                opacity: 0.6;
+            }
         }
 
         #empty-state {
@@ -1087,23 +1103,27 @@
         }
 
         /* ── MARKDOWN ──
-           Markdown spacing inside Nova bubbles is intentionally tight: the
-           bubble itself already has comfortable padding and the
-           1.55 line-height makes prose readable without large block gaps.
+           Markdown spacing inside Nova bubbles is intentionally calm: the
+           bubble itself already has comfortable padding and the ~1.62
+           line-height makes prose readable without feeling cramped.
            Headings, paragraphs and lists collapse first-/last-child margins
-           so the bubble never reserves empty vertical space at the edges. */
+           so the bubble never reserves empty vertical space at the edges.
+           Paragraphs and list items get a touch more breathing room than a
+           dense doc dump so long replies stay scannable. */
         .message.nova h1, .message.nova h2, .message.nova h3 {
             color: var(--text);
-            margin: 10px 0 4px;
+            margin: 12px 0 6px;
             font-weight: 600;
             letter-spacing: -0.005em;
         }
-        .message.nova h1 { font-size: 1.15rem; }
-        .message.nova h2 { font-size: 1.02rem; }
-        .message.nova h3 { font-size: 0.95rem; color: var(--cyan); }
-        .message.nova p { margin: 4px 0; }
-        .message.nova ul, .message.nova ol { padding-left: 20px; margin: 4px 0; }
-        .message.nova li { margin: 2px 0; }
+        .message.nova h1 { font-size: 1.16rem; }
+        .message.nova h2 { font-size: 1.04rem; }
+        .message.nova h3 { font-size: 0.96rem; color: var(--cyan); }
+        .message.nova p { margin: 7px 0; }
+        .message.nova ul, .message.nova ol { padding-left: 22px; margin: 7px 0; }
+        .message.nova li { margin: 4px 0; }
+        .message.nova li > p { margin: 2px 0; }
+        .message.nova li + li { margin-top: 5px; }
         .message.nova > div > *:first-child,
         .message.nova > *:first-child { margin-top: 0; }
         .message.nova > div > *:last-child,
@@ -1202,7 +1222,7 @@
             padding: 6px 4px 2px;
             margin-top: 2px;
             width: 100%;
-            max-width: 75%;
+            max-width: 76%;
             position: relative;
         }
 
@@ -1634,7 +1654,7 @@
             padding: 6px 12px 6px 10px;
             margin: 8px 0 0;
             width: fit-content;
-            max-width: 75%;
+            max-width: 76%;
             background: var(--cyan-soft);
             border: 1px solid var(--cyan-glow);
             border-radius: var(--r-pill);
@@ -3128,9 +3148,10 @@
                             </div>
                         </div>
                         <select id="pers-emoji" class="pers-select" onchange="savePersonalizationField('emoji_level', this.value)">
-                            <option value="none">None</option>
-                            <option value="low" selected>Low</option>
-                            <option value="medium">Medium</option>
+                            <option value="none" id="pers-emoji-opt-none">None</option>
+                            <option value="low" id="pers-emoji-opt-low" selected>Low</option>
+                            <option value="medium" id="pers-emoji-opt-medium">Medium</option>
+                            <option value="expressive" id="pers-emoji-opt-expressive">Expressive</option>
                         </select>
                     </div>
 
@@ -3469,7 +3490,11 @@
             pers_enth_title: "Enthousiasme",
             pers_enth_hint: "Énergie des réponses.",
             pers_emoji_title: "Niveau d'emoji",
-            pers_emoji_hint: "Fréquence des emoji.",
+            pers_emoji_hint: "Fréquence des emoji. Les réponses techniques restent sobres quoi qu'il arrive.",
+            pers_emoji_opt_none: "Aucun",
+            pers_emoji_opt_low: "Discret",
+            pers_emoji_opt_medium: "Modéré",
+            pers_emoji_opt_expressive: "Expressif",
             pers_instr_title: "Instructions personnalisées",
             pers_instr_hint: "Une note courte que Nova garde en tête pour tes messages.",
             coming_soon: "bientôt",
@@ -3653,7 +3678,11 @@
             pers_enth_title: "Enthusiasm",
             pers_enth_hint: "How energetic Nova's replies should feel.",
             pers_emoji_title: "Emoji level",
-            pers_emoji_hint: "How often Nova may use emoji.",
+            pers_emoji_hint: "How often Nova may use emoji. Technical answers stay sober regardless.",
+            pers_emoji_opt_none: "None",
+            pers_emoji_opt_low: "Low",
+            pers_emoji_opt_medium: "Medium",
+            pers_emoji_opt_expressive: "Expressive",
             pers_instr_title: "Custom instructions",
             pers_instr_hint: "A short note Nova should keep in mind for your messages.",
             coming_soon: "coming soon",
@@ -3832,6 +3861,10 @@
         _setText("pers-enth-hint", t("pers_enth_hint"));
         _setText("pers-emoji-title", t("pers_emoji_title"));
         _setText("pers-emoji-hint", t("pers_emoji_hint"));
+        _setText("pers-emoji-opt-none", t("pers_emoji_opt_none"));
+        _setText("pers-emoji-opt-low", t("pers_emoji_opt_low"));
+        _setText("pers-emoji-opt-medium", t("pers_emoji_opt_medium"));
+        _setText("pers-emoji-opt-expressive", t("pers_emoji_opt_expressive"));
         _setText("pers-instr-title", t("pers_instr_title"));
         _setText("pers-instr-hint", t("pers_instr_hint"));
 
@@ -6204,6 +6237,13 @@
     // completes successfully, so they can never be clicked against an
     // incomplete response. The returned object exposes the helpers the
     // caller needs to push tokens and finalise the message.
+    //
+    // Tokens arrive in bursts of 1–3 characters from Ollama. Writing each
+    // one straight into the DOM produces visible jitter on small chunks
+    // and forces a layout pass on every single token. We coalesce incoming
+    // deltas into a short flush window (~28 ms) and write the accumulated
+    // text once per frame — this gives the smooth "typing" feel the UI
+    // wants without lying about progress.
     function createStreamingAssistantBubble() {
         const emptyState = document.getElementById("empty-state");
         if (emptyState) emptyState.remove();
@@ -6237,29 +6277,63 @@
         messagesEl.appendChild(row);
         messagesEl.scrollTop = messagesEl.scrollHeight;
 
+        // ``buffer`` is the text already visible in the bubble. ``pending``
+        // holds deltas that arrived since the last flush — they will land
+        // in the DOM on the next animation frame (or ~28 ms tick) and on
+        // ``finalise()``. Keeping them separate means ``getBuffer()`` can
+        // report the true content of the bubble for error / cancel paths
+        // even before the flush has fired.
         let buffer = "";
+        let pending = "";
+        let flushTimer = null;
+        const FLUSH_MS = 28;
+
+        function flush() {
+            if (flushTimer != null) {
+                clearTimeout(flushTimer);
+                flushTimer = null;
+            }
+            if (!pending) return;
+            buffer += pending;
+            pending = "";
+            textNode.data = buffer;
+            bubble.dataset.rawText = buffer;
+            // Auto-scroll only when the user is already pinned to the
+            // bottom; otherwise leave their scroll position alone so they
+            // can read earlier messages while Nova is still writing.
+            if (isScrolledNearBottom(messagesEl)) {
+                messagesEl.scrollTop = messagesEl.scrollHeight;
+            }
+        }
+
+        function scheduleFlush() {
+            if (flushTimer != null) return;
+            flushTimer = setTimeout(flush, FLUSH_MS);
+        }
 
         return {
             row,
             bubble,
             appendDelta(chunk) {
-                buffer += chunk;
-                textNode.data = buffer;
-                bubble.dataset.rawText = buffer;
-                // Auto-scroll only when the user is already pinned to
-                // the bottom; otherwise leave their scroll position
-                // alone so they can read earlier messages while Nova
-                // is still writing.
-                if (isScrolledNearBottom(messagesEl)) {
-                    messagesEl.scrollTop = messagesEl.scrollHeight;
-                }
+                if (!chunk) return;
+                pending += chunk;
+                scheduleFlush();
             },
             reset() {
+                if (flushTimer != null) {
+                    clearTimeout(flushTimer);
+                    flushTimer = null;
+                }
                 buffer = "";
+                pending = "";
                 textNode.data = "";
                 bubble.dataset.rawText = "";
             },
             finalise(model, messageId) {
+                // Drain any deltas that arrived inside the last flush
+                // window so the rendered markdown matches the bytes the
+                // server told us it persisted.
+                flush();
                 if (!buffer) {
                     // Nothing was streamed — drop the bubble entirely
                     // so we never leave a stray Nova label with no
@@ -6307,7 +6381,10 @@
                 }
             },
             getBuffer() {
-                return buffer;
+                // Includes deltas that have not flushed yet so abort /
+                // error paths read the *true* state of the bubble, not
+                // just the slice of text already painted.
+                return buffer + pending;
             },
         };
     }

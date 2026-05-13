@@ -105,8 +105,12 @@ class TestPersonalizationConstants:
         assert core_settings.PERSONALIZATION_ENUMS["enthusiasm_level"] == frozenset(
             {"low", "normal", "high"}
         )
+        # `expressive` lets the user opt into a slightly warmer tone with a
+        # rare emoji or two in casual chat. Technical / security responses
+        # still stay sober — that rule lives in the contract block, not in
+        # the enum.
         assert core_settings.PERSONALIZATION_ENUMS["emoji_level"] == frozenset(
-            {"none", "low", "medium"}
+            {"none", "low", "medium", "expressive"}
         )
 
     def test_defaults_cover_every_field(self):

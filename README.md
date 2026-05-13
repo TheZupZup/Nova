@@ -40,6 +40,11 @@ Shipped today:
   when a model is missing.
 - **Streaming replies.** Assistant messages stream into the UI as they
   are generated, with a calm typing indicator while Nova is thinking.
+  The browser coalesces incoming tokens on a short flush window
+  (~28 ms) so text reveals smoothly instead of jittering on every
+  one-character token, and the final Markdown is rendered in a single
+  pass once the stream completes. Backend errors surface inline rather
+  than leaving an empty bubble.
 - **Persistent memory.** A local SQLite database stores conversations,
   user-authored memories, and per-user settings. Manual commands
   (`Retiens ça:`, `Souviens-toi:`) let users save explicit facts;
@@ -56,9 +61,12 @@ Shipped today:
   admin-managed user list, per-user settings, and an optional
   family-controls layer for restricted roles.
 - **Personalization preferences.** Response length, warmth,
-  enthusiasm, emoji density, and free-text custom instructions are
-  stored per user and shape Nova's tone without leaking into other
-  accounts.
+  enthusiasm, emoji density (none / low / medium / expressive), and
+  free-text custom instructions are stored per user and shape Nova's
+  tone without leaking into other accounts. Technical / code / PR /
+  security replies stay sober regardless of the emoji level — the
+  preference shapes casual chat only and never overrides the Nova
+  Safety and Trust Contract.
 - **Local response feedback.** Thumbs up / thumbs down under each
   assistant message records a per-user preference signal in the local
   SQLite database; a thumbs-down accepts an optional short reason such

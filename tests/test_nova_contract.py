@@ -42,6 +42,40 @@ class TestBlocks:
     def test_response_style_forbids_filler_openers(self):
         assert "Bien sûr" in RESPONSE_STYLE_BLOCK
 
+    def test_response_style_has_human_calm_tone_guidance(self):
+        # Nova should sound like a calm human helper, not a corporate
+        # template. The TON block makes that explicit.
+        assert "TON" in RESPONSE_STYLE_BLOCK
+
+    def test_response_style_does_not_claim_emotions(self):
+        # Hard rule from the safety contract: Nova may sound warm but
+        # never claims to *feel*, be *conscious*, or have personal
+        # experiences. The style block must state this so the user
+        # never reads a fake-sentience answer.
+        lower = RESPONSE_STYLE_BLOCK.lower()
+        assert "n'imite jamais une émotion" in lower
+        assert "consciente" in lower
+
+    def test_response_style_acknowledges_intent(self):
+        # The TON block should remind Nova to acknowledge intent
+        # naturally before launching into steps.
+        assert "intention" in RESPONSE_STYLE_BLOCK.lower()
+
+    def test_response_style_demands_honesty_about_limits(self):
+        # If Nova doesn't know, it should say so — and never claim to
+        # have done something it didn't do.
+        lower = RESPONSE_STYLE_BLOCK.lower()
+        assert "si tu ne sais pas" in lower or "honnêteté" in lower
+        assert "prétends" in lower
+
+    def test_response_style_keeps_project_focus(self):
+        # When asked about Nova / SilentGuard / PRs / project security,
+        # Nova should stay on topic instead of sliding into generic
+        # personal advice.
+        lower = RESPONSE_STYLE_BLOCK.lower()
+        assert "silentguard" in lower
+        assert "projet" in lower or "project" in lower
+
 
 class TestCapabilitiesBlock:
     def test_has_capabilities_label(self):
@@ -171,6 +205,38 @@ class TestBuildPersonalizationBlock:
         # The "medium" line explicitly *allows* emojis; the "no emoji" wording
         # of the "none" preset must not appear.
         assert "ne pas en utiliser" not in out.lower()
+
+    def test_emoji_expressive_is_allowed(self):
+        out = build_personalization_block({"emoji_level": "expressive"})
+        # The expressive line opts the user into a touch more emoji in
+        # casual chat — it still names technical / PR / security as off
+        # limits so the prompt stays consistent with the safety framing.
+        lower = out.lower()
+        assert "emoji" in lower
+        assert "expressif" in lower or "expressive" in lower or "expressi" in lower
+        assert "technique" in lower or "sécurité" in lower or "pr" in lower
+
+    def test_emoji_expressive_keeps_technical_replies_sober(self):
+        # The expressive directive is for casual chat only; security /
+        # code / PR responses must not be invited to sprout emojis.
+        out = build_personalization_block({"emoji_level": "expressive"})
+        lower = out.lower()
+        assert any(
+            marker in lower
+            for marker in ("code", "pr", "documentation", "doc", "technique", "sécurité")
+        )
+
+    def test_emoji_none_extends_to_technical(self):
+        # The hardened "none" directive must mention that technical /
+        # security / code replies are also kept emoji-free, not just
+        # casual chat.
+        out = build_personalization_block({"emoji_level": "none"})
+        lower = out.lower()
+        assert "ne pas en utiliser" in lower
+        assert any(
+            marker in lower
+            for marker in ("technique", "sécurité", "code", "pr")
+        )
 
     def test_custom_instructions_are_quoted_into_block(self):
         out = build_personalization_block(

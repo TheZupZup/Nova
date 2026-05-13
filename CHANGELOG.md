@@ -2,6 +2,25 @@
 
 ## Unreleased
 ### Added
+- Smoother streamed chat experience: the streaming bubble now coalesces
+  incoming Ollama tokens on a short flush window (~28 ms) and only
+  paints once per cycle, so single-character chunks no longer cause
+  visible jitter. The final Markdown is still rendered once, on the
+  `done` event, so half-formed code fences never flicker into the
+  wrong layout. The endpoint still forwards every Ollama chunk as its
+  own NDJSON `delta` event; coalescing lives in the renderer.
+- `expressive` emoji preference level. A fourth choice in Settings →
+  Personalization → Emoji level lets users opt into a slightly warmer
+  feel in casual chat (one or two emojis per reply, never in clusters).
+  Code, PR, documentation, and security replies stay sober regardless
+  — that rule is restated in the prompt, not left to the model.
+- Calmer / more human style guidance in the system prompt. The
+  RESPONSE_STYLE_BLOCK now includes explicit TON / PERTINENCE /
+  HONNÊTETÉ guidance: acknowledge intent briefly, stay project-focused
+  on Nova / SilentGuard / PR / security questions, be honest about
+  limits, and never claim to feel emotions or be conscious. The Nova
+  Safety and Trust Contract still wins — the new lines are a tone
+  reminder, not a new capability.
 - Edit and delete sent chat messages from the chat UI (issue #94). Two
   new auth-gated endpoints, `PUT /messages/{id}` and
   `DELETE /messages/{id}`, accept content edits and message deletes

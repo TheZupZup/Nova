@@ -202,6 +202,36 @@ class TestChatStreamEndpoint:
             ).fetchall()
         assert rows == [("user", "salut"), ("assistant", "hello")]
 
+    def test_many_small_chunks_each_emit_a_delta(self, db_path, web_client):
+        # Ollama frequently emits 1–2 character chunks. The endpoint must
+        # forward each one as its own `delta` event so the frontend's
+        # buffered renderer can flush them at its own cadence — never
+        # batch them server-side. The total concatenated text must still
+        # match exactly what was sent and what gets persisted.
+        _make_user(db_path, "alice")
+        token = _login(web_client, "alice")
+
+        pieces = ["H", "el", "lo", ", ", "Nova", "!", " "]
+        with stub_chat_stream_runtime(pieces):
+            resp = web_client.post(
+                "/chat/stream",
+                json={"message": "salut", "mode": "chat"},
+                headers=_h(token),
+            )
+        assert resp.status_code == 200
+        events = _decode_ndjson(resp.content)
+        deltas = [e["content"] for e in events if e["type"] == "delta"]
+        # Each chunk arrives as its own delta — no server-side coalescing.
+        assert deltas == pieces
+        # And the final, persisted reply concatenates exactly the same bytes.
+        done = next(e for e in events if e["type"] == "done")
+        with sqlite3.connect(db_path) as conn:
+            row = conn.execute(
+                "SELECT content FROM messages WHERE id = ?",
+                (done["assistant_message_id"],),
+            ).fetchone()
+        assert row[0] == "".join(pieces)
+
     def test_first_message_updates_conversation_title(self, db_path, web_client):
         _make_user(db_path, "alice")
         token = _login(web_client, "alice")

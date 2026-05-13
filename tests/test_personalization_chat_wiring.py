@@ -129,6 +129,23 @@ class TestBuildMessagesPersonalization:
         sys_msg = msgs[0]["content"].lower()
         assert "emoji" in sys_msg and "ne pas" in sys_msg
 
+    def test_emoji_expressive_lands_in_system_prompt(self):
+        # The expressive level is opt-in: the user wants a slightly
+        # warmer feel in casual chat, with the same sober behaviour on
+        # code / PR / security still spelled out.
+        msgs = build_messages(
+            [], "hi", [], None, None, None,
+            personalization={"emoji_level": "expressive"},
+        )
+        sys_msg = msgs[0]["content"].lower()
+        assert "emoji" in sys_msg
+        # The expressive line must mention the sober domains so the
+        # directive cannot leak into technical replies.
+        assert any(
+            marker in sys_msg
+            for marker in ("technique", "code", "pr", "sécurité", "doc")
+        )
+
     def test_high_warmth_lands_in_system_prompt(self):
         msgs = build_messages(
             [], "hi", [], None, None, None,

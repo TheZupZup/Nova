@@ -30,7 +30,7 @@ PERSONALIZATION_ENUMS: dict[str, frozenset[str]] = {
     "response_style": frozenset({"default", "concise", "detailed", "technical"}),
     "warmth_level": frozenset({"low", "normal", "high"}),
     "enthusiasm_level": frozenset({"low", "normal", "high"}),
-    "emoji_level": frozenset({"none", "low", "medium"}),
+    "emoji_level": frozenset({"none", "low", "medium", "expressive"}),
 }
 
 PERSONALIZATION_DEFAULTS: dict[str, str] = {

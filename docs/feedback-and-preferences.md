@@ -160,3 +160,58 @@ Deleting the user account cascades (`ON DELETE CASCADE`) to remove all
 feedback rows for that user. Deleting a conversation sets
 `conversation_id` to NULL on its rows (`ON DELETE SET NULL`) so the
 preference signal survives even when the original chat is gone.
+
+## Emoji preference levels
+
+Settings → Personalization → *Emoji level* shapes the tone Nova picks
+in casual chat. The stored value lands in the per-user preference
+block in the system prompt; it never overrides the safety contract
+and never changes how Nova answers technical / code / PR / security
+questions — those replies stay sober regardless.
+
+| Level | Meaning |
+| --- | --- |
+| `none` | No emoji at all. Sober tone everywhere, technical or not. |
+| `low` *(default)* | Quiet by default. Nova may, very rarely, use a single emoji in a casual reply if it adds clarity. |
+| `medium` | Pertinent emojis allowed in casual chat. Code / PR / docs / security replies stay emoji-free. |
+| `expressive` | One or two emojis per casual reply if they fit naturally. Never in clusters, never in code / PR / docs / security. |
+
+The preference is per-user. The default for fresh accounts is `low` so
+the prompt cost is zero until the user opens the panel and picks
+something explicit.
+
+Feedback (thumbs up / down) can also nudge Nova's tone, but it cannot
+override the emoji level the user picked here, and neither can override
+the safety / identity contract.
+
+## Progressive streaming and the assistant bubble
+
+Chat replies are streamed token-by-token from Ollama to the browser as
+NDJSON events (see `core.chat.chat_stream` and the `/chat/stream`
+endpoint). The browser appends incoming deltas to a streaming bubble
+and flushes the accumulated text on a short cadence (~28 ms) so the
+text "types out" smoothly without re-rendering the whole conversation
+on every token.
+
+Behaviour guarantees:
+
+- the assistant bubble is created the moment the first delta arrives,
+  never before — empty model output surfaces an inline error and
+  drops the bubble cleanly instead of persisting a stray empty row;
+- the bubble shows plain text while the stream is in flight, then
+  swaps to rendered Markdown once `done` arrives so half-formed
+  fenced blocks never flicker into the wrong layout;
+- the action row (thumbs / copy / read aloud) attaches *after*
+  `done` only, so it can never be clicked against an in-progress
+  response;
+- `assistant_message_id` is included on the `done` event so the
+  feedback buttons can attach the rating to the row that was just
+  saved;
+- cancelling mid-stream (Stop button) discards the bubble and
+  persists nothing — reloading the conversation does not show a
+  half-baked message.
+
+If a backend stream error fires (Ollama unreachable, model returned
+nothing), the endpoint emits an `error` NDJSON event and persists
+nothing. The browser shows a calm fallback message inline instead
+of an empty Nova bubble.
