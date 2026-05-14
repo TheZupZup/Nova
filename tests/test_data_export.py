@@ -1152,6 +1152,103 @@ class TestApplyRestoreSafety:
         )
         assert out.outcome == de.RESTORE_OUTCOME_REFUSED
 
+    def test_refuses_path_type_collision_file_then_subfile(
+        self, tmp_path,
+    ):
+        """An archive with both ``data/backups/a`` (file) and
+        ``data/backups/a/b.txt`` (file) is structurally unrestorable
+        — ``mkdir`` cannot create ``backups/a/`` when ``backups/a``
+        is already a file. The preflight refuses upfront so the
+        operator gets a single clear refusal instead of a
+        ``FAILED`` outcome mid-extraction.
+        """
+        # Ordering matters for the test of the "ancestor was added
+        # as a file" branch: file ``backups/a`` is added first,
+        # then ``backups/a/b.txt`` tries to walk ``backups/a`` as
+        # an ancestor and finds it in ``file_paths_seen``.
+        archive = _make_archive_with_payload(
+            tmp_path,
+            {
+                "nova.db": b"-- db --",
+                "backups/a": b"file-at-collision",
+                "backups/a/b.txt": b"inner content",
+            },
+        )
+        target = tmp_path / "Target"
+        target.mkdir()
+        out = de.apply_restore(
+            archive, target_data_dir=target, confirm=True,
+        )
+        assert out.outcome == de.RESTORE_OUTCOME_REFUSED
+        assert "collision" in out.refuse_reason.lower()
+        # Target untouched — no backup, no staging.
+        assert list(target.iterdir()) == []
+        assert out.backup_path == ""
+
+    def test_refuses_path_type_collision_subfile_then_file(
+        self, tmp_path,
+    ):
+        """The opposite ordering (``backups/a/b.txt`` first, then
+        ``backups/a`` as a file) must also be refused: when the
+        later file is processed, its name already lives in
+        ``dir_paths_seen`` from the earlier file's ancestor walk.
+        """
+        archive = tmp_path / "collide-reverse.tar.gz"
+        manifest = json.dumps({
+            "format": de.FORMAT_ID,
+            "format_version": de.FORMAT_VERSION,
+            "mode": de.MODE_DATA_ONLY,
+            "created_at": "20260514T120000Z",
+            "files": [],
+            "excluded": [],
+        }).encode()
+        with tarfile.open(archive, mode="w:gz") as tar:
+            mi = tarfile.TarInfo(name=de.ARCHIVE_MANIFEST_NAME)
+            mi.size = len(manifest)
+            mi.mtime = 0
+            tar.addfile(mi, io.BytesIO(manifest))
+            # Reverse order: deeper entry first.
+            for path, payload in (
+                ("data/nova.db", b"-- db --"),
+                ("data/backups/a/b.txt", b"inner content"),
+                ("data/backups/a", b"file-at-collision"),
+            ):
+                ti = tarfile.TarInfo(name=path)
+                ti.size = len(payload)
+                ti.mtime = 0
+                tar.addfile(ti, io.BytesIO(payload))
+        target = tmp_path / "Target"
+        target.mkdir()
+        out = de.apply_restore(
+            archive, target_data_dir=target, confirm=True,
+        )
+        assert out.outcome == de.RESTORE_OUTCOME_REFUSED
+        assert "collision" in out.refuse_reason.lower()
+        assert list(target.iterdir()) == []
+        assert out.backup_path == ""
+
+    def test_dry_run_refuses_path_type_collision(self, tmp_path):
+        """The dry-run preview must refuse path-type collisions too
+        so inspect / dry-run / real restore stay consistent.
+        """
+        archive = _make_archive_with_payload(
+            tmp_path,
+            {
+                "nova.db": b"-- db --",
+                "backups/a": b"file-at-collision",
+                "backups/a/b.txt": b"inner",
+            },
+        )
+        target = tmp_path / "Target"
+        target.mkdir()
+        out = de.apply_restore(
+            archive, target_data_dir=target, dry_run=True,
+        )
+        assert out.outcome == de.RESTORE_OUTCOME_REFUSED
+        assert "collision" in out.refuse_reason.lower()
+        # Dry-run never writes anything.
+        assert list(target.iterdir()) == []
+
     def test_failed_restore_leaves_existing_data_intact(
         self, configured_data_dir, tmp_path, monkeypatch,
     ):

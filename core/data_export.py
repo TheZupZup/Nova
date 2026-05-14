@@ -2188,6 +2188,17 @@ def apply_restore(
     # ``data/.ssh/id_rsa`` that the exporter would have refused.
     would_restore: list[str] = []
     would_restore_seen: set[str] = set()
+    # Path-type collision detection. ``file_paths`` lists every
+    # would-be file destination as a POSIX string; ``dir_paths``
+    # lists every ancestor directory implied by those files. A
+    # crafted archive that contains both ``data/foo`` (file) and
+    # ``data/foo/bar`` (file) would deterministically fail at
+    # extraction (``mkdir`` cannot create ``foo/`` when ``foo`` is
+    # already a file). Detecting the collision here keeps inspect
+    # / dry-run / real restore consistent: any ancestor-vs-descendant
+    # clash refuses the whole restore upfront.
+    file_paths_seen: set[str] = set()
+    dir_paths_seen: set[str] = set()
     conflicts_seen: list[str] = []
     skipped_in_archive: list[ExcludedEntry] = []
     has_nova_db_in_archive = False
@@ -2258,6 +2269,62 @@ def apply_restore(
         if rel_str in would_restore_seen:
             continue
         would_restore_seen.add(rel_str)
+        # Path-type collision: refuse if this file's path is
+        # already in use as someone else's ancestor directory
+        # (a previously-added file would require it to be a
+        # directory), or if any ancestor of this path was already
+        # added as a file (we'd have to ``mkdir`` over an
+        # existing file). Either way the real restore would
+        # deterministically fail at extraction time, so the
+        # preflight refuses upfront.
+        if rel_str in dir_paths_seen:
+            return RestoreResult(
+                archive_path=archive_path_s,
+                target_data_dir=str(target_resolved),
+                outcome=RESTORE_OUTCOME_REFUSED,
+                refuse_reason=(
+                    f"Archive contains a path-type collision: "
+                    f"{rel_str!r} is a file in this archive but also "
+                    "the parent of another archive entry. Restore "
+                    "cannot resolve both."
+                ),
+                confirmed=bool(confirm),
+                restored_files=(),
+                skipped_files=(),
+                conflicts=(),
+                backup_path="",
+                backup_size=0,
+                restart_recommended=False,
+                warnings=inspection.warnings,
+                manifest=inspection.manifest,
+            )
+        ancestor_components: list[str] = []
+        for part in relative.parts[:-1]:
+            ancestor_components.append(part)
+            anc = "/".join(ancestor_components)
+            if anc in file_paths_seen:
+                return RestoreResult(
+                    archive_path=archive_path_s,
+                    target_data_dir=str(target_resolved),
+                    outcome=RESTORE_OUTCOME_REFUSED,
+                    refuse_reason=(
+                        f"Archive contains a path-type collision: "
+                        f"{anc!r} is both a file and a parent "
+                        f"directory of {rel_str!r}. Restore cannot "
+                        "resolve both."
+                    ),
+                    confirmed=bool(confirm),
+                    restored_files=(),
+                    skipped_files=(),
+                    conflicts=(),
+                    backup_path="",
+                    backup_size=0,
+                    restart_recommended=False,
+                    warnings=inspection.warnings,
+                    manifest=inspection.manifest,
+                )
+            dir_paths_seen.add(anc)
+        file_paths_seen.add(rel_str)
         # Preflight type-gate on the existing destination so the
         # dry-run reports the same outcome the real restore would
         # produce. ``_copy_into_target`` refuses to stash a symlink
