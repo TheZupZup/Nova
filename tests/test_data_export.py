@@ -453,6 +453,111 @@ class TestInspectExportRejections:
             "symlink" in e.lower() for e in inspection.errors
         )
 
+    def test_archive_with_same_path_as_file_and_dir_is_invalid(
+        self, tmp_path,
+    ):
+        """An archive that lists the same path as both a file and
+        a directory is unrestorable: extraction creates the
+        directory first, then ``open(file_dst, "wb")`` raises
+        ``IsADirectoryError``. The previous dry-run would have
+        said ``outcome=dry_run`` because it iterated only files;
+        the real restore deterministically failed at extraction.
+        Inspect now refuses such archives so dry-run and real
+        restore agree.
+
+        Both orderings (dir-first / file-first) are detected by
+        the two-set tracker.
+        """
+        for order, members in (
+            ("dir-first", [
+                ("data/backups/a/", tarfile.DIRTYPE, b""),
+                ("data/backups/a", tarfile.REGTYPE, b"file payload"),
+            ]),
+            ("file-first", [
+                ("data/backups/a", tarfile.REGTYPE, b"file payload"),
+                ("data/backups/a/", tarfile.DIRTYPE, b""),
+            ]),
+        ):
+            bad = tmp_path / f"collide-{order}.tar.gz"
+            manifest = json.dumps({
+                "format": de.FORMAT_ID,
+                "format_version": de.FORMAT_VERSION,
+                "mode": de.MODE_DATA_ONLY,
+                "files": [],
+                "excluded": [],
+            }).encode()
+            with tarfile.open(bad, mode="w:gz") as tar:
+                mi = tarfile.TarInfo(name=de.ARCHIVE_MANIFEST_NAME)
+                mi.size = len(manifest)
+                mi.mtime = 0
+                tar.addfile(mi, io.BytesIO(manifest))
+                for name, mtype, payload in members:
+                    ti = tarfile.TarInfo(name=name)
+                    ti.type = mtype
+                    ti.size = len(payload)
+                    ti.mtime = 0
+                    if payload:
+                        tar.addfile(ti, io.BytesIO(payload))
+                    else:
+                        tar.addfile(ti)
+            inspection = de.inspect_export(bad)
+            assert inspection.valid is False, (
+                f"{order}: expected invalid, got {inspection.errors!r}"
+            )
+            assert any(
+                "both" in e.lower() and (
+                    "file" in e.lower() and "directory" in e.lower()
+                )
+                for e in inspection.errors
+            ), (order, inspection.errors)
+
+    def test_dry_run_and_restore_agree_on_file_dir_collision(
+        self, tmp_path,
+    ):
+        """The dry-run and real-restore outcomes must match for an
+        archive that has a file/directory same-path collision.
+        Both should refuse via ``inspect_export``'s validation —
+        not "dry_run" from preview vs "extract_failed" from real.
+        """
+        bad = tmp_path / "collision.tar.gz"
+        manifest = json.dumps({
+            "format": de.FORMAT_ID,
+            "format_version": de.FORMAT_VERSION,
+            "mode": de.MODE_DATA_ONLY,
+            "files": [],
+            "excluded": [],
+        }).encode()
+        with tarfile.open(bad, mode="w:gz") as tar:
+            mi = tarfile.TarInfo(name=de.ARCHIVE_MANIFEST_NAME)
+            mi.size = len(manifest)
+            mi.mtime = 0
+            tar.addfile(mi, io.BytesIO(manifest))
+            di = tarfile.TarInfo(name="data/backups/a/")
+            di.type = tarfile.DIRTYPE
+            di.mtime = 0
+            tar.addfile(di)
+            fi = tarfile.TarInfo(name="data/backups/a")
+            fi.size = 7
+            fi.mtime = 0
+            tar.addfile(fi, io.BytesIO(b"payload"))
+
+        target = tmp_path / "Target"
+        target.mkdir()
+        dry = de.apply_restore(
+            bad, target_data_dir=target, dry_run=True,
+        )
+        real = de.apply_restore(
+            bad, target_data_dir=target, confirm=True,
+        )
+        assert dry.outcome == real.outcome, (
+            f"dry-run = {dry.outcome!r}, real = {real.outcome!r}"
+        )
+        assert dry.outcome == de.RESTORE_OUTCOME_REFUSED
+        # No backup or staging side effects from either flow.
+        assert dry.backup_path == ""
+        assert real.backup_path == ""
+        assert not (target / de.RESTORE_STAGING_DIRNAME).exists()
+
 
 # ── plan_restore ───────────────────────────────────────────────────
 

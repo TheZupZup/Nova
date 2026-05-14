@@ -947,6 +947,14 @@ def inspect_export(archive_path: str | os.PathLike[str]) -> InspectionResult:
     file_names: list[str] = []
     total_size = 0
     manifest: Optional[dict] = None
+    # Track file vs directory members by their normalised (no
+    # trailing slash) path so we can refuse archives that list the
+    # same path as both a file and a directory. Such archives
+    # deterministically fail at extraction (``open(dest, "wb")``
+    # on a directory raises ``IsADirectoryError``); refusing at
+    # inspection keeps dry-run and real-restore consistent.
+    file_member_paths: set[str] = set()
+    dir_member_paths: set[str] = set()
 
     if not os.path.isfile(archive_path):
         return InspectionResult(
@@ -1031,7 +1039,33 @@ def inspect_export(archive_path: str | os.PathLike[str]) -> InspectionResult:
                 # while the real restore refused with "no
                 # extractable Nova data files", breaking the
                 # inspect → dry-run → confirm contract.
-                if member.isfile():
+                #
+                # We also track each member's normalised path on the
+                # side so we can refuse an archive that lists the
+                # same path as both a file and a directory (e.g.
+                # ``data/backups/a`` and ``data/backups/a/``). That
+                # combination is deterministically unrestorable —
+                # extraction creates the directory first and then
+                # ``open(file_dst, "wb")`` raises
+                # ``IsADirectoryError`` — so refusing here keeps
+                # inspect / dry-run / real restore in lockstep.
+                normalised_name = member.name.rstrip("/")
+                if member.isdir():
+                    if normalised_name in file_member_paths:
+                        errors.append(
+                            f"Archive contains {normalised_name!r} "
+                            "as both a file and a directory member."
+                        )
+                        continue
+                    dir_member_paths.add(normalised_name)
+                elif member.isfile():
+                    if normalised_name in dir_member_paths:
+                        errors.append(
+                            f"Archive contains {normalised_name!r} "
+                            "as both a file and a directory member."
+                        )
+                        continue
+                    file_member_paths.add(normalised_name)
                     file_names.append(member.name)
                     total_size += int(member.size)
 
