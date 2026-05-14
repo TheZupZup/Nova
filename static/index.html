@@ -8870,6 +8870,13 @@
         manifestId: "",
         archiveName: "",
     };
+    // Monotonic generation counters so stale in-flight requests
+    // can't overwrite a newer selection. An older inspect (or
+    // dry-run) that comes back after the operator re-clicks must
+    // be silently dropped — otherwise it would prime the
+    // restore button for the wrong archive.
+    let restoreInspectGeneration = 0;
+    let restoreDryRunGeneration = 0;
 
     function updateRestoreButtonState() {
         const checkbox = document.getElementById("storage-restore-checkbox");
@@ -8888,6 +8895,11 @@
             manifestId: "",
             archiveName: keepName ? restoreState.archiveName : "",
         };
+        // Bump both generations so any in-flight inspect / dry-run
+        // request observes a mismatch on return and bails out
+        // before touching the freshly-reset state.
+        restoreInspectGeneration++;
+        restoreDryRunGeneration++;
         const dryBtn = document.getElementById("storage-restore-dryrun-btn");
         if (dryBtn) dryBtn.disabled = true;
         const confirmEl = document.getElementById("storage-restore-confirm");
@@ -8917,6 +8929,10 @@
             if (errEl) errEl.textContent = "Enter an archive filename first.";
             return;
         }
+        // Tag this request with a generation. A response that comes
+        // back after a newer click (or a filename edit + re-click)
+        // must not be allowed to overwrite the live state.
+        const generation = ++restoreInspectGeneration;
         try {
             const res = await fetch("/admin/storage/inspect-export", {
                 method: "POST",
@@ -8926,6 +8942,7 @@
                 },
                 body: JSON.stringify({ name }),
             });
+            if (generation !== restoreInspectGeneration) return;
             if (res.status === 401) { logout(); return; }
             if (!res.ok) {
                 let detail = `Failed (${res.status})`;
@@ -8933,10 +8950,12 @@
                     const body = await res.json();
                     if (body && body.detail) detail = body.detail;
                 } catch (_) { /* ignore */ }
+                if (generation !== restoreInspectGeneration) return;
                 if (errEl) errEl.textContent = detail;
                 return;
             }
             const body = await res.json();
+            if (generation !== restoreInspectGeneration) return;
             restoreState.archiveName = name;
             renderInspectResult(body);
             if (body.valid) {
@@ -8947,6 +8966,7 @@
                 if (dryBtn) dryBtn.disabled = false;
             }
         } catch (e) {
+            if (generation !== restoreInspectGeneration) return;
             if (errEl) errEl.textContent = "Network error while inspecting package.";
         }
     }
@@ -8990,6 +9010,11 @@
         if (confirmEl) confirmEl.style.display = "none";
         restoreState.dryRunPassed = false;
         updateRestoreButtonState();
+        // Mirror the inspect-side generation guard: a slower
+        // in-flight dry-run must not flip the restore button to
+        // "ready" for a stale archive selection.
+        const generation = ++restoreDryRunGeneration;
+        const targetedArchive = restoreState.archiveName;
         try {
             const res = await fetch("/admin/storage/restore-dry-run", {
                 method: "POST",
@@ -9003,6 +9028,10 @@
                     confirmed_manifest_id: restoreState.manifestId || null,
                 }),
             });
+            if (
+                generation !== restoreDryRunGeneration
+                || targetedArchive !== restoreState.archiveName
+            ) return;
             if (res.status === 401) { logout(); return; }
             if (!res.ok) {
                 let detail = `Failed (${res.status})`;
@@ -9010,10 +9039,18 @@
                     const body = await res.json();
                     if (body && body.detail) detail = body.detail;
                 } catch (_) { /* ignore */ }
+                if (
+                    generation !== restoreDryRunGeneration
+                    || targetedArchive !== restoreState.archiveName
+                ) return;
                 if (errEl) errEl.textContent = detail;
                 return;
             }
             const body = await res.json();
+            if (
+                generation !== restoreDryRunGeneration
+                || targetedArchive !== restoreState.archiveName
+            ) return;
             renderDryRunResult(body);
             if (body.outcome === "dry_run") {
                 restoreState.dryRunPassed = true;
@@ -9021,6 +9058,10 @@
             }
             updateRestoreButtonState();
         } catch (e) {
+            if (
+                generation !== restoreDryRunGeneration
+                || targetedArchive !== restoreState.archiveName
+            ) return;
             if (errEl) errEl.textContent = "Network error while running dry-run.";
         }
     }

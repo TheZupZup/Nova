@@ -1136,6 +1136,45 @@ class TestApplyRestoreSafety:
         # No staging directory left behind.
         assert not (target / de.RESTORE_STAGING_DIRNAME).exists()
 
+    def test_backup_read_failure_aborts_restore(
+        self, configured_data_dir, tmp_path, monkeypatch,
+    ):
+        """An unreadable canonical file in the target must abort the
+        restore, not be silently skipped.
+
+        Treating a read failure as "exclude this file from the
+        backup and continue" would let ``apply_restore`` proceed to
+        replace a file the operator has no recoverable copy of.
+        The backup builder now returns failure on the first OSError
+        from ``stat()`` / ``_sha256_file`` so ``apply_restore``
+        surfaces ``outcome=backup_failed`` and leaves the target
+        intact.
+        """
+        result = de.create_data_export()
+        target = tmp_path / "Target"
+        target.mkdir()
+        marker = b"-- precious --"
+        (target / "nova.db").write_bytes(marker)
+
+        def boom(path):
+            raise OSError(13, "Permission denied")
+
+        monkeypatch.setattr(de, "_sha256_file", boom)
+        out = de.apply_restore(
+            result.archive_path,
+            target_data_dir=target,
+            confirm=True,
+        )
+        assert out.outcome == de.RESTORE_OUTCOME_BACKUP_FAILED
+        # Existing data untouched even though the backup failed.
+        assert (target / "nova.db").read_bytes() == marker
+        # The warning identifies the unreadable file.
+        assert any(
+            "nova.db" in w for w in out.warnings
+        ), out.warnings
+        # No staging directory left behind.
+        assert not (target / de.RESTORE_STAGING_DIRNAME).exists()
+
     def test_backup_never_overwrites_existing_file(
         self, configured_data_dir, tmp_path,
     ):

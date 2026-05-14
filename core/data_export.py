@@ -1469,15 +1469,32 @@ def _create_pre_restore_backup(
     included_entries: list[IncludedEntry] = []
     archive_files: list[tuple[Path, str]] = []
     for file_p, rel_parts in included_pairs:
+        rel_posix = "/".join(rel_parts)
+        # Read failures here are not a "skip and continue" — the
+        # whole point of the pre-restore backup is to give the
+        # operator a recoverable copy of every canonical file
+        # before any file is replaced. If we cannot stat or hash a
+        # file, we cannot include it in the backup, and the
+        # subsequent restore could overwrite it without a fallback.
+        # Abort the backup so ``apply_restore`` refuses the restore
+        # with ``outcome=backup_failed`` and the operator can
+        # investigate the unreadable file.
         try:
             size = int(file_p.stat().st_size)
+        except OSError as exc:
+            warnings.append(
+                f"Could not stat {rel_posix!r} for pre-restore "
+                f"backup: {exc.strerror or 'OS error'}"
+            )
+            return None, 0, warnings
+        try:
             digest = _sha256_file(file_p)
-        except OSError:
-            excluded_entries.append(ExcludedEntry(
-                "/".join(rel_parts), REASON_UNREADABLE,
-            ))
-            continue
-        rel_posix = "/".join(rel_parts)
+        except OSError as exc:
+            warnings.append(
+                f"Could not read {rel_posix!r} for pre-restore "
+                f"backup: {exc.strerror or 'OS error'}"
+            )
+            return None, 0, warnings
         included_entries.append(IncludedEntry(
             path=rel_posix, size=size, sha256=digest,
         ))
