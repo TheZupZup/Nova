@@ -1293,6 +1293,65 @@ class TestApplyRestoreSafety:
         assert stash.is_dir()
         assert (stash / "nova.db").read_bytes() == b"in-flight-stash-payload"
 
+    def test_directory_only_archive_dry_run_and_restore_agree(
+        self, tmp_path,
+    ):
+        """An archive with only directory members must produce the
+        same outcome from dry-run and real restore.
+
+        ``inspect_export`` used to add directory members to
+        ``InspectionResult.files``; the preview loop then treated
+        them as restorable, so ``apply_restore(dry_run=True)``
+        reported ``outcome=dry_run`` while the real restore later
+        refused with ``"Archive contained no extractable Nova data
+        files."``. The fix excludes directory members from
+        ``file_names`` so both paths agree.
+        """
+        # Build an archive with manifest + a single directory entry.
+        archive = tmp_path / "dirs-only.tar.gz"
+        manifest = json.dumps({
+            "format": de.FORMAT_ID,
+            "format_version": de.FORMAT_VERSION,
+            "mode": de.MODE_DATA_ONLY,
+            "created_at": "20260514T120000Z",
+            "files": [],
+            "excluded": [],
+        }).encode()
+        with tarfile.open(archive, mode="w:gz") as tar:
+            mi = tarfile.TarInfo(name=de.ARCHIVE_MANIFEST_NAME)
+            mi.size = len(manifest)
+            mi.mtime = 0
+            tar.addfile(mi, io.BytesIO(manifest))
+            di = tarfile.TarInfo(name="data/backups/foo")
+            di.type = tarfile.DIRTYPE
+            di.mtime = 0
+            tar.addfile(di)
+
+        target = tmp_path / "Target"
+        target.mkdir()
+
+        dry = de.apply_restore(
+            archive, target_data_dir=target, dry_run=True,
+        )
+        real = de.apply_restore(
+            archive, target_data_dir=target, confirm=True,
+        )
+        # Both flows must converge to the same answer.
+        assert dry.outcome == real.outcome, (
+            f"dry-run reported {dry.outcome!r} but real restore "
+            f"reported {real.outcome!r}; inspect → dry-run → "
+            "confirm contract broken."
+        )
+        # Specifically, both should refuse — there's nothing to
+        # restore. Real restore says "no extractable files"; the
+        # dry-run should not be misleadingly "would proceed".
+        assert real.outcome == de.RESTORE_OUTCOME_REFUSED
+        assert dry.outcome == de.RESTORE_OUTCOME_REFUSED
+        # No staging or backup state was produced.
+        assert dry.backup_path == ""
+        assert real.backup_path == ""
+        assert not (target / de.RESTORE_STAGING_DIRNAME).exists()
+
     def test_failed_restore_leaves_existing_data_intact(
         self, configured_data_dir, tmp_path, monkeypatch,
     ):

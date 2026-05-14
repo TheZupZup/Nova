@@ -1020,8 +1020,19 @@ def inspect_export(archive_path: str | os.PathLike[str]) -> InspectionResult:
                         "a directory."
                     )
                     continue
-                file_names.append(member.name)
+                # Only regular files become entries in
+                # ``InspectionResult.files``. Directory members are
+                # structural — they validate (no traversal, no
+                # disallowed top-level) but they are not restorable
+                # in their own right and ``_extract_to_staging``
+                # never adds them to ``extracted``. Including them
+                # here used to let the dry-run preview report an
+                # ``outcome=dry_run`` for a directory-only archive
+                # while the real restore refused with "no
+                # extractable Nova data files", breaking the
+                # inspect → dry-run → confirm contract.
                 if member.isfile():
+                    file_names.append(member.name)
                     total_size += int(member.size)
 
                 if member.name == ARCHIVE_MANIFEST_NAME and member.isfile():
@@ -2384,6 +2395,34 @@ def apply_restore(
     # restore allows it iff the caller explicitly confirms.
     target_nova_db = target_resolved / _paths.DB_FILENAME
     target_has_db = target_nova_db.exists()
+
+    # Refuse upfront when there is nothing to restore. This keeps
+    # dry-run and real-restore in lockstep: the real-restore path
+    # would later hit ``if not extracted:`` inside
+    # ``_extract_to_staging`` and refuse with the same reason;
+    # surfacing the refusal here means the dry-run preview never
+    # says "would proceed" for an archive that holds only
+    # directory members or whose only files were filtered by the
+    # restore allowlist.
+    if not would_restore:
+        return RestoreResult(
+            archive_path=archive_path_s,
+            target_data_dir=str(target_resolved),
+            outcome=RESTORE_OUTCOME_REFUSED,
+            refuse_reason=(
+                "Archive contains no extractable Nova data files."
+            ),
+            confirmed=bool(confirm),
+            restored_files=(),
+            skipped_files=tuple(skipped_in_archive),
+            conflicts=(),
+            backup_path="",
+            backup_size=0,
+            restart_recommended=False,
+            warnings=inspection.warnings,
+            manifest=inspection.manifest,
+        )
+
     if dry_run:
         return RestoreResult(
             archive_path=archive_path_s,
