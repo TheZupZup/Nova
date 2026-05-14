@@ -1514,6 +1514,82 @@ class TestApplyRestoreExcludedContent:
         # Dry-run must never write anything.
         assert list(target.iterdir()) == []
 
+    def test_duplicate_archive_members_are_deduped(self, tmp_path):
+        """An archive with duplicate ``data/nova.db`` entries restores
+        cleanly instead of hitting ENOENT on the second copy attempt.
+
+        Tar files can carry duplicate member names; at extraction
+        time the filesystem keeps the *last* write. The restore
+        engine deduplicates ``extracted`` (and ``would_restore``)
+        accordingly so dry-run and real-restore both report one
+        entry per POSIX-relative path and the copy phase never
+        tries to move the same staging file twice.
+        """
+        archive = tmp_path / "dup.tar.gz"
+        manifest = json.dumps({
+            "format": de.FORMAT_ID,
+            "format_version": de.FORMAT_VERSION,
+            "mode": de.MODE_DATA_ONLY,
+            "files": [],
+            "excluded": [],
+            "created_at": "20260514T120000Z",
+        }).encode()
+        with tarfile.open(archive, mode="w:gz") as tar:
+            mi = tarfile.TarInfo(name=de.ARCHIVE_MANIFEST_NAME)
+            mi.size = len(manifest)
+            mi.mtime = 0
+            tar.addfile(mi, io.BytesIO(manifest))
+            # Two entries with the same archive name. Last write wins.
+            for payload in (b"-- v1 --", b"-- v2 --"):
+                di = tarfile.TarInfo(name="data/nova.db")
+                di.size = len(payload)
+                di.mtime = 0
+                tar.addfile(di, io.BytesIO(payload))
+
+        target = tmp_path / "Target"
+        target.mkdir()
+        out = de.apply_restore(
+            archive, target_data_dir=target, confirm=True,
+        )
+        assert out.outcome == de.RESTORE_OUTCOME_RESTORED, (
+            out.outcome, out.refuse_reason
+        )
+        # Exactly one entry reported, despite the duplicate.
+        assert out.restored_files == ("nova.db",)
+        # The restored content is the last-written payload (tar
+        # semantics: last entry with a given name wins).
+        assert (target / "nova.db").read_bytes() == b"-- v2 --"
+
+    def test_dry_run_dedupes_duplicate_archive_members(self, tmp_path):
+        archive = tmp_path / "dup.tar.gz"
+        manifest = json.dumps({
+            "format": de.FORMAT_ID,
+            "format_version": de.FORMAT_VERSION,
+            "mode": de.MODE_DATA_ONLY,
+            "files": [],
+            "excluded": [],
+            "created_at": "20260514T120000Z",
+        }).encode()
+        with tarfile.open(archive, mode="w:gz") as tar:
+            mi = tarfile.TarInfo(name=de.ARCHIVE_MANIFEST_NAME)
+            mi.size = len(manifest)
+            mi.mtime = 0
+            tar.addfile(mi, io.BytesIO(manifest))
+            for payload in (b"-- a --", b"-- b --"):
+                di = tarfile.TarInfo(name="data/nova.db")
+                di.size = len(payload)
+                di.mtime = 0
+                tar.addfile(di, io.BytesIO(payload))
+        target = tmp_path / "Target"
+        target.mkdir()
+        out = de.apply_restore(
+            archive, target_data_dir=target, dry_run=True,
+        )
+        assert out.outcome == de.RESTORE_OUTCOME_DRY_RUN
+        # Dry-run preview reports one entry, matching what the real
+        # restore would produce.
+        assert out.restored_files == ("nova.db",)
+
 
 # ── CLI: restore subcommand ─────────────────────────────────────────
 

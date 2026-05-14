@@ -1667,6 +1667,7 @@ def _extract_to_staging(
     extraction error.
     """
     extracted: list[str] = []
+    seen_extracted: set[str] = set()
     skipped: list[ExcludedEntry] = []
     try:
         with tarfile.open(archive_path, mode="r:*") as tar:
@@ -1717,6 +1718,20 @@ def _extract_to_staging(
                 if member.isfile():
                     rel = PurePosixPath(member.name)
                     posix_rel = "/".join(rel.parts[1:])
+                    # Duplicate archive members would queue the same
+                    # staging path more than once. The first copy in
+                    # ``_copy_into_target`` succeeds — the second one
+                    # then hits ENOENT because the staged source has
+                    # already been moved into the target. Tar
+                    # semantics already make the last write win at
+                    # extraction time, so we record one entry per
+                    # POSIX-relative path. A well-formed Nova export
+                    # never produces duplicates; the dedup is
+                    # defence-in-depth against externally-generated
+                    # tarballs.
+                    if posix_rel in seen_extracted:
+                        continue
+                    seen_extracted.add(posix_rel)
                     extracted.append(posix_rel)
     except tarfile.TarError as exc:
         return [], skipped, f"Archive could not be extracted: {exc.__class__.__name__}."
@@ -2046,6 +2061,7 @@ def apply_restore(
     # so a crafted archive cannot smuggle in a ``data/.env`` or a
     # ``data/.ssh/id_rsa`` that the exporter would have refused.
     would_restore: list[str] = []
+    would_restore_seen: set[str] = set()
     conflicts_seen: list[str] = []
     skipped_in_archive: list[ExcludedEntry] = []
     has_nova_db_in_archive = False
@@ -2106,11 +2122,21 @@ def apply_restore(
                 warnings=inspection.warnings,
                 manifest=inspection.manifest,
             )
-        would_restore.append(str(relative))
+        rel_str = str(relative)
+        # Deduplicate so a tarball with duplicate members (an
+        # externally-generated archive, defence in depth) reports a
+        # single entry per POSIX path in the dry-run preview. This
+        # matches the extraction-time dedup in
+        # ``_extract_to_staging`` so dry-run and real-restore stay
+        # consistent.
+        if rel_str in would_restore_seen:
+            continue
+        would_restore_seen.add(rel_str)
+        would_restore.append(rel_str)
         if relative.parts and relative.parts[0] == _paths.DB_FILENAME:
             has_nova_db_in_archive = True
         if candidate.exists():
-            conflicts_seen.append(str(relative))
+            conflicts_seen.append(rel_str)
 
     # Existing target nova.db is the most-sensitive overwrite. Phase
     # 2's plan_restore refuses unconditionally; Phase 3's real
