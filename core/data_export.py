@@ -1818,7 +1818,30 @@ def _copy_into_target(
                 f"{exc.strerror or 'OS error'}."
             )
 
-        existed = dst.exists()
+        # Type-gate the destination before any move. A directory,
+        # symlink, fifo, or other special node at ``dst`` would be
+        # accepted by ``os.replace`` for the stash step, but the
+        # rollback path can't put it back over a regular file —
+        # ``os.replace(dir, file)`` errors out, the staging cleanup
+        # then deletes the stash, and the original target data is
+        # permanently lost. Refuse those upfront and unwind whatever
+        # we have committed so far.
+        dst_is_symlink = dst.is_symlink()
+        existed = dst.exists() or dst_is_symlink
+        if existed:
+            if dst_is_symlink:
+                _rollback()
+                return [], [], (
+                    f"Refusing to replace {rel!r}: existing target "
+                    "is a symlink."
+                )
+            if not dst.is_file():
+                _rollback()
+                return [], [], (
+                    f"Refusing to replace {rel!r}: existing target "
+                    "is not a regular file (directory or special "
+                    "node)."
+                )
         stash_path: Optional[Path] = None
         if existed:
             stash_path = stash_dir / Path(*rel.split("/"))

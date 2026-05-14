@@ -1221,6 +1221,80 @@ class TestApplyRestoreSafety:
         # Staging cleaned up.
         assert not (target / de.RESTORE_STAGING_DIRNAME).exists()
 
+    def test_refuses_to_replace_directory_at_target(
+        self, configured_data_dir, tmp_path,
+    ):
+        """A target directory where the archive has a regular file
+        must refuse the restore upfront — never stash the directory.
+
+        ``os.replace`` happily moves a directory into the stash, but
+        the rollback path cannot put a directory back over a regular
+        file (``os.replace(dir, file)`` raises) and the staging
+        cleanup would then permanently delete the stashed
+        directory. Refusing before the first move keeps operator
+        data intact.
+        """
+        result = de.create_data_export()
+        target = tmp_path / "Target"
+        target.mkdir()
+        # Plant a directory at the path where nova.db should land.
+        weird_dir = target / "nova.db"
+        weird_dir.mkdir()
+        weird_payload = weird_dir / "inside.txt"
+        weird_payload.write_text("operator data", encoding="utf-8")
+
+        out = de.apply_restore(
+            result.archive_path,
+            target_data_dir=target,
+            confirm=True,
+        )
+        assert out.outcome == de.RESTORE_OUTCOME_FAILED
+        assert "regular file" in out.refuse_reason.lower()
+        # The weird directory and its contents are untouched.
+        assert weird_dir.is_dir()
+        assert weird_payload.read_text(encoding="utf-8") == "operator data"
+        # Staging cleaned up — no leftover state.
+        assert not (target / de.RESTORE_STAGING_DIRNAME).exists()
+
+    def test_refuses_to_replace_symlink_at_target(
+        self, configured_data_dir, tmp_path,
+    ):
+        """A symlink at the target path must refuse the restore.
+
+        ``os.replace`` on top of a symlink replaces the symlink
+        itself, not the file it points at — which would silently
+        relink whatever lives at the link target. The restore
+        engine therefore refuses to touch any symlink and unwinds
+        whatever it had committed so far.
+
+        The symlink resolves *inside* the target so the earlier
+        containment check in ``apply_restore`` passes — this is the
+        test that pins ``_copy_into_target``'s own type-gate.
+        """
+        result = de.create_data_export()
+        target = tmp_path / "Target"
+        target.mkdir()
+        real = target / "actual-content.txt"
+        real.write_text("inside content", encoding="utf-8")
+        link = target / "nova.db"
+        try:
+            link.symlink_to(real)
+        except (OSError, NotImplementedError):
+            pytest.skip("symlink creation unsupported on this host")
+
+        out = de.apply_restore(
+            result.archive_path,
+            target_data_dir=target,
+            confirm=True,
+        )
+        assert out.outcome == de.RESTORE_OUTCOME_FAILED
+        assert "symlink" in out.refuse_reason.lower()
+        # Link and its target are both intact.
+        assert link.is_symlink()
+        assert real.read_text(encoding="utf-8") == "inside content"
+        # Staging cleaned up.
+        assert not (target / de.RESTORE_STAGING_DIRNAME).exists()
+
 
 class TestApplyRestoreExcludedContent:
     """Hostile-extra entries in the archive are skipped, not extracted."""
