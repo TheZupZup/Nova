@@ -14,16 +14,29 @@ other persistent runtime files. When the environment variable is unset
 relative to the current working directory, exactly as before this
 module existed.
 
+The module also exposes :func:`init_workspace` and a small CLI
+entry point (``python -m core.paths init-workspace <parent>``) that
+scaffolds the optional "Nova Portable Workspace" layout — a
+self-contained parent folder that bundles the Git checkout, data
+directory, logs, backups, config, and helper scripts. See
+``docs/portable-workspace.md`` for the full walkthrough.
+
 Design contracts:
 
 * Path resolution always returns ``pathlib.Path`` objects so callers
   do not have to think about leading slashes or trailing separators.
-* :func:`prepare` is the single side-effecting function. It creates
-  Nova-owned subdirectories only when ``NOVA_DATA_DIR`` is set, and it
-  raises a clear :class:`RuntimeError` if the directory cannot be used.
-  When ``NOVA_DATA_DIR`` is unset, :func:`prepare` is a strict no-op
-  so existing installs and tests that point Nova at a ``tmp_path`` are
+* :func:`prepare` is the single side-effecting function for runtime
+  path setup. It creates Nova-owned subdirectories only when
+  ``NOVA_DATA_DIR`` is set, and it raises a clear
+  :class:`RuntimeError` if the directory cannot be used. When
+  ``NOVA_DATA_DIR`` is unset, :func:`prepare` is a strict no-op so
+  existing installs and tests that point Nova at a ``tmp_path`` are
   not affected.
+* :func:`init_workspace` is the side-effecting helper for the
+  portable layout. It is **purely additive**: it creates missing
+  directories with ``mkdir -p`` semantics, writes a single example
+  env file when it does not already exist, and never overwrites,
+  moves, or deletes anything.
 * No data is moved, copied, or deleted by this module. Migration from
   a legacy ``./nova.db`` is documented in ``docs/data-directory.md``
   and remains a manual operator step in Phase 1.
@@ -234,3 +247,269 @@ def prepare() -> Path | None:
             ) from exc
 
     return root
+
+
+# ── Nova Portable Workspace ─────────────────────────────────────────
+#
+# The "portable workspace" is an optional layout that bundles Nova's
+# Git checkout, runtime data, logs, backups, config, and helper
+# scripts in a single parent folder so the whole thing can be moved
+# between disks or machines as one unit. The layout is purely a
+# convention enforced by :func:`init_workspace`:
+#
+#     <parent>/
+#       app/                # Git checkout goes here (operator clones)
+#       data/               # NOVA_DATA_DIR points here
+#       logs/               # local log files (future use)
+#       backups/            # explicit backup packs
+#       config/             # nova.env, nova.env.example
+#       scripts/            # operator-owned helper scripts
+#
+# Private data lives outside ``app/`` so it cannot accidentally be
+# committed to Git. Nothing in this module assumes the operator
+# placed the checkout under ``app/``; if they put it elsewhere, the
+# rest of the layout still works.
+
+WORKSPACE_APP_SUBDIR = "app"
+WORKSPACE_DATA_SUBDIR = "data"
+WORKSPACE_LOGS_SUBDIR = "logs"
+WORKSPACE_BACKUPS_SUBDIR = "backups"
+WORKSPACE_CONFIG_SUBDIR = "config"
+WORKSPACE_SCRIPTS_SUBDIR = "scripts"
+
+# ``app/`` is intentionally created so the layout is visible after
+# init, but ``init_workspace`` never clones anything into it.
+_WORKSPACE_SUBDIRS: tuple[str, ...] = (
+    WORKSPACE_APP_SUBDIR,
+    WORKSPACE_DATA_SUBDIR,
+    WORKSPACE_LOGS_SUBDIR,
+    WORKSPACE_BACKUPS_SUBDIR,
+    WORKSPACE_CONFIG_SUBDIR,
+    WORKSPACE_SCRIPTS_SUBDIR,
+)
+
+WORKSPACE_ENV_EXAMPLE_NAME = "nova.env.example"
+
+
+def _workspace_env_example_body(data_dir: Path) -> str:
+    """Return the contents of ``config/nova.env.example``.
+
+    The body is deliberately minimal: a single ``NOVA_DATA_DIR=`` line
+    that points at the workspace's ``data/`` directory, plus comments
+    explaining how systemd consumes the file via ``EnvironmentFile=``.
+    Operators copy the example to ``nova.env`` and edit from there.
+    """
+    return (
+        "# Nova Portable Workspace — example environment file.\n"
+        "#\n"
+        "# Copy this file to nova.env in the same directory, then edit\n"
+        "# values as needed. systemd can read nova.env directly via:\n"
+        "#\n"
+        "#     [Service]\n"
+        f"#     EnvironmentFile={data_dir.parent / WORKSPACE_CONFIG_SUBDIR / 'nova.env'}\n"
+        "#\n"
+        "# NOVA_DATA_DIR points at this workspace's data/ subdirectory\n"
+        "# so nova.db, backups, exports, memory-packs, and logs all\n"
+        "# live inside the portable workspace.\n"
+        f"NOVA_DATA_DIR={data_dir}\n"
+    )
+
+
+@dataclass(frozen=True)
+class WorkspaceInitResult:
+    """Read-only snapshot of what :func:`init_workspace` did.
+
+    The dataclass is returned so callers (the CLI, tests, future
+    admin endpoints) can render an honest summary without re-stating
+    the filesystem. ``created_*`` lists the entries this call created;
+    ``existing_*`` lists the entries that were already present and
+    therefore left untouched. The function never overwrites, so an
+    entry can only appear in one list.
+    """
+
+    root: Path
+    created_dirs: tuple[Path, ...]
+    existing_dirs: tuple[Path, ...]
+    created_files: tuple[Path, ...]
+    existing_files: tuple[Path, ...]
+
+    @property
+    def data_dir(self) -> Path:
+        """Absolute path of the workspace ``data/`` subdirectory."""
+        return self.root / WORKSPACE_DATA_SUBDIR
+
+    @property
+    def env_example_path(self) -> Path:
+        """Absolute path of the generated ``config/nova.env.example``."""
+        return (
+            self.root / WORKSPACE_CONFIG_SUBDIR / WORKSPACE_ENV_EXAMPLE_NAME
+        )
+
+
+def init_workspace(parent: str | os.PathLike[str]) -> WorkspaceInitResult:
+    """Scaffold a Nova Portable Workspace layout under ``parent``.
+
+    Creates the directory structure documented in
+    ``docs/portable-workspace.md`` (``app/``, ``data/``, ``logs/``,
+    ``backups/``, ``config/``, ``scripts/``) and writes a single
+    example env file at ``config/nova.env.example`` pointing at the
+    workspace's ``data/`` directory.
+
+    The helper is **safe to run repeatedly**:
+
+    * Existing directories are left in place; their contents are not
+      touched.
+    * The example env file is only written when it does not already
+      exist. An operator who customised it keeps their copy.
+    * Nothing else is created, copied, moved, or deleted.
+
+    Raises :class:`RuntimeError` if the parent path exists but is not
+    a directory, or if any required subdirectory cannot be created.
+    The error message names the offending path so the operator can
+    fix the underlying mount or permission issue.
+    """
+    if parent is None or (isinstance(parent, str) and not parent.strip()):
+        raise RuntimeError(
+            "init_workspace requires a non-empty parent path."
+        )
+
+    root = Path(os.fspath(parent)).expanduser()
+
+    try:
+        root.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise RuntimeError(
+            f"Nova workspace parent {root!s} could not be created: "
+            f"{exc.strerror or exc}"
+        ) from exc
+
+    if not root.is_dir():
+        raise RuntimeError(
+            f"Nova workspace parent {root!s} exists but is not a directory."
+        )
+
+    created_dirs: list[Path] = []
+    existing_dirs: list[Path] = []
+    for name in _WORKSPACE_SUBDIRS:
+        sub = root / name
+        if sub.exists():
+            if not sub.is_dir():
+                raise RuntimeError(
+                    f"Nova workspace entry {sub!s} exists but is not a "
+                    "directory."
+                )
+            existing_dirs.append(sub)
+            continue
+        try:
+            sub.mkdir(parents=True, exist_ok=False)
+        except OSError as exc:
+            raise RuntimeError(
+                f"Nova workspace subdirectory {sub!s} could not be "
+                f"created: {exc.strerror or exc}"
+            ) from exc
+        created_dirs.append(sub)
+
+    created_files: list[Path] = []
+    existing_files: list[Path] = []
+    env_example = root / WORKSPACE_CONFIG_SUBDIR / WORKSPACE_ENV_EXAMPLE_NAME
+    if env_example.exists():
+        existing_files.append(env_example)
+    else:
+        body = _workspace_env_example_body(root / WORKSPACE_DATA_SUBDIR)
+        try:
+            env_example.write_text(body, encoding="utf-8")
+        except OSError as exc:
+            raise RuntimeError(
+                f"Nova workspace env example {env_example!s} could not "
+                f"be written: {exc.strerror or exc}"
+            ) from exc
+        created_files.append(env_example)
+
+    return WorkspaceInitResult(
+        root=root,
+        created_dirs=tuple(created_dirs),
+        existing_dirs=tuple(existing_dirs),
+        created_files=tuple(created_files),
+        existing_files=tuple(existing_files),
+    )
+
+
+# ── CLI entry point ─────────────────────────────────────────────────
+#
+# ``python -m core.paths init-workspace <parent>`` runs
+# :func:`init_workspace` and prints a summary. Kept tiny on purpose —
+# the heavy lifting lives in the function above so it can be unit
+# tested without spawning a subprocess.
+
+
+def _format_workspace_summary(result: WorkspaceInitResult) -> str:
+    """Render a human-readable summary of an :class:`WorkspaceInitResult`."""
+    lines = [f"Nova Portable Workspace ready at {result.root}"]
+    if result.created_dirs:
+        lines.append("  created directories:")
+        for path in result.created_dirs:
+            lines.append(f"    + {path.relative_to(result.root)}/")
+    if result.existing_dirs:
+        lines.append("  existing directories (left untouched):")
+        for path in result.existing_dirs:
+            lines.append(f"    = {path.relative_to(result.root)}/")
+    if result.created_files:
+        lines.append("  created files:")
+        for path in result.created_files:
+            lines.append(f"    + {path.relative_to(result.root)}")
+    if result.existing_files:
+        lines.append("  existing files (left untouched):")
+        for path in result.existing_files:
+            lines.append(f"    = {path.relative_to(result.root)}")
+    lines.append("")
+    lines.append(
+        f"Next: clone Nova into {result.root / WORKSPACE_APP_SUBDIR}/Nova,"
+    )
+    lines.append(
+        f"      copy {result.env_example_path.relative_to(result.root)} "
+        f"to {(result.root / WORKSPACE_CONFIG_SUBDIR / 'nova.env').relative_to(result.root)},"
+    )
+    lines.append(
+        "      and point your service at the workspace's config/nova.env."
+    )
+    lines.append("See docs/portable-workspace.md for the full walkthrough.")
+    return "\n".join(lines)
+
+
+def _cli(argv: list[str]) -> int:
+    """Parse ``argv`` and dispatch the workspace-init command.
+
+    Returns a POSIX-style exit code. The function is split out so
+    tests can drive the CLI without ``subprocess``.
+    """
+    if len(argv) >= 2 and argv[0] == "init-workspace":
+        parent = argv[1]
+        try:
+            result = init_workspace(parent)
+        except RuntimeError as exc:
+            print(f"error: {exc}", file=_stderr())
+            return 1
+        print(_format_workspace_summary(result))
+        return 0
+
+    print(
+        "usage: python -m core.paths init-workspace <parent>\n\n"
+        "Scaffold a Nova Portable Workspace under <parent>. Safe to "
+        "run repeatedly;\nexisting files are never overwritten. See "
+        "docs/portable-workspace.md.",
+        file=_stderr(),
+    )
+    return 2
+
+
+def _stderr():
+    # Indirection so tests can monkeypatch the stderr target.
+    import sys
+
+    return sys.stderr
+
+
+if __name__ == "__main__":  # pragma: no cover - exercised via tests
+    import sys
+
+    sys.exit(_cli(sys.argv[1:]))

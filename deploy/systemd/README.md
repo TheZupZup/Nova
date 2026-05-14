@@ -127,6 +127,13 @@ See [`docs/data-directory.md`](../../docs/data-directory.md) for the
 manual database copy procedure and the full layout under
 `NOVA_DATA_DIR`.
 
+If you'd rather keep the checkout, data, config, logs, and backups
+under a single parent folder (so the whole install moves as one
+unit), see
+[`docs/portable-workspace.md`](../../docs/portable-workspace.md).
+That guide adds an `EnvironmentFile=` based unit shape on top of
+this hardened example.
+
 ## Installing the hardened unit
 
 1. Edit `deploy/systemd/nova.service` and replace the placeholders:

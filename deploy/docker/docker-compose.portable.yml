@@ -1,0 +1,60 @@
+# Nova — Portable Workspace docker-compose example.
+#
+# This example pairs with the layout documented in
+# docs/portable-workspace.md. Unlike the project's top-level
+# docker-compose.yml (which uses a named Docker volume), this file
+# uses **host bind mounts** under a single parent directory, so the
+# whole workspace — data, config, logs — moves as one unit.
+#
+# Replace /mnt/fastdata/NovaPortable with the absolute path of your
+# workspace before running `docker compose up -d`.
+#
+# Safety rules (also documented in the guide):
+#   * No Docker socket mount. The container has no need for it.
+#   * No --privileged and no extra capabilities.
+#   * No mounting of /, $HOME, or arbitrary host directories.
+#   * No tokens baked into the image. Use env_file: instead.
+#   * Ollama models stay outside this container. Nova reaches Ollama
+#     through OLLAMA_HOST over the network.
+
+services:
+  nova:
+    image: ghcr.io/thezupzup/nova:latest
+    # To build from a checkout under the workspace, comment `image:`
+    # above and uncomment:
+    # build: ./app/Nova
+    container_name: nova
+    restart: unless-stopped
+
+    # Reads NOVA_USERNAME, NOVA_PASSWORD, NOVA_SECRET_KEY, and any
+    # integration tokens from the host-side env file. Keep that file
+    # chmod 600 — it holds the secrets the image deliberately does
+    # not contain.
+    env_file:
+      - /mnt/fastdata/NovaPortable/config/nova.env
+
+    environment:
+      # Inside the container, Nova always reads its data from /data.
+      # The host directory is bound below.
+      NOVA_DATA_DIR: /data
+      # On Linux this resolves thanks to the extra_hosts entry below.
+      # On macOS / Windows Docker Desktop it resolves natively.
+      OLLAMA_HOST: http://host.docker.internal:11434
+
+    volumes:
+      # Live database, sidecar backups, exports, memory-packs.
+      - /mnt/fastdata/NovaPortable/data:/data
+      # Optional read-only config view (future tooling may consult it).
+      - /mnt/fastdata/NovaPortable/config:/config:ro
+      # Optional file logs. Nova does not write here today; the mount
+      # is here so a future logging feature has a stable destination.
+      - /mnt/fastdata/NovaPortable/logs:/logs
+
+    ports:
+      # Host:Container. Change the host side if 8080 is already in use.
+      - "8080:8080"
+
+    extra_hosts:
+      # Lets the container reach an Ollama running on the Docker host
+      # on Linux. Harmless on macOS / Windows / other OSes.
+      - "host.docker.internal:host-gateway"

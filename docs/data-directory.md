@@ -5,6 +5,12 @@ and a few reserved subdirectories — in a single, configurable
 directory. This document explains the layout, how to move existing
 data onto a dedicated disk, and how to back it up and restore it.
 
+> **Looking for a bigger layout?** If you want code, data, config,
+> logs, and backups all under one parent folder that you can move as
+> a single unit (and that works for both systemd and Docker), see
+> [`docs/portable-workspace.md`](portable-workspace.md). That guide
+> builds on the `NOVA_DATA_DIR` foundation described here.
+
 This is the **Phase 1 foundation**. Nova does not auto-migrate, does
 not auto-back up, and does not run a wizard. Moving data is a
 deliberate operator step that you can review before it happens and

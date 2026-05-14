@@ -2,6 +2,15 @@
 
 Nova ships with a `Dockerfile` and `docker-compose.yml` for self-hosted deployments. This is a **local / self-hosted** setup: there is no cloud component, no remote sync, and no auto-deploy. You run Nova on a machine you control, talking to an Ollama you control.
 
+> **Want one parent folder per install?** If you'd rather use **host
+> bind mounts** under a single workspace directory (so the data,
+> config, logs, and backups all live next to each other and move as
+> one unit), see [`docs/portable-workspace.md`](portable-workspace.md)
+> and the ready-to-edit
+> [`deploy/docker/docker-compose.portable.yml`](../deploy/docker/docker-compose.portable.yml).
+> The quickstart on this page uses a named Docker volume instead;
+> both are supported.
+
 > **Warning.** The container exposes Nova's web UI on the network. Do not publish port 8080 to the public internet without a reverse proxy and TLS in front of it. Defaults in `.env.example` are intentionally weak; change them before the first start.
 
 ## What ends up where

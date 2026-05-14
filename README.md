@@ -162,8 +162,10 @@ static/
   index.html          Web interface
 
 deploy/systemd/       Hardened nova.service + walkthrough
+deploy/docker/        Portable-workspace docker-compose example
 docker/               Docker entrypoint
 docs/                 Roadmaps and deployment guides
+scripts/              Operator helper scripts
 tests/                Pytest test suite
 ```
 
@@ -777,6 +779,29 @@ stack persists `nova.db` in a Docker volume, keeps Ollama external
 `docker compose pull`. See [docs/docker.md](docs/docker.md) for the
 full guide.
 
+### Portable workspace (systemd or Docker)
+
+If you'd rather keep the Git checkout, the database, the config, the
+logs, and the backups all under one parent folder that can be moved
+between disks or machines as a single unit, scaffold a **Nova
+Portable Workspace**:
+
+```bash
+python -m core.paths init-workspace /mnt/fastdata/NovaPortable
+# or:
+scripts/init-portable-workspace.sh /mnt/fastdata/NovaPortable
+```
+
+The helper creates `data/`, `logs/`, `backups/`, `config/`,
+`scripts/`, and `app/` under the parent and writes a single
+`config/nova.env.example` pointing `NOVA_DATA_DIR` at the workspace.
+It is safe to re-run; existing files are never overwritten.
+
+See [`docs/portable-workspace.md`](docs/portable-workspace.md) for
+the full walkthrough including systemd wiring, the Docker / compose
+shape ([`deploy/docker/docker-compose.portable.yml`](deploy/docker/docker-compose.portable.yml)),
+and the move / backup / restore procedures.
+
 ### Configuration
 
 All configuration is read from `.env` at startup. Key variables:
@@ -786,7 +811,7 @@ All configuration is read from `.env` at startup. Key variables:
 | `NOVA_USERNAME` | — | Login username for the seeded admin |
 | `NOVA_PASSWORD` | — | Login password for the seeded admin |
 | `NOVA_SECRET_KEY` | — | JWT signing secret |
-| `NOVA_DATA_DIR` | — | Optional absolute path that holds `nova.db`, backups, and reserved subdirectories. Blank = legacy layout (DB next to the checkout). See [`docs/data-directory.md`](docs/data-directory.md). |
+| `NOVA_DATA_DIR` | — | Optional absolute path that holds `nova.db`, backups, and reserved subdirectories. Blank = legacy layout (DB next to the checkout). See [`docs/data-directory.md`](docs/data-directory.md), or [`docs/portable-workspace.md`](docs/portable-workspace.md) for a self-contained parent layout that works for both systemd and Docker. |
 | `OLLAMA_HOST` | `http://localhost:11434` | Ollama API base URL |
 | `NOVA_AUTO_WEB_LEARNING` | `false` | Enable background RSS/web learning |
 | `LOGIN_RATE_LIMIT_MAX` | `5` | Max login attempts per window |

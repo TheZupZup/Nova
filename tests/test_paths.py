@@ -379,6 +379,270 @@ class TestModuleIntegration:
         assert row[0] == "yes"
 
 
+# ── Nova Portable Workspace ─────────────────────────────────────────
+
+
+class TestInitWorkspace:
+    """``init_workspace`` scaffolds the portable layout idempotently.
+
+    The contract is documented in ``docs/portable-workspace.md``:
+    create the standard subdirectories, write a single example env
+    file, and never overwrite anything that already exists.
+    """
+
+    def test_creates_expected_subdirectories(self, tmp_path):
+        parent = tmp_path / "NovaPortable"
+        result = core_paths.init_workspace(parent)
+
+        for name in ("app", "data", "logs", "backups", "config", "scripts"):
+            assert (parent / name).is_dir(), f"{name} should be created"
+
+        # The result must report every created directory exactly once.
+        assert {p.name for p in result.created_dirs} == {
+            "app", "data", "logs", "backups", "config", "scripts",
+        }
+        assert result.existing_dirs == ()
+
+    def test_writes_env_example_with_pointer_to_data_dir(self, tmp_path):
+        parent = tmp_path / "NovaPortable"
+        result = core_paths.init_workspace(parent)
+
+        env_example = parent / "config" / "nova.env.example"
+        assert env_example.is_file()
+        body = env_example.read_text(encoding="utf-8")
+
+        # The example must contain a NOVA_DATA_DIR line pointing at the
+        # workspace's data/ subdirectory — that is the entire point of
+        # the helper.
+        expected_line = f"NOVA_DATA_DIR={parent / 'data'}"
+        assert expected_line in body
+
+        # And the result object should agree on the path.
+        assert result.env_example_path == env_example
+        assert env_example in result.created_files
+        assert result.data_dir == parent / "data"
+
+    def test_is_idempotent(self, tmp_path):
+        parent = tmp_path / "NovaPortable"
+
+        first = core_paths.init_workspace(parent)
+        second = core_paths.init_workspace(parent)
+
+        # Second run reports no new directories and no new files.
+        assert second.created_dirs == ()
+        assert second.created_files == ()
+        # Both runs see the same set of paths under the parent.
+        assert {p.name for p in first.created_dirs} == {
+            p.name for p in second.existing_dirs
+        }
+
+    def test_does_not_overwrite_existing_env_example(self, tmp_path):
+        parent = tmp_path / "NovaPortable"
+        (parent / "config").mkdir(parents=True)
+        env_example = parent / "config" / "nova.env.example"
+        env_example.write_text("# operator-customised\n", encoding="utf-8")
+
+        result = core_paths.init_workspace(parent)
+
+        # The operator's customised file must survive bit-for-bit.
+        assert env_example.read_text(encoding="utf-8") == (
+            "# operator-customised\n"
+        )
+        assert env_example in result.existing_files
+        assert env_example not in result.created_files
+
+    def test_preserves_existing_directory_contents(self, tmp_path):
+        parent = tmp_path / "NovaPortable"
+        (parent / "data").mkdir(parents=True)
+        # Drop a marker into data/ to prove init does not nuke it.
+        marker = parent / "data" / "keep.txt"
+        marker.write_text("hi", encoding="utf-8")
+
+        core_paths.init_workspace(parent)
+
+        assert marker.exists()
+        assert marker.read_text(encoding="utf-8") == "hi"
+
+    def test_rejects_non_directory_subpath(self, tmp_path):
+        parent = tmp_path / "NovaPortable"
+        parent.mkdir()
+        # Put a regular file where ``data/`` is expected to land.
+        (parent / "data").write_text("not a dir", encoding="utf-8")
+
+        with pytest.raises(RuntimeError) as exc_info:
+            core_paths.init_workspace(parent)
+        assert "data" in str(exc_info.value)
+
+    def test_rejects_non_directory_parent(self, tmp_path):
+        # If the parent path exists as a regular file, fail clearly
+        # rather than trying to mkdir(parents=True) over it.
+        parent_file = tmp_path / "NovaPortable"
+        parent_file.write_text("nope", encoding="utf-8")
+
+        with pytest.raises(RuntimeError) as exc_info:
+            core_paths.init_workspace(parent_file)
+        assert str(parent_file) in str(exc_info.value)
+
+    def test_rejects_empty_parent(self):
+        with pytest.raises(RuntimeError) as exc_info:
+            core_paths.init_workspace("")
+        assert "parent path" in str(exc_info.value).lower()
+
+    def test_rejects_whitespace_parent(self):
+        with pytest.raises(RuntimeError):
+            core_paths.init_workspace("   ")
+
+    def test_expands_user_home(self, monkeypatch, tmp_path):
+        # ``~`` should expand against the user's home — the same
+        # contract ``configured_data_dir`` honours.
+        monkeypatch.setenv("HOME", str(tmp_path))
+        result = core_paths.init_workspace("~/NovaPortable")
+        assert result.root == tmp_path / "NovaPortable"
+        assert (tmp_path / "NovaPortable" / "data").is_dir()
+
+    def test_does_not_set_environment_variable(self, monkeypatch, tmp_path):
+        # ``init_workspace`` is read-mostly: it must not silently
+        # export NOVA_DATA_DIR for the current process. The operator
+        # wires that up via systemd / docker / .env, not Python.
+        monkeypatch.delenv(core_paths.ENV_VAR, raising=False)
+        core_paths.init_workspace(tmp_path / "NovaPortable")
+        assert core_paths.ENV_VAR not in os.environ
+
+    def test_does_not_clone_or_touch_app_directory(self, tmp_path):
+        # ``app/`` is created so the layout is visible, but the helper
+        # must not download, clone, or otherwise populate it.
+        parent = tmp_path / "NovaPortable"
+        core_paths.init_workspace(parent)
+
+        app_dir = parent / "app"
+        assert app_dir.is_dir()
+        # Empty: no Nova checkout, no .venv, no models.
+        assert list(app_dir.iterdir()) == []
+
+
+class TestInitWorkspaceCLI:
+    """The ``python -m core.paths init-workspace`` entry point.
+
+    Driven through :func:`core.paths._cli` so the assertions do not
+    have to spawn a subprocess.
+    """
+
+    def test_init_workspace_command_succeeds(self, tmp_path, capsys):
+        parent = tmp_path / "NovaPortable"
+        rc = core_paths._cli(["init-workspace", str(parent)])
+        assert rc == 0
+        assert (parent / "data").is_dir()
+        out = capsys.readouterr().out
+        assert "Nova Portable Workspace ready" in out
+        assert str(parent) in out
+
+    def test_init_workspace_command_is_idempotent(self, tmp_path, capsys):
+        parent = tmp_path / "NovaPortable"
+        assert core_paths._cli(["init-workspace", str(parent)]) == 0
+        capsys.readouterr()  # discard first-run output
+        rc = core_paths._cli(["init-workspace", str(parent)])
+        assert rc == 0
+        out = capsys.readouterr().out
+        # On the second run, every subdirectory should be reported as
+        # existing rather than newly created.
+        assert "existing directories" in out
+
+    def test_init_workspace_command_reports_invalid_target(
+        self, tmp_path, capsys
+    ):
+        # A regular file at the workspace path is a clear, fixable
+        # error — the CLI must return 1 and explain why.
+        bad = tmp_path / "NovaPortable"
+        bad.write_text("not a dir", encoding="utf-8")
+
+        rc = core_paths._cli(["init-workspace", str(bad)])
+        assert rc == 1
+        err = capsys.readouterr().err
+        assert "error" in err.lower()
+        assert str(bad) in err
+
+    def test_unknown_command_prints_usage(self, capsys):
+        rc = core_paths._cli([])
+        assert rc == 2
+        err = capsys.readouterr().err
+        assert "init-workspace" in err
+        assert "usage" in err.lower()
+
+
+class TestPortableDockerComposeExample:
+    """The shipped portable docker-compose example pins safety rules.
+
+    The file is read as text so we do not depend on PyYAML being
+    installed. Each assertion encodes a rule documented in
+    ``docs/portable-workspace.md``.
+    """
+
+    @staticmethod
+    def _compose_path() -> Path:
+        return (
+            Path(__file__).resolve().parents[1]
+            / "deploy" / "docker" / "docker-compose.portable.yml"
+        )
+
+    def test_compose_file_exists(self):
+        assert self._compose_path().is_file()
+
+    def test_does_not_mount_docker_socket(self):
+        body = self._compose_path().read_text(encoding="utf-8")
+        assert "docker.sock" not in body, (
+            "Portable compose must not mount the Docker socket."
+        )
+
+    def test_does_not_run_privileged(self):
+        body = self._compose_path().read_text(encoding="utf-8")
+        assert "privileged: true" not in body
+        # cap_add is acceptable in principle but should not appear in
+        # the example — Nova does not need any extra capability.
+        assert "cap_add" not in body
+
+    def test_does_not_mount_root_or_home(self):
+        # Strip comments so safety rules that *mention* dangerous mounts
+        # (e.g. "no $HOME mount") don't trigger a false positive. Then
+        # inspect only the volume-list entries (lines whose stripped
+        # form starts with ``-``).
+        body = self._compose_path().read_text(encoding="utf-8")
+        volume_lines = [
+            line.strip()
+            for line in body.splitlines()
+            if not line.lstrip().startswith("#")
+            and line.strip().startswith("-")
+        ]
+        for entry in volume_lines:
+            assert not entry.startswith("- /:"), (
+                f"Portable compose must not mount the host root: {entry!r}"
+            )
+            assert "$HOME" not in entry, (
+                f"Portable compose must not mount $HOME: {entry!r}"
+            )
+            assert not entry.startswith("- /root"), (
+                f"Portable compose must not mount /root: {entry!r}"
+            )
+            assert not entry.startswith("- /home"), (
+                f"Portable compose must not mount /home: {entry!r}"
+            )
+
+    def test_data_dir_points_at_container_data(self):
+        body = self._compose_path().read_text(encoding="utf-8")
+        assert "NOVA_DATA_DIR: /data" in body, (
+            "Portable compose should pin NOVA_DATA_DIR=/data inside the "
+            "container so the host path can change without rebuilding "
+            "the image."
+        )
+
+    def test_data_volume_is_a_bind_mount(self):
+        body = self._compose_path().read_text(encoding="utf-8")
+        # A bind mount looks like "- <host_path>:/data"; a named
+        # volume would be "- nova-data:/data". The portable layout
+        # uses bind mounts.
+        assert ":/data" in body
+        assert "- nova-data:" not in body
+
+
 # ── stability of path helpers ───────────────────────────────────────
 
 
