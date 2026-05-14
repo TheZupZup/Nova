@@ -982,19 +982,23 @@ def inspect_export(archive_path: str | os.PathLike[str]) -> InspectionResult:
                         f"Disallowed member type for {member.name!r}."
                     )
                     continue
-                # Symlinks must point at a name still inside the
-                # archive — not an absolute path, no ``..``.
+                # Symlinks are refused outright. Nova exports use
+                # ``tarfile.open(..., dereference=True)`` so a
+                # Nova-built archive never contains a symlink entry
+                # — every link is resolved at build time. An archive
+                # with a symlink is therefore anomalous, and
+                # ``_extract_to_staging`` would silently skip it,
+                # which would make the dry-run plan (built from
+                # ``inspection.files``) disagree with the actual
+                # restore. Refuse it at inspection time so all three
+                # surfaces (inspect, dry-run, real restore) agree.
                 if member.issym():
-                    target = member.linkname or ""
-                    if (
-                        not target
-                        or target.startswith("/")
-                        or ".." in PurePosixPath(target).parts
-                    ):
-                        errors.append(
-                            f"Unsafe symlink target for {member.name!r}."
-                        )
-                        continue
+                    errors.append(
+                        f"Archive contains a symlink member "
+                        f"({member.name!r}). Nova exports never "
+                        "contain symlinks."
+                    )
+                    continue
                 parts = PurePosixPath(member.name).parts
                 if not parts:
                     continue
@@ -1760,6 +1764,50 @@ def _extract_to_staging(
     return extracted, skipped, None
 
 
+def _newly_created_parents(
+    dst: Path, target_root: Path,
+) -> list[Path]:
+    """Return the parent directories that would be newly created.
+
+    Walks from ``dst.parent`` upward, collecting every component
+    that does not yet exist on disk, and stops at ``target_root``
+    (or at the filesystem root). The returned list is in
+    outer-most-first order, which is the order
+    ``Path.mkdir(parents=True)`` would create them. Callers reverse
+    the list for deepest-first removal during rollback.
+
+    The function never raises; OS errors during stat short-circuit
+    and return whatever was collected so far.
+    """
+    target_resolved = target_root.resolve()
+    needed: list[Path] = []
+    p = dst.parent
+    while True:
+        try:
+            if p.exists():
+                break
+        except OSError:
+            break
+        try:
+            p_resolved = p.resolve(strict=False)
+        except OSError:
+            break
+        if p_resolved == target_resolved:
+            break
+        # Defence in depth: stop if we have walked above the target
+        # root somehow (only possible with symlink trickery).
+        try:
+            p_resolved.relative_to(target_resolved)
+        except ValueError:
+            break
+        needed.append(p)
+        new_parent = p.parent
+        if new_parent == p:
+            break
+        p = new_parent
+    return list(reversed(needed))
+
+
 def _copy_into_target(
     staging: Path,
     target_root: Path,
@@ -1785,8 +1833,11 @@ def _copy_into_target(
     On any failure the function walks back over the successful
     moves: each ``.replaced-originals`` file is moved back to its
     original target path; files that did not exist before are
-    deleted. The pre-restore backup (created earlier by
-    :func:`_create_pre_restore_backup`) remains as the second
+    deleted. Newly-created parent directories (created by
+    ``dst.parent.mkdir(parents=True)``) are also rmdir'd in
+    deepest-first order so the target tree returns bit-for-bit to
+    its pre-restore shape. The pre-restore backup (created earlier
+    by :func:`_create_pre_restore_backup`) remains as the second
     line of defence if even the rollback fails.
 
     The returned ``restored`` / ``conflicts`` lists are intentionally
@@ -1807,24 +1858,49 @@ def _copy_into_target(
         )
 
     # Successfully-committed moves so a later failure can roll back.
-    # Each entry is ``(dst, stash_path | None)``. ``stash_path is
-    # None`` means "the file did not exist before; rollback should
-    # delete it".
-    committed: list[tuple[Path, Optional[Path]]] = []
+    # Each entry is ``(dst, stash_path | None, created_dirs)``.
+    # ``stash_path is None`` means "the file did not exist before;
+    # rollback should delete it". ``created_dirs`` is the (possibly
+    # empty) list of parent directories ``dst.parent.mkdir`` brought
+    # into existence for this commit; rollback rmdirs them in
+    # deepest-first order.
+    committed: list[tuple[Path, Optional[Path], list[Path]]] = []
+    # Parents that the *in-flight* iteration brought into existence
+    # but haven't yet been committed. The rollback path consumes
+    # this list too so a failure between mkdir and the final
+    # ``os.replace`` doesn't leave empty directories behind.
+    in_flight_dirs: list[Path] = []
 
     def _rollback() -> None:
         # Walk in reverse so a newly-created directory tree unwinds
         # in the right order. Best-effort: a failure here leaves
         # the pre-restore backup as the operator-facing recovery.
-        for dst_path, stash in reversed(committed):
+        for dst_path, stash, created_dirs in reversed(committed):
             if stash is None:
                 try:
                     dst_path.unlink(missing_ok=True)
                 except OSError:
                     pass
-                continue
+            else:
+                try:
+                    os.replace(str(stash), str(dst_path))
+                except OSError:
+                    pass
+            # Remove parent directories we created for this commit,
+            # deepest first. ``rmdir`` only succeeds on empty
+            # directories so a parent that picked up another
+            # committed file in the same run is left alone.
+            for new_dir in reversed(created_dirs):
+                try:
+                    new_dir.rmdir()
+                except OSError:
+                    pass
+        # Mop up any in-flight directories that were created for
+        # the failing iteration but never made it into
+        # ``committed``.
+        for new_dir in reversed(in_flight_dirs):
             try:
-                os.replace(str(stash), str(dst_path))
+                new_dir.rmdir()
             except OSError:
                 pass
 
@@ -1841,6 +1917,13 @@ def _copy_into_target(
                 f"Refusing to write {rel!r}: it would land outside "
                 "the target data directory."
             )
+        # Snapshot which parent directories don't yet exist so
+        # rollback can rmdir them. Must be computed *before* the
+        # mkdir call below — afterwards every parent exists. The
+        # in-flight tracker holds them until either the iteration
+        # commits (they move to ``committed``) or fails (rollback
+        # rmdirs them).
+        in_flight_dirs = _newly_created_parents(dst, target_root)
         try:
             dst.parent.mkdir(parents=True, exist_ok=True)
         except OSError as exc:
@@ -1917,7 +2000,11 @@ def _copy_into_target(
         restored.append(rel)
         if existed:
             conflicts.append(rel)
-        committed.append((dst, stash_path))
+        # Promote the in-flight parents into the committed record so
+        # they roll back together with the file move. Reset the
+        # in-flight tracker for the next iteration.
+        committed.append((dst, stash_path, in_flight_dirs))
+        in_flight_dirs = []
     return restored, conflicts, None
 
 

@@ -417,6 +417,42 @@ class TestInspectExportRejections:
         assert inspection.valid is False
         assert any("format" in e.lower() for e in inspection.errors)
 
+    def test_archive_with_symlink_member_is_invalid(self, tmp_path):
+        """A symlink entry of any kind invalidates the archive.
+
+        Nova builds tarballs with ``dereference=True`` so a
+        Nova-built archive never contains a symlink. An archive
+        with a symlink is therefore anomalous; refusing it at
+        inspection keeps the dry-run plan honest (the real restore
+        would also drop the symlink) and gives the operator a
+        clear "this is not a Nova archive" signal.
+        """
+        bad = tmp_path / "symlinks.tar.gz"
+        manifest = json.dumps({
+            "format": de.FORMAT_ID,
+            "format_version": de.FORMAT_VERSION,
+            "mode": de.MODE_DATA_ONLY,
+            "files": [],
+            "excluded": [],
+        }).encode()
+        with tarfile.open(bad, mode="w:gz") as tar:
+            mi = tarfile.TarInfo(name=de.ARCHIVE_MANIFEST_NAME)
+            mi.size = len(manifest)
+            mi.mtime = 0
+            tar.addfile(mi, io.BytesIO(manifest))
+            # A "safe" symlink (relative, no ..). Previously this
+            # passed inspect but was silently dropped by extract.
+            li = tarfile.TarInfo(name="data/alias.json")
+            li.type = tarfile.SYMTYPE
+            li.linkname = "real.json"
+            li.mtime = 0
+            tar.addfile(li)
+        inspection = de.inspect_export(bad)
+        assert inspection.valid is False
+        assert any(
+            "symlink" in e.lower() for e in inspection.errors
+        )
+
 
 # ── plan_restore ───────────────────────────────────────────────────
 
@@ -1258,6 +1294,112 @@ class TestApplyRestoreSafety:
         assert out.restored_files == ()
         assert out.conflicts == ()
         # Staging cleaned up.
+        assert not (target / de.RESTORE_STAGING_DIRNAME).exists()
+
+    def test_failed_restore_removes_newly_created_parent_dirs(
+        self, tmp_path, monkeypatch,
+    ):
+        """A failed restore must clean up parent directories it created.
+
+        The previous rollback unwound the file moves but left
+        empty parent directories behind (the ones materialised by
+        ``dst.parent.mkdir(parents=True)``), so a failed restore
+        still mutated the target tree. The fix tracks newly-
+        created parents per commit and rmdirs them in
+        deepest-first order — only empty directories are removed,
+        so a parent that picked up another committed file in the
+        same restore is left alone.
+        """
+        archive = _make_archive_with_payload(
+            tmp_path,
+            {
+                "memory-packs/trip-2026.json": b'{"ok": true}',
+                "logs/import.log": b"loaded\n",
+            },
+        )
+        target = tmp_path / "Target"
+        target.mkdir()
+        # No pre-existing memory-packs or logs dir — those will
+        # be created by the restore.
+
+        original_replace = os.replace
+        call_count = {"n": 0}
+
+        def flaky_replace(src, dst):
+            call_count["n"] += 1
+            # Let the first file commit (one os.replace call for a
+            # fresh, non-existing destination). Fail on the second
+            # file's commit attempt.
+            if call_count["n"] == 2:
+                raise OSError("synthetic mid-run failure")
+            return original_replace(src, dst)
+
+        monkeypatch.setattr(de.os, "replace", flaky_replace)
+        out = de.apply_restore(
+            archive, target_data_dir=target, confirm=True,
+        )
+        monkeypatch.setattr(de.os, "replace", original_replace)
+        assert out.outcome == de.RESTORE_OUTCOME_FAILED, (
+            out.outcome, out.refuse_reason
+        )
+        # Both the first file *and* its newly-created parent dir
+        # are gone — the target is bit-for-bit back to its
+        # pre-restore state.
+        assert not (target / "memory-packs").exists()
+        assert not (target / "logs").exists()
+        # No staging directory left behind.
+        assert not (target / de.RESTORE_STAGING_DIRNAME).exists()
+        # And the target itself contains nothing.
+        assert list(target.iterdir()) == []
+
+    def test_failed_restore_preserves_pre_existing_parent_dirs(
+        self, tmp_path, monkeypatch,
+    ):
+        """Rollback must not delete parent dirs the target already had.
+
+        If ``memory-packs/`` existed before the restore (with
+        unrelated content), a rollback must leave that directory
+        and its contents in place — only directories created **by
+        this restore call** should be removed.
+        """
+        archive = _make_archive_with_payload(
+            tmp_path,
+            {
+                "memory-packs/trip-2026.json": b'{"ok": true}',
+                "logs/import.log": b"loaded\n",
+            },
+        )
+        target = tmp_path / "Target"
+        target.mkdir()
+        # Pre-existing memory-packs/ with an unrelated (allow-listed)
+        # file inside.
+        (target / "memory-packs").mkdir()
+        (target / "memory-packs" / "earlier.json").write_text(
+            '{"keep": true}', encoding="utf-8"
+        )
+
+        original_replace = os.replace
+        call_count = {"n": 0}
+
+        def flaky_replace(src, dst):
+            call_count["n"] += 1
+            if call_count["n"] == 2:
+                raise OSError("synthetic mid-run failure")
+            return original_replace(src, dst)
+
+        monkeypatch.setattr(de.os, "replace", flaky_replace)
+        out = de.apply_restore(
+            archive, target_data_dir=target, confirm=True,
+        )
+        monkeypatch.setattr(de.os, "replace", original_replace)
+        assert out.outcome == de.RESTORE_OUTCOME_FAILED
+        # The pre-existing directory and its content survived.
+        assert (target / "memory-packs").is_dir()
+        assert (
+            (target / "memory-packs" / "earlier.json").read_text(encoding="utf-8")
+            == '{"keep": true}'
+        )
+        # No staging directory left behind.
         assert not (target / de.RESTORE_STAGING_DIRNAME).exists()
 
     def test_refuses_to_replace_directory_at_target(
