@@ -1465,6 +1465,28 @@ def _create_pre_restore_backup(
     # explicit destination directory and walking the target_root
     # directly.
     included_pairs, excluded_entries = _walk_allowlisted(target_root)
+    # Filter out any previously-written pre-restore archives. They
+    # live under ``backups/pre-restore/`` (the destination of this
+    # very function), so without this filter every restore would
+    # pack the previous restore's backup into the next backup —
+    # producing "backups of backups" that grow on each restore and
+    # eventually trigger spurious ``backup_failed`` outcomes from
+    # storage pressure. The operator-facing rollback flow still
+    # works: previous pre-restore archives remain on disk
+    # untouched; they're just not duplicated into the new one.
+    filtered_pairs: list[tuple[Path, tuple[str, ...]]] = []
+    for file_p, rel_parts in included_pairs:
+        if (
+            len(rel_parts) >= 2
+            and rel_parts[0] == _paths.BACKUPS_SUBDIR
+            and rel_parts[1] == PRE_RESTORE_BACKUP_SUBDIR
+        ):
+            excluded_entries.append(ExcludedEntry(
+                "/".join(rel_parts), REASON_NOT_ALLOWLISTED,
+            ))
+            continue
+        filtered_pairs.append((file_p, rel_parts))
+    included_pairs = filtered_pairs
     if not included_pairs:
         # Nothing to back up — return cleanly. The caller can decide
         # whether that is acceptable.
@@ -2236,6 +2258,54 @@ def apply_restore(
         if rel_str in would_restore_seen:
             continue
         would_restore_seen.add(rel_str)
+        # Preflight type-gate on the existing destination so the
+        # dry-run reports the same outcome the real restore would
+        # produce. ``_copy_into_target`` refuses to stash a symlink
+        # or a non-regular file at ``dst``; mirror that decision
+        # here so a target whose ``nova.db`` is a symlink doesn't
+        # show ``outcome=dry_run`` and then deterministically fail
+        # at execution time. Refusal is structural, not per-file:
+        # any non-regular destination invalidates the whole
+        # restore.
+        if candidate.is_symlink():
+            return RestoreResult(
+                archive_path=archive_path_s,
+                target_data_dir=str(target_resolved),
+                outcome=RESTORE_OUTCOME_REFUSED,
+                refuse_reason=(
+                    f"Existing target {rel_str!r} is a symlink. "
+                    "Restore never follows symlinks at the destination."
+                ),
+                confirmed=bool(confirm),
+                restored_files=(),
+                skipped_files=(),
+                conflicts=(),
+                backup_path="",
+                backup_size=0,
+                restart_recommended=False,
+                warnings=inspection.warnings,
+                manifest=inspection.manifest,
+            )
+        if candidate.exists() and not candidate.is_file():
+            return RestoreResult(
+                archive_path=archive_path_s,
+                target_data_dir=str(target_resolved),
+                outcome=RESTORE_OUTCOME_REFUSED,
+                refuse_reason=(
+                    f"Existing target {rel_str!r} is not a regular "
+                    "file (directory or special node). Restore would "
+                    "be unable to replace it safely."
+                ),
+                confirmed=bool(confirm),
+                restored_files=(),
+                skipped_files=(),
+                conflicts=(),
+                backup_path="",
+                backup_size=0,
+                restart_recommended=False,
+                warnings=inspection.warnings,
+                manifest=inspection.manifest,
+            )
         would_restore.append(rel_str)
         if relative.parts and relative.parts[0] == _paths.DB_FILENAME:
             has_nova_db_in_archive = True
@@ -2494,15 +2564,32 @@ def _target_has_canonical_data(target_root: Path) -> bool:
     tooling, …): the directory is non-empty but contains nothing
     the backup builder would actually preserve.
 
-    The check therefore reuses :func:`_walk_allowlisted` (the same
-    walk the backup builder uses) and returns ``True`` only when
-    that walk would pack at least one file. The walk is cheap for
-    typical Nova installs and never raises into the caller.
+    The check also excludes the pre-restore backup subtree so a
+    target whose only "canonical" content is previous pre-restore
+    archives doesn't trigger a backup-of-backups loop on
+    follow-up restores.
+
+    The walk is cheap for typical Nova installs and never raises
+    into the caller.
     """
     if not target_root.exists():
         return False
     included_pairs, _ = _walk_allowlisted(target_root)
-    return bool(included_pairs)
+    # Mirror the pre-restore-archive filter in
+    # :func:`_create_pre_restore_backup`: a target that contains
+    # *only* previous pre-restore archives is treated as having no
+    # canonical data, so we skip the backup step (there's nothing
+    # the operator hasn't already preserved via the previous
+    # pre-restore backup).
+    for _file_p, rel_parts in included_pairs:
+        if (
+            len(rel_parts) >= 2
+            and rel_parts[0] == _paths.BACKUPS_SUBDIR
+            and rel_parts[1] == PRE_RESTORE_BACKUP_SUBDIR
+        ):
+            continue
+        return True
+    return False
 
 
 def _dry_run_warnings(

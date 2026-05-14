@@ -817,6 +817,44 @@ class TestApplyRestoreDryRun:
         # Critical: the dry-run did NOT create the target directory.
         assert not missing_target.exists()
 
+    def test_dry_run_refuses_when_target_has_symlink_destination(
+        self, configured_data_dir, tmp_path,
+    ):
+        """The dry-run must mirror the real-restore type-gate.
+
+        If ``NOVA_DATA_DIR/nova.db`` is a symlink, the real restore
+        will refuse in ``_copy_into_target``. The dry-run preflight
+        therefore needs to refuse too — otherwise ``inspect →
+        dry-run → confirm`` would report ``outcome=dry_run`` and
+        the real restore would deterministically fail at execution
+        time, breaking the contract.
+        """
+        result = de.create_data_export()
+        target = tmp_path / "Target"
+        target.mkdir()
+        real = target / "actual.txt"
+        real.write_text("real", encoding="utf-8")
+        link = target / "nova.db"
+        try:
+            link.symlink_to(real)
+        except (OSError, NotImplementedError):
+            pytest.skip("symlink creation unsupported on this host")
+
+        out = de.apply_restore(
+            result.archive_path,
+            target_data_dir=target,
+            dry_run=True,
+        )
+        # Dry-run reports REFUSED — and never wrote a thing.
+        assert out.outcome == de.RESTORE_OUTCOME_REFUSED
+        assert "symlink" in out.refuse_reason.lower()
+        assert out.backup_path == ""
+        # No staging or partial state.
+        assert not (target / de.RESTORE_STAGING_DIRNAME).exists()
+        # Link + target both intact.
+        assert link.is_symlink()
+        assert real.read_text(encoding="utf-8") == "real"
+
 
 class TestApplyRestoreConfirmation:
     """The real restore refuses without explicit confirmation."""
@@ -1238,6 +1276,102 @@ class TestApplyRestoreSafety:
         assert Path(out1.backup_path).is_file()
         assert Path(out2.backup_path).is_file()
 
+    def test_pre_restore_backup_excludes_earlier_pre_restore_archives(
+        self, configured_data_dir, tmp_path,
+    ):
+        """A new pre-restore backup must not contain earlier ones.
+
+        Without filtering, every restore would walk the entire
+        ``backups/`` tree — including the previous restore's
+        pre-restore archive — and pack it into the new backup.
+        Repeated restores would therefore stack "backups of
+        backups" and grow on each run, eventually triggering
+        spurious ``backup_failed`` outcomes from disk pressure.
+        The filter in ``_create_pre_restore_backup`` excludes the
+        ``backups/pre-restore/`` subtree from its own walk so each
+        backup stays roughly the size of the live data dir.
+        """
+        result = de.create_data_export()
+        target = tmp_path / "Target"
+        target.mkdir()
+        (target / "nova.db").write_bytes(b"first")
+
+        out1 = de.apply_restore(
+            result.archive_path,
+            target_data_dir=target,
+            confirm=True,
+        )
+        assert out1.outcome == de.RESTORE_OUTCOME_RESTORED
+        backup1 = Path(out1.backup_path)
+        assert backup1.is_file()
+        size1 = backup1.stat().st_size
+
+        # Run a second restore so the backup builder has a real
+        # ``backups/pre-restore/`` subtree to walk past.
+        (target / "nova.db").write_bytes(b"second")
+        out2 = de.apply_restore(
+            result.archive_path,
+            target_data_dir=target,
+            confirm=True,
+        )
+        assert out2.outcome == de.RESTORE_OUTCOME_RESTORED
+        backup2 = Path(out2.backup_path)
+        assert backup2.is_file()
+
+        # The second backup must not contain any pre-restore entry
+        # — otherwise we'd be packing backup1 inside backup2.
+        with tarfile.open(backup2, mode="r:*") as tar:
+            names = set(tar.getnames())
+        nested = [
+            n for n in names
+            if "pre-restore" in n or "nova-pre-restore" in n
+        ]
+        assert nested == [], (
+            "pre-restore archives leaked into the new backup: "
+            f"{nested}"
+        )
+        # And the second backup is the same order of magnitude as
+        # the first (not exponentially larger).
+        size2 = backup2.stat().st_size
+        assert size2 < size1 * 5
+
+    def test_target_with_only_pre_restore_backups_skips_backup_step(
+        self, configured_data_dir, tmp_path,
+    ):
+        """A target whose only canonical content is previous
+        pre-restore archives must not retrigger a backup attempt.
+
+        Without aligning ``_target_has_canonical_data`` with the
+        new backup filter, a target that's just been wiped except
+        for ``backups/pre-restore/`` would still be flagged as
+        "has canonical data", causing the next restore to try
+        backing up an effectively-empty set and either looping
+        the backups-of-backups problem or refusing the restore
+        spuriously.
+        """
+        result = de.create_data_export()
+        target = tmp_path / "Target"
+        target.mkdir()
+        # Seed an "old" pre-restore backup as the only content.
+        pre_dir = target / "backups" / de.PRE_RESTORE_BACKUP_SUBDIR
+        pre_dir.mkdir(parents=True)
+        (pre_dir / "old-pre-restore.tar.gz").write_bytes(b"opaque blob")
+        # No nova.db, no other canonical files.
+        assert not (target / "nova.db").exists()
+
+        out = de.apply_restore(
+            result.archive_path,
+            target_data_dir=target,
+            confirm=True,
+        )
+        # Restore proceeds, no backup step (nothing canonical to
+        # back up), nova.db lands as expected.
+        assert out.outcome == de.RESTORE_OUTCOME_RESTORED
+        assert out.backup_path == ""
+        assert (target / "nova.db").is_file()
+        # The old pre-restore archive is left alone.
+        assert (pre_dir / "old-pre-restore.tar.gz").is_file()
+
     def test_partial_copy_failure_rolls_back_earlier_files(
         self, configured_data_dir, tmp_path, monkeypatch,
     ):
@@ -1412,8 +1546,11 @@ class TestApplyRestoreSafety:
         the rollback path cannot put a directory back over a regular
         file (``os.replace(dir, file)`` raises) and the staging
         cleanup would then permanently delete the stashed
-        directory. Refusing before the first move keeps operator
-        data intact.
+        directory. The preview-loop preflight catches this before
+        any backup or staging work happens — the outcome is
+        ``REFUSED`` (we never started), not ``FAILED`` (we tried
+        and stopped mid-way), and the target is byte-for-byte
+        untouched.
         """
         result = de.create_data_export()
         target = tmp_path / "Target"
@@ -1429,13 +1566,14 @@ class TestApplyRestoreSafety:
             target_data_dir=target,
             confirm=True,
         )
-        assert out.outcome == de.RESTORE_OUTCOME_FAILED
+        assert out.outcome == de.RESTORE_OUTCOME_REFUSED
         assert "regular file" in out.refuse_reason.lower()
         # The weird directory and its contents are untouched.
         assert weird_dir.is_dir()
         assert weird_payload.read_text(encoding="utf-8") == "operator data"
-        # Staging cleaned up — no leftover state.
+        # No staging directory or backup work happened.
         assert not (target / de.RESTORE_STAGING_DIRNAME).exists()
+        assert out.backup_path == ""
 
     def test_refuses_to_replace_symlink_at_target(
         self, configured_data_dir, tmp_path,
@@ -1444,13 +1582,14 @@ class TestApplyRestoreSafety:
 
         ``os.replace`` on top of a symlink replaces the symlink
         itself, not the file it points at — which would silently
-        relink whatever lives at the link target. The restore
-        engine therefore refuses to touch any symlink and unwinds
-        whatever it had committed so far.
+        relink whatever lives at the link target. The preview-loop
+        preflight refuses upfront so the outcome is ``REFUSED``
+        (no backup, no staging, no copy) rather than ``FAILED``.
 
         The symlink resolves *inside* the target so the earlier
-        containment check in ``apply_restore`` passes — this is the
-        test that pins ``_copy_into_target``'s own type-gate.
+        containment check in ``apply_restore`` passes — this test
+        pins the preview-loop type-gate that mirrors
+        ``_copy_into_target``'s own check.
         """
         result = de.create_data_export()
         target = tmp_path / "Target"
@@ -1468,8 +1607,10 @@ class TestApplyRestoreSafety:
             target_data_dir=target,
             confirm=True,
         )
-        assert out.outcome == de.RESTORE_OUTCOME_FAILED
+        assert out.outcome == de.RESTORE_OUTCOME_REFUSED
         assert "symlink" in out.refuse_reason.lower()
+        # No backup work — preview loop refused before that step.
+        assert out.backup_path == ""
         # Link and its target are both intact.
         assert link.is_symlink()
         assert real.read_text(encoding="utf-8") == "inside content"
