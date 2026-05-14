@@ -1258,6 +1258,140 @@ class TestApplyRestoreExcludedContent:
         )
         assert files == ["nova.db"]
 
+    def test_restore_refuses_to_materialise_dot_env(self, tmp_path):
+        """A crafted archive cannot smuggle in ``data/.env``.
+
+        The export builder refuses to *pack* a ``.env`` file. The
+        restore path must mirror that allowlist — otherwise a
+        crafted archive could write secrets into ``NOVA_DATA_DIR``
+        that the exporter would never have produced.
+        """
+        archive = _make_archive_with_payload(
+            tmp_path,
+            {
+                "nova.db": b"-- db --",
+                ".env": b"SECRET_KEY=topsecret\n",
+            },
+        )
+        target = tmp_path / "Target"
+        target.mkdir()
+        out = de.apply_restore(
+            archive, target_data_dir=target, confirm=True,
+        )
+        assert out.outcome == de.RESTORE_OUTCOME_RESTORED
+        # nova.db lands fine.
+        assert (target / "nova.db").is_file()
+        # The .env is never created.
+        assert not (target / ".env").exists()
+        # And it is surfaced as skipped with the secret reason.
+        skipped_paths = {e.path: e.reason for e in out.skipped_files}
+        assert ".env" in skipped_paths
+        assert skipped_paths[".env"] == de.REASON_SECRET
+
+    def test_restore_refuses_ssh_key_inside_archive(self, tmp_path):
+        archive = _make_archive_with_payload(
+            tmp_path,
+            {
+                "nova.db": b"-- db --",
+                ".ssh/id_rsa": b"PRIVATE KEY\n",
+            },
+        )
+        target = tmp_path / "Target"
+        target.mkdir()
+        out = de.apply_restore(
+            archive, target_data_dir=target, confirm=True,
+        )
+        assert out.outcome == de.RESTORE_OUTCOME_RESTORED
+        assert not (target / ".ssh").exists()
+        assert not (target / ".ssh" / "id_rsa").exists()
+        skipped_paths = {e.path: e.reason for e in out.skipped_files}
+        assert ".ssh/id_rsa" in skipped_paths
+        assert skipped_paths[".ssh/id_rsa"] == de.REASON_SECRET
+
+    def test_restore_refuses_non_canonical_top_level_file(self, tmp_path):
+        """A bare ``data/README.txt`` is not in the allowlist."""
+        archive = _make_archive_with_payload(
+            tmp_path,
+            {
+                "nova.db": b"-- db --",
+                "README.txt": b"Surprise!\n",
+            },
+        )
+        target = tmp_path / "Target"
+        target.mkdir()
+        out = de.apply_restore(
+            archive, target_data_dir=target, confirm=True,
+        )
+        assert out.outcome == de.RESTORE_OUTCOME_RESTORED
+        assert not (target / "README.txt").exists()
+        skipped_paths = {e.path: e.reason for e in out.skipped_files}
+        assert "README.txt" in skipped_paths
+        assert skipped_paths["README.txt"] == de.REASON_NOT_ALLOWLISTED
+
+    def test_restore_refuses_non_canonical_subdir(self, tmp_path):
+        """Anything outside the four reserved subdirs is refused."""
+        archive = _make_archive_with_payload(
+            tmp_path,
+            {
+                "nova.db": b"-- db --",
+                "notabackup/foo.txt": b"leaked\n",
+            },
+        )
+        target = tmp_path / "Target"
+        target.mkdir()
+        out = de.apply_restore(
+            archive, target_data_dir=target, confirm=True,
+        )
+        assert out.outcome == de.RESTORE_OUTCOME_RESTORED
+        assert not (target / "notabackup").exists()
+        skipped_paths = {e.path: e.reason for e in out.skipped_files}
+        assert "notabackup/foo.txt" in skipped_paths
+        assert skipped_paths["notabackup/foo.txt"] == de.REASON_NOT_ALLOWLISTED
+
+    def test_restore_refuses_ollama_gguf_blob(self, tmp_path):
+        """Ollama model files inside ``backups/`` are refused."""
+        archive = _make_archive_with_payload(
+            tmp_path,
+            {
+                "nova.db": b"-- db --",
+                "backups/llama-7b.gguf": b"weights\n",
+            },
+        )
+        target = tmp_path / "Target"
+        target.mkdir()
+        out = de.apply_restore(
+            archive, target_data_dir=target, confirm=True,
+        )
+        assert out.outcome == de.RESTORE_OUTCOME_RESTORED
+        assert not (target / "backups" / "llama-7b.gguf").exists()
+        skipped_paths = {e.path: e.reason for e in out.skipped_files}
+        assert "backups/llama-7b.gguf" in skipped_paths
+        assert skipped_paths["backups/llama-7b.gguf"] == de.REASON_OLLAMA_MODEL
+
+    def test_dry_run_surfaces_allowlist_skips(self, tmp_path):
+        """The dry-run preview lists disallowed entries up front."""
+        archive = _make_archive_with_payload(
+            tmp_path,
+            {
+                "nova.db": b"-- db --",
+                ".env": b"SECRET=x\n",
+                "memory-packs/trip.json": b'{"ok": true}',
+            },
+        )
+        target = tmp_path / "Target"
+        target.mkdir()
+        out = de.apply_restore(
+            archive, target_data_dir=target, dry_run=True,
+        )
+        assert out.outcome == de.RESTORE_OUTCOME_DRY_RUN
+        assert "nova.db" in out.restored_files
+        assert "memory-packs/trip.json" in out.restored_files
+        assert ".env" not in out.restored_files
+        skipped_paths = {e.path: e.reason for e in out.skipped_files}
+        assert ".env" in skipped_paths
+        # Dry-run must never write anything.
+        assert list(target.iterdir()) == []
+
 
 # ── CLI: restore subcommand ─────────────────────────────────────────
 

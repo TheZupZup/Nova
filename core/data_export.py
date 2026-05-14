@@ -1534,6 +1534,54 @@ def _create_pre_restore_backup(
     return candidate, size, warnings
 
 
+def _restore_allowlist_reason(
+    rel_parts: tuple[str, ...],
+) -> Optional[str]:
+    """Return an exclusion reason for an archive-relative path, or ``None``.
+
+    Mirrors the export builder's allowlist so a crafted package
+    cannot restore files the exporter would never have packed in
+    the first place. The rejection vocabulary uses the existing
+    ``REASON_*`` wire strings so the UI can render mixed export /
+    restore exclusion lists uniformly.
+
+    A relative path is **allowed** when every component clears the
+    secret / VCS / cache / venv / Ollama checks (see
+    :func:`_classify_exclusion`) **and** the top-level component is
+    one of:
+
+      * ``nova.db`` (single-component path), or
+      * a name starting with ``nova.db.`` (sidecar / preupgrade
+        backup, single-component path), or
+      * one of the four reserved subdirectories (``backups``,
+        ``exports``, ``memory-packs``, ``logs``) when the path has
+        more than one component.
+
+    Anything else — a bare ``.env`` under ``data/``, a hostile
+    ``data/.ssh/id_rsa``, a stray ``data/README.txt``, even
+    ``data/notabackup/file`` — is refused with the most specific
+    reason available.
+    """
+    if not rel_parts:
+        return REASON_NOT_ALLOWLISTED
+    # First pass: per-component secret / forbidden-dir / cache /
+    # Ollama checks. This catches ``data/.env``, ``data/.ssh/...``,
+    # ``data/backups/.git/...``, ``data/logs/leaked.pem``, etc.
+    reason = _classify_exclusion(rel_parts)
+    if reason is not None:
+        return reason
+    top = rel_parts[0]
+    if len(rel_parts) == 1:
+        if top in _ALLOWED_TOP_FILES:
+            return None
+        if any(top.startswith(p) for p in _ALLOWED_TOP_FILE_PREFIXES):
+            return None
+        return REASON_NOT_ALLOWLISTED
+    if top in _ALLOWED_TOP_DIRS:
+        return None
+    return REASON_NOT_ALLOWLISTED
+
+
 def _safe_extract_member(
     tar: tarfile.TarFile,
     member: tarfile.TarInfo,
@@ -1611,10 +1659,12 @@ def _extract_to_staging(
     Returns ``(extracted_files, skipped, error)``. ``extracted_files``
     is the list of POSIX-relative file paths under ``staging/data``
     that were materialised. ``skipped`` records members that were
-    intentionally not extracted (symlinks, hardlinks, devices, or
-    names that would resolve outside the staging tree). ``error`` is
-    ``None`` on success or a short, frontend-safe string describing
-    a fatal extraction error.
+    intentionally not extracted (symlinks, hardlinks, devices,
+    names that would resolve outside the staging tree, **or
+    entries that fail the export-side allowlist** — e.g. a hostile
+    ``data/.env`` or ``data/.ssh/id_rsa``). ``error`` is ``None`` on
+    success or a short, frontend-safe string describing a fatal
+    extraction error.
     """
     extracted: list[str] = []
     skipped: list[ExcludedEntry] = []
@@ -1640,6 +1690,23 @@ def _extract_to_staging(
                         member.name, REASON_SYMLINK_ESCAPE,
                     ))
                     continue
+                # Restore-side allowlist gate. A crafted archive may
+                # ship entries the exporter would have refused (the
+                # ``.env`` family, ``.ssh/...``, ``.git/...``,
+                # arbitrary non-canonical names). They are never
+                # extracted into staging.
+                parts = PurePosixPath(member.name).parts
+                if (
+                    parts
+                    and parts[0] == ARCHIVE_DATA_PREFIX
+                    and len(parts) > 1
+                ):
+                    allow_reason = _restore_allowlist_reason(parts[1:])
+                    if allow_reason is not None:
+                        skipped.append(ExcludedEntry(
+                            member.name, allow_reason,
+                        ))
+                        continue
                 dest = _safe_extract_member(tar, member, staging)
                 if dest is None:
                     if member.isfile():
@@ -1949,8 +2016,15 @@ def apply_restore(
     # target root — we do **not** rely on the dry-run plan refusing
     # an existing nova.db because Phase 3's real restore is allowed
     # to replace it under explicit confirmation).
+    #
+    # The same export-side allowlist that prevents secrets / VCS /
+    # caches / Ollama blobs / arbitrary non-canonical files from
+    # being *exported* is applied here on the *restore* side too,
+    # so a crafted archive cannot smuggle in a ``data/.env`` or a
+    # ``data/.ssh/id_rsa`` that the exporter would have refused.
     would_restore: list[str] = []
     conflicts_seen: list[str] = []
+    skipped_in_archive: list[ExcludedEntry] = []
     has_nova_db_in_archive = False
     for member_name in inspection.files:
         if member_name in (ARCHIVE_MANIFEST_NAME, ARCHIVE_RESTORE_DOC_NAME):
@@ -1980,6 +2054,12 @@ def apply_restore(
                 warnings=inspection.warnings,
                 manifest=inspection.manifest,
             )
+        allow_reason = _restore_allowlist_reason(relative.parts)
+        if allow_reason is not None:
+            skipped_in_archive.append(
+                ExcludedEntry(str(relative), allow_reason)
+            )
+            continue
         candidate = target_resolved / Path(*relative.parts)
         try:
             candidate_abs = candidate.resolve(strict=False)
@@ -2022,7 +2102,7 @@ def apply_restore(
             refuse_reason="",
             confirmed=bool(confirm),
             restored_files=tuple(would_restore),
-            skipped_files=(),
+            skipped_files=tuple(skipped_in_archive),
             conflicts=tuple(conflicts_seen),
             backup_path="",
             backup_size=0,
@@ -2143,7 +2223,15 @@ def apply_restore(
             manifest=inspection.manifest,
         )
 
-    extracted, skipped, extract_err = _extract_to_staging(archive_p, staging)
+    extracted, _extract_skipped, extract_err = _extract_to_staging(
+        archive_p, staging,
+    )
+    # ``_extract_skipped`` is a defence-in-depth sibling of
+    # ``skipped_in_archive`` — both gates run the same allowlist
+    # check on each member, so they should agree in well-formed
+    # cases. We surface ``skipped_in_archive`` as the wire-format
+    # ``skipped_files`` so dry-run and real-restore consumers see
+    # the same path shape (POSIX-relative, no ``data/`` prefix).
     if extract_err is not None:
         _cleanup_staging(staging)
         return RestoreResult(
@@ -2153,7 +2241,7 @@ def apply_restore(
             refuse_reason=extract_err,
             confirmed=bool(confirm),
             restored_files=(),
-            skipped_files=tuple(skipped),
+            skipped_files=tuple(skipped_in_archive),
             conflicts=tuple(conflicts_seen),
             backup_path=backup_archive_path,
             backup_size=backup_size,
@@ -2175,7 +2263,7 @@ def apply_restore(
             ),
             confirmed=bool(confirm),
             restored_files=(),
-            skipped_files=tuple(skipped),
+            skipped_files=tuple(skipped_in_archive),
             conflicts=tuple(conflicts_seen),
             backup_path=backup_archive_path,
             backup_size=backup_size,
@@ -2198,7 +2286,7 @@ def apply_restore(
             refuse_reason=copy_err,
             confirmed=bool(confirm),
             restored_files=tuple(restored),
-            skipped_files=tuple(skipped),
+            skipped_files=tuple(skipped_in_archive),
             conflicts=tuple(conflicts),
             backup_path=backup_archive_path,
             backup_size=backup_size,
@@ -2230,7 +2318,7 @@ def apply_restore(
         refuse_reason="",
         confirmed=True,
         restored_files=tuple(restored),
-        skipped_files=tuple(skipped),
+        skipped_files=tuple(skipped_in_archive),
         conflicts=tuple(conflicts),
         backup_path=backup_archive_path,
         backup_size=backup_size,

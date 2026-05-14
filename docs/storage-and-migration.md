@@ -630,6 +630,17 @@ These are firm boundaries of the Storage & Migration Center:
   letter) and re-checked against the intended root after
   resolution. Hostile archives are refused with a clear error,
   never extracted.
+* **Same allowlist on restore as on export.** A crafted archive
+  cannot smuggle in files the exporter would never have produced.
+  The restore path applies the same secret / VCS / cache / venv /
+  Ollama / non-canonical filters as the export builder, with
+  identical wire-format reasons. ``data/.env``, ``data/.ssh/...``,
+  ``data/backups/.git/...``, ``data/*.gguf``, and bare
+  ``data/README.txt``-style stray files are skipped during restore
+  with a reason in ``skipped_files`` even when the rest of the
+  archive inspects clean. Only the canonical Nova entries
+  (``nova.db``, ``nova.db.*`` sidecars, and contents of the four
+  reserved subdirectories) actually land on disk.
 * **No restore without explicit confirmation.** Phase 3's real
   restore endpoint refuses unless the request body carries
   `confirm: true`. The CLI's `restore` subcommand refuses without
