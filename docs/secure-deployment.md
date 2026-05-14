@@ -157,9 +157,13 @@ mean the unit is misconfigured.
 - Anything you explicitly add, such as a database directory outside
   the checkout, or a log directory.
 
-If you keep `nova.db` somewhere else, **add only that directory** to
-`ReadWritePaths=`. Avoid giving Nova write access to the whole home
-directory.
+If you move `nova.db` onto a dedicated disk by setting
+`NOVA_DATA_DIR=/mnt/fastdata/NovaData`, **add only that directory**
+to `ReadWritePaths=` and add `RequiresMountsFor=/mnt/fastdata` under
+`[Unit]` so systemd waits for the mount. Avoid giving Nova write
+access to the whole home directory. See
+[`docs/data-directory.md`](data-directory.md) for the documented
+copy / migration procedure.
 
 ### What stays reachable
 
@@ -223,14 +227,17 @@ sudo -u nova sudo -l   # should print "Sorry, user nova may not run sudo"
 
 ## Backups
 
-- `nova.db` and `nova.db.backup` live in the Nova checkout. Back the
-  whole directory up — there are no out-of-band state files.
+- `nova.db` and `nova.db.backup` live in the Nova checkout by default.
+  If you set `NOVA_DATA_DIR=/mnt/fastdata/NovaData` (see
+  [`docs/data-directory.md`](data-directory.md)), they live there
+  instead — back up that directory in one shot.
 - Treat backups as **sensitive**: they contain conversation history,
   per-user settings, and (if you enabled the natural memory layer)
   user-authored memories. Encrypt at rest.
 - Test the restore path before you need it. The simplest restore is
   `sudo systemctl stop nova && cp nova.db.backup nova.db && sudo
-  systemctl start nova`.
+  systemctl start nova` (run the `cp` against the same directory the
+  active `nova.db` lives in).
 
 ## Audit and logs
 

@@ -10,14 +10,23 @@
 #   1. Replace USERNAME with the local Linux account that owns the Nova checkout.
 #   2. Replace /path/to/Nova with the absolute path of your Nova checkout
 #      (the directory that contains web.py and nova.db).
-#   3. If you keep nova.db somewhere other than the checkout, add that path to
-#      ReadWritePaths= as well.
+#   3. If you keep nova.db somewhere other than the checkout (see
+#      NOVA_DATA_DIR below), add that path to ReadWritePaths= as well
+#      and uncomment the matching RequiresMountsFor= line so systemd
+#      waits for the disk before starting Nova.
 #
 # See deploy/systemd/README.md for the full guide and a per-option explanation.
 
 [Unit]
 Description=Nova AI Assistant (hardened)
 After=network.target ollama.service
+# Uncomment when Nova's data lives on a mounted disk (see NOVA_DATA_DIR
+# in [Service] below). systemd will then wait for the mount to be
+# present before starting the unit, and will stop Nova cleanly if the
+# disk is unmounted.
+# After=network-online.target
+# Wants=network-online.target
+# RequiresMountsFor=/mnt/fastdata
 
 [Service]
 Type=simple
@@ -28,6 +37,12 @@ ExecStart=/path/to/Nova/.venv/bin/uvicorn web:app --host 0.0.0.0 --port 8080
 Restart=always
 RestartSec=5
 Environment="PATH=/path/to/Nova/.venv/bin:/usr/bin:/usr/local/bin"
+# Optional: move Nova's runtime data (nova.db, backups/, exports/,
+# memory-packs/, logs/) to a dedicated disk. Leave commented out to
+# keep the legacy layout (nova.db in WorkingDirectory). When you set
+# this, also add the path to ReadWritePaths= below and uncomment the
+# RequiresMountsFor= line under [Unit] so systemd waits for the mount.
+# Environment="NOVA_DATA_DIR=/mnt/fastdata/NovaData"
 
 # ── Sandbox hardening ──────────────────────────────────────────────────────
 # These directives restrict what the Nova process can see and do on the host.
@@ -51,8 +66,10 @@ ProtectHome=read-only
 
 # Restore write access to the Nova checkout so nova.db, backups, and any
 # file written under WorkingDirectory continue to work. Adjust this list if
-# the database lives outside the checkout.
+# the database lives outside the checkout — add the NOVA_DATA_DIR path
+# (e.g. /mnt/fastdata/NovaData) here so Nova can write its DB there.
 ReadWritePaths=/path/to/Nova
+# ReadWritePaths=/mnt/fastdata/NovaData
 
 # Drop every Linux capability. Nova is a userspace HTTP app and needs none
 # of them.

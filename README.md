@@ -786,6 +786,7 @@ All configuration is read from `.env` at startup. Key variables:
 | `NOVA_USERNAME` | — | Login username for the seeded admin |
 | `NOVA_PASSWORD` | — | Login password for the seeded admin |
 | `NOVA_SECRET_KEY` | — | JWT signing secret |
+| `NOVA_DATA_DIR` | — | Optional absolute path that holds `nova.db`, backups, and reserved subdirectories. Blank = legacy layout (DB next to the checkout). See [`docs/data-directory.md`](docs/data-directory.md). |
 | `OLLAMA_HOST` | `http://localhost:11434` | Ollama API base URL |
 | `NOVA_AUTO_WEB_LEARNING` | `false` | Enable background RSS/web learning |
 | `LOGIN_RATE_LIMIT_MAX` | `5` | Max login attempts per window |

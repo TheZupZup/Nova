@@ -88,12 +88,54 @@ this hardening to the container/VM host as well.
 For the authoritative reference, see
 [`systemd.exec(5)`](https://www.freedesktop.org/software/systemd/man/systemd.exec.html).
 
+## Storing Nova data on a dedicated disk (`NOVA_DATA_DIR`)
+
+By default Nova writes `nova.db` and its sidecar files
+(`nova.db.backup`, `nova.db.preupgrade-*`) next to the checkout. If you
+want to move the database to a separate disk — for example, an SSD for
+the live database and an HDD for archives — point Nova at a dedicated
+data directory:
+
+```ini
+[Service]
+Environment="NOVA_DATA_DIR=/mnt/fastdata/NovaData"
+ReadWritePaths=/path/to/Nova
+ReadWritePaths=/mnt/fastdata/NovaData
+```
+
+When the data directory lives on a mount, also tell systemd to wait
+for the mount before starting Nova (and to stop Nova cleanly if the
+disk is unmounted):
+
+```ini
+[Unit]
+After=network-online.target
+Wants=network-online.target
+RequiresMountsFor=/mnt/fastdata
+```
+
+Configure the mount in `/etc/fstab` so it comes up at boot. Avoid
+desktop-session paths such as `/run/media/<user>/<disk>` — those only
+exist while a graphical session is logged in and disappear at logout,
+which is unsafe for a long-running service.
+
+The active database should ideally live on **SSD** so the chat path
+stays snappy. The slower HDD path is fine for archive copies (`rsync`
+the SSD directory periodically) but not for the live `nova.db`.
+
+See [`docs/data-directory.md`](../../docs/data-directory.md) for the
+manual database copy procedure and the full layout under
+`NOVA_DATA_DIR`.
+
 ## Installing the hardened unit
 
 1. Edit `deploy/systemd/nova.service` and replace the placeholders:
    - `USERNAME` → the local Linux account that owns the Nova checkout.
    - `/path/to/Nova` → the absolute path of the checkout (the directory
-     that contains `web.py` and where `nova.db` lives).
+     that contains `web.py` and where `nova.db` lives by default).
+   - Optionally uncomment the `NOVA_DATA_DIR=` line, the second
+     `ReadWritePaths=` line, and the `RequiresMountsFor=` block under
+     `[Unit]` to store the database on a dedicated mount.
 
 2. Install, reload, and start:
 

@@ -1,3 +1,4 @@
+import logging
 import sqlite3
 import shutil
 import os
@@ -5,6 +6,11 @@ from datetime import datetime
 from typing import Optional
 from memory.store import initialize_memory_database as _init_natural_memory
 from core import users as _users
+from core.paths import (
+    database_path as _resolved_db_path,
+    describe_legacy_migration as _describe_legacy_migration,
+    prepare as _prepare_data_dir,
+)
 from core.settings import migrate_user_settings as _migrate_user_settings
 from core.policies import migrate_family_controls as _migrate_family_controls
 from core.model_registry import (
@@ -16,7 +22,39 @@ from core.model_access import migrate as _migrate_model_access
 from core.local_models import migrate as _migrate_local_models
 from core.feedback import migrate as _migrate_feedback
 
-DB_PATH = "nova.db"
+logger = logging.getLogger(__name__)
+
+# Resolved at import time from ``core.paths``. When ``NOVA_DATA_DIR``
+# is set, this becomes ``<NOVA_DATA_DIR>/nova.db``; otherwise it stays
+# the legacy relative path. Tests still monkeypatch this attribute
+# directly (``monkeypatch.setattr(core.memory, "DB_PATH", path)``) and
+# every code path in this file reads ``DB_PATH`` as a module attribute,
+# so the override propagates unchanged.
+DB_PATH = str(_resolved_db_path())
+
+
+def _log_legacy_migration_advice() -> None:
+    """Warn once when ``NOVA_DATA_DIR`` is set but the DB is still legacy.
+
+    The Phase-1 contract is "no automatic migration": if an operator
+    configured ``NOVA_DATA_DIR`` after running Nova for a while, the
+    legacy ``./nova.db`` is still there and the configured target is
+    empty. Nova will start fresh under the new path; the operator
+    almost certainly wants to copy the legacy DB over by hand
+    (``docs/data-directory.md`` walks through it). A single WARN-level
+    log line makes that situation visible without touching any file.
+    """
+    status = _describe_legacy_migration()
+    if status is None or not status.should_advise_copy:
+        return
+    logger.warning(
+        "Nova legacy database detected at %s but NOVA_DATA_DIR expects it "
+        "at %s. Nova will start fresh under NOVA_DATA_DIR; copy the legacy "
+        "database manually if you want to keep its data. See "
+        "docs/data-directory.md for the documented procedure.",
+        status.legacy_db_path,
+        status.configured_db_path,
+    )
 
 
 def backup_db():
@@ -61,6 +99,13 @@ def save_setting(key: str, value: str):
 
 def initialize_db():
     """Crée toutes les tables si elles n'existent pas encore."""
+    # When ``NOVA_DATA_DIR`` is configured, make sure the directory and
+    # its subdirectories exist and are writable before opening the
+    # database. ``prepare()`` is a no-op when the env var is unset, so
+    # legacy installs and tests that bypass the data-dir story keep
+    # working unchanged.
+    _prepare_data_dir()
+    _log_legacy_migration_advice()
     with _get_connection() as conn:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS settings (

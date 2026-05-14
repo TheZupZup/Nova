@@ -3,10 +3,17 @@ import re
 import sqlite3
 from datetime import datetime
 
+from core.paths import database_path as _resolved_db_path
 from memory.embeddings import generate_embedding, cosine_similarity
 from memory.schema import Memory
 
-DB_PATH = "nova.db"
+# Resolved at import time from ``core.paths``. With ``NOVA_DATA_DIR``
+# set this becomes ``<NOVA_DATA_DIR>/nova.db``; otherwise it remains
+# the legacy relative path so existing installs are unaffected. Tests
+# still monkeypatch ``memory.store.DB_PATH`` directly, and every call
+# path resolves the attribute via :func:`_resolve_db_path` below — so
+# the override propagates unchanged.
+DB_PATH = str(_resolved_db_path())
 
 # Thresholds for deciding whether a new memory duplicates an existing one.
 # Cosine similarity is used when both memories have embeddings; Jaccard token
