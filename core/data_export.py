@@ -1260,6 +1260,297 @@ def plan_restore(
     )
 
 
+# ── CLI ─────────────────────────────────────────────────────────────
+#
+# ``python -m core.data_export <command> [...]`` exposes the three
+# public helpers in a tiny argparse wrapper so an operator can build,
+# inspect, and dry-run a restore without going through the admin UI.
+# The CLI is the only surface here that talks to ``stdout`` / ``stderr``
+# — the library functions never print.
+#
+# Commands:
+#
+#   export                 Build a portable archive in the exports
+#                          directory (or under ``--output``).
+#   inspect <path>         Read-only structural check on an existing
+#                          archive — never writes anywhere.
+#   restore-dry-run <path> Dry-run plan only — never writes anywhere.
+#
+# Every command exits 0 on success, 1 on a user-visible failure, and
+# 2 for argparse usage errors. Exit codes are intentional so the CLI
+# composes cleanly with shell pipelines and CI checks.
+#
+# The CLI deliberately stays tiny: the heavy lifting lives in the
+# functions above so the unit tests can drive them without spawning a
+# subprocess (mirroring ``core/paths.py``'s ``_cli`` pattern).
+
+
+def _format_bytes(size: int) -> str:
+    """Render ``size`` as a short, human-readable string.
+
+    Used by the CLI summaries; tests pin the wire format only at the
+    program-output level, so the rendering is free to change as long
+    as the keywords ("MB", "GB") stay recognisable.
+    """
+    if size < 1024:
+        return f"{size} B"
+    if size < 1024 * 1024:
+        return f"{size / 1024:.1f} KB"
+    if size < 1024 * 1024 * 1024:
+        return f"{size / (1024 * 1024):.1f} MB"
+    return f"{size / (1024 * 1024 * 1024):.2f} GB"
+
+
+def _format_export_summary(result: ExportResult) -> str:
+    """Render a short human summary of an :class:`ExportResult`."""
+    manifest = result.manifest or {}
+    lines = [
+        f"Nova export package created at {result.archive_path}",
+        (
+            f"  format        : {manifest.get('format', '')} "
+            f"v{manifest.get('format_version', '')}"
+        ),
+        f"  mode          : {manifest.get('mode', '')}",
+        f"  created (UTC) : {manifest.get('created_at', '')}",
+        f"  source        : {manifest.get('source_data_dir', '')}",
+        f"  archive size  : {_format_bytes(result.archive_size)}",
+        f"  sha256        : {result.archive_sha256}",
+        f"  files included: {len(result.included)}",
+        f"  files excluded: {len(result.excluded)}",
+    ]
+    if result.warnings:
+        lines.append("  warnings:")
+        for warning in result.warnings:
+            lines.append(f"    - {warning}")
+    lines.append("")
+    lines.append(
+        "Move this file to your backup target (e.g. "
+        "/mnt/archive/Backups/Nova) via rsync or a removable disk."
+    )
+    lines.append(
+        "Inspect before restoring on the target machine with:"
+    )
+    lines.append(
+        f"    python -m core.data_export inspect {result.archive_path}"
+    )
+    return "\n".join(lines)
+
+
+def _format_inspect_summary(result: InspectionResult) -> str:
+    """Render a short human summary of an :class:`InspectionResult`."""
+    lines = [f"Inspecting {result.archive_path}"]
+    lines.append(f"  valid                  : {result.valid}")
+    if result.manifest:
+        lines.append(
+            f"  format                 : {result.manifest.get('format', '')} "
+            f"v{result.manifest.get('format_version', '')}"
+        )
+        lines.append(
+            f"  mode                   : {result.manifest.get('mode', '')}"
+        )
+        lines.append(
+            f"  created (UTC)          : "
+            f"{result.manifest.get('created_at', '')}"
+        )
+        lines.append(
+            f"  source data dir        : "
+            f"{result.manifest.get('source_data_dir', '')}"
+        )
+    has_nova_db = any(
+        f == f"{ARCHIVE_DATA_PREFIX}/{_paths.DB_FILENAME}"
+        for f in result.files
+    )
+    lines.append(f"  nova.db present        : {has_nova_db}")
+    lines.append(f"  total uncompressed size: "
+                 f"{_format_bytes(result.total_uncompressed_size)}")
+    lines.append(f"  member count           : {len(result.files)}")
+    if result.errors:
+        lines.append("  errors:")
+        for err in result.errors:
+            lines.append(f"    - {err}")
+    if result.warnings:
+        lines.append("  warnings:")
+        for warning in result.warnings:
+            lines.append(f"    - {warning}")
+    return "\n".join(lines)
+
+
+def _format_restore_plan(plan: RestorePlan) -> str:
+    """Render a short human summary of a :class:`RestorePlan`."""
+    lines = [f"Restore dry-run for {plan.archive_path}"]
+    lines.append(f"  target data dir : {plan.target_data_dir}")
+    lines.append(f"  allowed         : {plan.allowed}")
+    if plan.refuse_reason:
+        lines.append(f"  refuse reason   : {plan.refuse_reason}")
+    lines.append(f"  would restore   : {len(plan.would_restore)} file(s)")
+    if plan.conflicts:
+        lines.append(
+            f"  conflicts       : {len(plan.conflicts)} "
+            "existing file(s) would be overwritten"
+        )
+        for path in plan.conflicts[:10]:
+            lines.append(f"    ! {path}")
+        if len(plan.conflicts) > 10:
+            lines.append(
+                f"    ... and {len(plan.conflicts) - 10} more"
+            )
+    if plan.warnings:
+        lines.append("  warnings:")
+        for warning in plan.warnings:
+            lines.append(f"    - {warning}")
+    lines.append("")
+    lines.append(
+        "This is a dry-run plan only. Nothing was written. Phase 2 "
+        "does not perform an automated restore — follow the manual "
+        "steps in docs/storage-and-migration.md when you are ready."
+    )
+    return "\n".join(lines)
+
+
+def _stderr():  # pragma: no cover - trivial helper for monkeypatching
+    """Return ``sys.stderr`` indirectly so tests can swap it out."""
+    import sys
+
+    return sys.stderr
+
+
+def _cli(argv: list[str]) -> int:
+    """Parse ``argv`` and dispatch a data-export subcommand.
+
+    Returns a POSIX-style exit code:
+
+    * ``0`` — command succeeded.
+    * ``1`` — command failed for a user-visible reason (bad archive,
+      unwritable destination, refused restore, …). The CLI prints a
+      short error line to stderr; nothing else is touched on disk.
+    * ``2`` — argparse-style usage error. The CLI prints the usage
+      banner to stderr.
+
+    The function is split out so tests can drive the CLI without
+    spawning a subprocess, matching the pattern used by
+    ``core.paths._cli``.
+    """
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        prog="python -m core.data_export",
+        description=(
+            "Build, inspect, and dry-run-restore Nova data export "
+            "packages. Read-only by default — only the export "
+            "subcommand writes anything, and only inside the "
+            "configured exports directory or an explicit --output."
+        ),
+    )
+    subparsers = parser.add_subparsers(dest="command")
+
+    export_parser = subparsers.add_parser(
+        "export",
+        help="Build a portable Nova data export package.",
+    )
+    export_parser.add_argument(
+        "--output", "-o",
+        default=None,
+        help=(
+            "Directory to write the archive into. Defaults to "
+            "NOVA_DATA_DIR/exports (or ./exports in legacy mode)."
+        ),
+    )
+    export_parser.add_argument(
+        "--mode",
+        default=MODE_DATA_ONLY,
+        help=(
+            "Export mode. Phase 2 supports 'data-only' only; "
+            "'workspace' is reserved for future work."
+        ),
+    )
+    export_parser.add_argument(
+        "--stem",
+        default=None,
+        help=(
+            "Override the default filename stem "
+            f"({DEFAULT_EXPORT_STEM!r}). Letters, digits, '.', '_', "
+            "'-' only."
+        ),
+    )
+
+    inspect_parser = subparsers.add_parser(
+        "inspect",
+        help="Read-only structural check on an existing archive.",
+    )
+    inspect_parser.add_argument(
+        "archive",
+        help="Path to a Nova data export archive (.tar.gz).",
+    )
+
+    restore_parser = subparsers.add_parser(
+        "restore-dry-run",
+        help=(
+            "Dry-run plan for restoring an archive. Never writes a "
+            "file."
+        ),
+    )
+    restore_parser.add_argument(
+        "archive",
+        help="Path to a Nova data export archive (.tar.gz).",
+    )
+    restore_parser.add_argument(
+        "--data-dir",
+        default=None,
+        help=(
+            "Target data directory. Defaults to the configured "
+            "NOVA_DATA_DIR; failing that, the command refuses."
+        ),
+    )
+
+    if not argv:
+        parser.print_help(file=_stderr())
+        return 2
+
+    args = parser.parse_args(argv)
+
+    if args.command == "export":
+        try:
+            result = create_data_export(
+                dest_dir=args.output,
+                mode=args.mode,
+                stem=args.stem,
+            )
+        except ValueError as exc:
+            print(f"error: {exc}", file=_stderr())
+            return 1
+        except RuntimeError as exc:
+            print(f"error: {exc}", file=_stderr())
+            return 1
+        print(_format_export_summary(result))
+        return 0
+
+    if args.command == "inspect":
+        result = inspect_export(args.archive)
+        print(_format_inspect_summary(result))
+        return 0 if result.valid else 1
+
+    if args.command == "restore-dry-run":
+        plan = plan_restore(
+            args.archive,
+            target_data_dir=args.data_dir,
+        )
+        print(_format_restore_plan(plan))
+        # A refused plan is a *result*, not a CLI failure — the
+        # operator asked us to plan, we did, the plan said "no".
+        # Return 0 so shell scripts can branch on the structured
+        # exit-1 reserved for unexpected errors. Tests pin this.
+        return 0
+
+    parser.print_help(file=_stderr())
+    return 2
+
+
+if __name__ == "__main__":  # pragma: no cover - exercised via tests
+    import sys
+
+    sys.exit(_cli(sys.argv[1:]))
+
+
 __all__ = [
     "ARCHIVE_DATA_PREFIX",
     "ARCHIVE_MANIFEST_NAME",

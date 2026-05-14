@@ -2927,6 +2927,7 @@
             <div id="admin-tabs">
                 <button class="admin-tab-btn active" data-tab="users" onclick="switchAdminTab('users')">⚑ Users</button>
                 <button class="admin-tab-btn" data-tab="models" onclick="switchAdminTab('models')">⬢ Models</button>
+                <button class="admin-tab-btn" data-tab="storage" onclick="switchAdminTab('storage')">⚇ Storage</button>
             </div>
             <button id="admin-close" onclick="closeAdmin()">✕</button>
         </div>
@@ -2977,6 +2978,44 @@
                     <button class="admin-btn" onclick="loadAdminPulls()">refresh</button>
                 </div>
                 <div id="admin-pulls-list"></div>
+            </div>
+
+            <!-- STORAGE TAB -->
+            <div id="admin-tab-storage" class="admin-tab-pane">
+                <div class="admin-section-title" style="display:flex;align-items:center;justify-content:space-between;">
+                    <span>Storage status</span>
+                    <button class="admin-btn" onclick="loadStorageStatus()">refresh</button>
+                </div>
+                <div class="admin-warning-summary">
+                    Read-only snapshot of Nova's data paths. Mount class warnings
+                    surface when data lives on transient mounts (e.g.
+                    <code>/run/media/...</code>) or in <code>/tmp</code>.
+                </div>
+                <div id="storage-status-list">
+                    <div class="admin-empty">Loading…</div>
+                </div>
+
+                <div class="admin-section-title">Create export package</div>
+                <div id="storage-export-form">
+                    <div class="admin-warning-summary">
+                        Builds a portable <code>.tar.gz</code> archive of Nova's
+                        data directory (database, backups, memory packs, logs).
+                        Secrets, <code>.git</code>, <code>.venv</code>, caches,
+                        and Ollama models are <strong>never</strong> included.
+                        The package is written to
+                        <code>NOVA_DATA_DIR/exports/</code>.
+                    </div>
+                    <div class="row" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+                        <button class="admin-btn primary" onclick="createStorageExport()" id="storage-export-btn">
+                            Create export package
+                        </button>
+                        <span class="admin-warning-summary" style="padding:0;">
+                            Confirmation-gated · admin-only · never uploads
+                        </span>
+                    </div>
+                    <div id="storage-export-error" style="color:var(--danger);font-size:0.82rem;min-height:0;"></div>
+                </div>
+                <div id="storage-export-result"></div>
             </div>
         </div>
     </div>
@@ -8076,6 +8115,9 @@
             loadAdminModels();
             loadAdminPulls();
             startAdminPullsPolling();
+        } else if (tab === "storage") {
+            stopAdminPullsPolling();
+            loadStorageStatus();
         }
     }
 
@@ -8602,6 +8644,161 @@
             clearInterval(adminPullsPollTimer);
             adminPullsPollTimer = null;
         }
+    }
+
+    // ── ADMIN: STORAGE & MIGRATION ──
+    //
+    // Read-only status + confirmation-gated export. No destructive
+    // restore UI in this phase. Inspection and dry-run restore live
+    // in the CLI (``python -m core.data_export``) so an operator can
+    // run them on the target machine before copying.
+
+    function formatBytes(bytes) {
+        if (bytes === null || bytes === undefined) return "—";
+        if (bytes < 1024) return bytes + " B";
+        if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
+        if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + " MB";
+        return (bytes / (1024 * 1024 * 1024)).toFixed(2) + " GB";
+    }
+
+    async function loadStorageStatus() {
+        const list = document.getElementById("storage-status-list");
+        if (!list) return;
+        list.innerHTML = '<div class="admin-empty">Loading…</div>';
+        try {
+            const res = await fetch("/admin/storage/status", {
+                headers: { "Authorization": `Bearer ${token}` }
+            });
+            if (res.status === 401) { logout(); return; }
+            if (res.status === 403) {
+                list.innerHTML = '<div class="admin-empty" style="color:var(--danger);">Access denied.</div>';
+                return;
+            }
+            if (!res.ok) {
+                list.innerHTML = '<div class="admin-empty">Failed to load storage status.</div>';
+                return;
+            }
+            const status = await res.json();
+            renderStorageStatus(status);
+        } catch (e) {
+            list.innerHTML = '<div class="admin-empty">Failed to load storage status.</div>';
+        }
+    }
+
+    function renderStorageStatus(status) {
+        const list = document.getElementById("storage-status-list");
+        if (!list) return;
+        const parts = [];
+        if (status.warnings && status.warnings.length) {
+            for (const w of status.warnings) {
+                parts.push(
+                    `<div class="admin-warning warning">` +
+                    `<span class="admin-warning-level">warning</span>` +
+                    `<span class="admin-warning-msg">${escapeHtml(w)}</span>` +
+                    `</div>`
+                );
+            }
+        }
+        const paths = Array.isArray(status.paths) ? status.paths : [];
+        for (const p of paths) {
+            const mountTag = p.mount_class
+                ? `<span class="admin-tag">${escapeHtml(p.mount_class)}</span>`
+                : "";
+            const okTag = p.exists
+                ? `<span class="admin-tag installed">exists</span>`
+                : `<span class="admin-tag missing">missing</span>`;
+            const writable = p.writable === true
+                ? `<span class="admin-tag installed">writable</span>`
+                : (p.writable === false
+                    ? `<span class="admin-tag error">read-only</span>`
+                    : "");
+            const free = formatBytes(p.free_bytes);
+            const warnings = (p.warnings || []).map(w =>
+                `<div class="admin-warning warning"><span class="admin-warning-level">warning</span><span class="admin-warning-msg">${escapeHtml(w)}</span></div>`
+            ).join("");
+            parts.push(
+                `<div class="admin-model-row">` +
+                `<div class="admin-model-head">` +
+                `<span class="admin-model-display">${escapeHtml(p.label || p.name)}</span>` +
+                `${okTag}${writable}${mountTag}` +
+                `</div>` +
+                `<div class="admin-model-name">${escapeHtml(p.path)}</div>` +
+                `<div class="admin-progress-meta">free: ${free}</div>` +
+                `${warnings}` +
+                `</div>`
+            );
+        }
+        const recs = Array.isArray(status.recommendations) ? status.recommendations : [];
+        if (recs.length) {
+            parts.push('<div class="admin-section-title">Recommended layout</div>');
+            for (const r of recs) {
+                parts.push(`<div class="admin-warning info"><span class="admin-warning-level">info</span><span class="admin-warning-msg">${escapeHtml(r)}</span></div>`);
+            }
+        }
+        list.innerHTML = parts.join("") || '<div class="admin-empty">No storage paths reported.</div>';
+    }
+
+    async function createStorageExport() {
+        const btn = document.getElementById("storage-export-btn");
+        const errEl = document.getElementById("storage-export-error");
+        const resultEl = document.getElementById("storage-export-result");
+        if (errEl) errEl.textContent = "";
+        if (!btn) return;
+        const original = btn.textContent;
+        btn.disabled = true;
+        btn.textContent = "Building…";
+        try {
+            const res = await fetch("/admin/storage/export", {
+                method: "POST",
+                headers: {
+                    "Authorization": `Bearer ${token}`,
+                    "Content-Type": "application/json",
+                },
+                body: JSON.stringify({ confirm: true, mode: "data-only" }),
+            });
+            if (res.status === 401) { logout(); return; }
+            if (!res.ok) {
+                let detail = `Failed (${res.status})`;
+                try {
+                    const body = await res.json();
+                    if (body && body.detail) detail = body.detail;
+                } catch (_) { /* ignore */ }
+                if (errEl) errEl.textContent = detail;
+                return;
+            }
+            const body = await res.json();
+            renderStorageExportResult(body);
+        } catch (e) {
+            if (errEl) errEl.textContent = "Network error while creating export.";
+        } finally {
+            btn.disabled = false;
+            btn.textContent = original;
+        }
+    }
+
+    function renderStorageExportResult(result) {
+        const el = document.getElementById("storage-export-result");
+        if (!el) return;
+        const manifest = result.manifest || {};
+        const includedCount = (result.included || []).length;
+        const excludedCount = (result.excluded || []).length;
+        const warnings = (result.warnings || []).map(w =>
+            `<div class="admin-warning warning"><span class="admin-warning-level">warning</span><span class="admin-warning-msg">${escapeHtml(w)}</span></div>`
+        ).join("");
+        el.innerHTML =
+            `<div class="admin-section-title">Latest export</div>` +
+            `<div class="admin-model-row">` +
+            `<div class="admin-model-head">` +
+            `<span class="admin-model-display">${escapeHtml(manifest.format || "export")} v${escapeHtml(String(manifest.format_version || ""))}</span>` +
+            `<span class="admin-tag installed">${escapeHtml(manifest.mode || "data-only")}</span>` +
+            `</div>` +
+            `<div class="admin-model-name">${escapeHtml(result.archive_path || "")}</div>` +
+            `<div class="admin-progress-meta">size: ${formatBytes(result.archive_size || 0)} · sha256: ${escapeHtml((result.archive_sha256 || "").slice(0, 16))}…</div>` +
+            `<div class="admin-progress-meta">created (UTC): ${escapeHtml(manifest.created_at || "")}</div>` +
+            `<div class="admin-progress-meta">${includedCount} file(s) included · ${excludedCount} excluded with reason</div>` +
+            `${warnings}` +
+            `</div>` +
+            `<div class="admin-warning-summary">Inspect or dry-run the package on the target machine with <code>python -m core.data_export inspect &lt;archive&gt;</code>. Phase 2 does not perform an automated restore — see <code>docs/storage-and-migration.md</code>.</div>`;
     }
 
     // ── UTILS ──

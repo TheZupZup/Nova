@@ -1,11 +1,13 @@
 # Nova Storage & Migration Center
 
-> **Status: Phase 1 — backend + docs.** Nova ships a small, admin-only
-> surface that reports where Nova stores its data, builds a portable
-> data export package, and lets you inspect an existing package
-> before you restore. Every action is opt-in, confirmation-gated, and
-> safe by default. No data is ever moved, overwritten, or deleted by
-> Nova itself.
+> **Status: Phase 2 — admin UI + CLI on top of Phase 1's backend.**
+> Nova ships a small, admin-only surface that reports where Nova
+> stores its data, builds a portable data export package, lets you
+> inspect an existing package, and produces a dry-run restore plan
+> before you touch the target. Every action is opt-in,
+> confirmation-gated, and safe by default. No data is ever moved,
+> overwritten, or deleted by Nova itself. Restore stays a manual
+> operator step — the dry-run plan is the most Phase 2 will do.
 
 This document is the operator-facing companion to
 [`docs/data-directory.md`](data-directory.md) and
@@ -29,7 +31,7 @@ If you are setting up Nova for the first time, start with
 
 ## What the Storage & Migration Center covers
 
-Nova exposes three things to the admin in Phase 1:
+Nova exposes four things to the admin:
 
 1. **Storage status** — a read-only report on Nova's path layout:
    `NOVA_DATA_DIR`, the resolved `nova.db` path, the four reserved
@@ -46,11 +48,28 @@ Nova exposes three things to the admin in Phase 1:
    existing archive. The manifest is parsed, every member is
    validated against path traversal and symlink escape, and the
    result is returned in a structured form the admin UI can render.
+4. **Dry-run restore plan** — given an archive and a target data
+   directory, Nova lists the files that *would* be restored, flags
+   any conflicts (e.g. an existing `nova.db`), and refuses to
+   proceed automatically. The plan is purely informational: nothing
+   is written, moved, or deleted.
 
-Restore itself stays a **manual operator step** in Phase 1. The
-inspection result includes the dry-run plan (what files would land
-where) so you can review it before you copy anything. Nova never
-overwrites a `nova.db` automatically.
+Surfaces:
+
+* **Admin overlay → ⚇ Storage tab** — confirmation-gated UI
+  wrapper around the three endpoints. Shows the status report,
+  builds an export package, and renders the latest export summary.
+* **HTTP endpoints** — `/admin/storage/status`,
+  `/admin/storage/export`, `/admin/storage/inspect-export`. All
+  three require an admin bearer token.
+* **CLI** — `python -m core.data_export {export,inspect,restore-dry-run}`
+  so an operator can run the same flows from a shell on either host,
+  including the target machine before any data is copied.
+
+Restore itself stays a **manual operator step**. The dry-run plan
+is the most Phase 2 will do: Nova never overwrites a `nova.db`
+automatically, and the actual file-copy step is a documented
+`rsync` (or equivalent) you run yourself.
 
 ---
 
@@ -348,7 +367,59 @@ secrets.
 
 ---
 
-## Restoring on the target machine (manual, Phase 1)
+## Using the CLI
+
+The admin endpoints are also exposed through a small command-line
+wrapper so an operator can drive the same flows from a shell on
+either host. The CLI is part of the Nova checkout — no extra install
+required.
+
+```bash
+# Build an export package. By default it lands in NOVA_DATA_DIR/exports.
+python -m core.data_export export
+
+# Build into a specific output directory (must be writable).
+python -m core.data_export export --output /mnt/archive/Backups/Nova
+
+# Read-only inspection of an existing package.
+python -m core.data_export inspect \
+    /mnt/archive/Backups/Nova/nova-data-export-20260514T160000Z.tar.gz
+
+# Dry-run restore plan against an explicit target data directory.
+# Never writes anything; refuses if the target already has a nova.db.
+python -m core.data_export restore-dry-run \
+    /mnt/archive/Backups/Nova/nova-data-export-20260514T160000Z.tar.gz \
+    --data-dir /mnt/fastdata/NovaData
+```
+
+Exit codes:
+
+* `0` — the command succeeded (including a dry-run that returned
+  `allowed: false` — that is a *result*, not an error).
+* `1` — a user-visible failure (bad archive, unwritable destination,
+  workspace mode requested, malformed stem).
+* `2` — argparse usage error.
+
+The CLI never modifies anything outside the chosen output directory
+(for `export`), never extracts archives, and never restores data.
+
+## Using the admin UI
+
+When you sign in as an admin and open the admin overlay, a third
+tab — **⚇ Storage** — sits next to Users and Models. It renders the
+storage status report (path-by-path, with mount-class and free-space
+hints), and exposes a single **Create export package** button.
+
+The button calls `/admin/storage/export` with `confirm: true`. The
+response is rendered as a short summary: archive path, size, SHA-256,
+manifest format / version / timestamp, included vs excluded file
+counts, and any warnings (for example: "NOVA_DATA_DIR is not
+configured"). The UI does **not** offer a destructive restore in
+this phase. Inspection and dry-run restore are CLI-only on
+purpose — they are the steps you take on the target machine, often
+before Nova is even running there.
+
+## Restoring on the target machine (manual, Phase 2)
 
 1. On the target machine, set `NOVA_DATA_DIR` to the new data
    directory (`/mnt/fastdata/NovaData` is the recommended default).
@@ -356,10 +427,21 @@ secrets.
 3. If the target already has a `nova.db`, **back it up** by hand
    before continuing. Nova refuses to overwrite an existing
    database; do not work around this by deleting the file blindly.
-4. Inspect the package via `/admin/storage/inspect-export` (run it
-   on the target host after starting Nova once with an empty data
-   directory, or use `tar tvf` from the shell to read the file
-   list).
+4. Inspect the package and review the dry-run plan:
+
+   ```bash
+   python -m core.data_export inspect \
+       /path/to/nova-data-export-<stamp>.tar.gz
+
+   python -m core.data_export restore-dry-run \
+       /path/to/nova-data-export-<stamp>.tar.gz \
+       --data-dir /mnt/fastdata/NovaData
+   ```
+
+   The dry-run plan refuses (`allowed: false`) if the target
+   directory already contains a `nova.db`. Move or rename the
+   existing file by hand before retrying.
+
 5. Extract the package somewhere staging:
 
    ```bash
@@ -377,9 +459,11 @@ secrets.
    shows your memories, conversations, and settings.
 8. Re-pull any Ollama models you had configured on the source host.
 
-Nova's automated restore is **future work**. Today every step above
-is something you do, deliberately, with the database file in your
-hand.
+Nova's **automated restore is future work**. Today step 5–6 is
+something you do, deliberately, with the database file in your hand.
+The dry-run plan is the safety net — it tells you what *would*
+happen, so you can sanity-check the package and the target before
+you copy anything.
 
 ---
 
@@ -409,7 +493,7 @@ contain one.
 
 ## Safety guarantees
 
-These are firm boundaries of the Phase 1 Storage & Migration Center:
+These are firm boundaries of the Storage & Migration Center:
 
 * **Read-only by default.** `/admin/storage/status` and
   `/admin/storage/inspect-export` never write to disk.
@@ -461,7 +545,7 @@ boundaries above are firm.
 
 ## Future work
 
-These are explicitly **not** in Phase 1:
+These are explicitly **not** in Phase 2:
 
 * A full admin-UI wizard for migration between disks.
 * A `workspace` export mode that snapshots the entire Nova Portable
@@ -473,6 +557,6 @@ These are explicitly **not** in Phase 1:
   / Docker config updates).
 * Moving Ollama models.
 
-Each of those is a separate PR with its own review. The Phase 1
+Each of those is a separate PR with its own review. The current
 boundary keeps the surface area small, the safety contract clear,
 and the existing Nova install untouched.

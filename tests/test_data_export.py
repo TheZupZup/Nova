@@ -546,3 +546,112 @@ class TestPublicSurface:
         ):
             assert reason == reason.lower()
             assert " " not in reason
+
+
+# ── CLI ────────────────────────────────────────────────────────────
+
+
+class TestCli:
+    """The ``python -m core.data_export`` entry point.
+
+    Driven through :func:`core.data_export._cli` so the assertions do
+    not have to spawn a subprocess (mirroring the ``core.paths`` CLI
+    test pattern). Each test verifies the exit code, the human-
+    readable summary, and the on-disk side effects (or lack thereof).
+    """
+
+    def test_export_subcommand_writes_archive(
+        self, configured_data_dir, capsys, tmp_path,
+    ):
+        dest = tmp_path / "out"
+        rc = de._cli(["export", "--output", str(dest)])
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "Nova export package created" in out
+        # The archive file actually exists on disk.
+        archives = list(dest.glob("nova-data-export-*.tar.gz"))
+        assert len(archives) == 1
+
+    def test_export_subcommand_rejects_workspace_mode(
+        self, configured_data_dir, capsys,
+    ):
+        rc = de._cli(["export", "--mode", "workspace"])
+        assert rc == 1
+        err = capsys.readouterr().err
+        assert "error" in err.lower()
+
+    def test_inspect_subcommand_on_valid_archive(
+        self, configured_data_dir, capsys,
+    ):
+        # Build a real archive first.
+        result = de.create_data_export()
+        rc = de._cli(["inspect", result.archive_path])
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "valid                  : True" in out
+        assert "nova.db present        : True" in out
+
+    def test_inspect_subcommand_on_invalid_archive(
+        self, capsys, tmp_path,
+    ):
+        bogus = tmp_path / "broken.tar.gz"
+        bogus.write_text("not a tar", encoding="utf-8")
+        rc = de._cli(["inspect", str(bogus)])
+        assert rc == 1
+        out = capsys.readouterr().out
+        assert "valid                  : False" in out
+
+    def test_restore_dry_run_refuses_when_target_has_nova_db(
+        self, configured_data_dir, tmp_path, capsys,
+    ):
+        result = de.create_data_export()
+        target = tmp_path / "TargetData"
+        target.mkdir()
+        (target / "nova.db").write_bytes(b"existing")
+        rc = de._cli([
+            "restore-dry-run", result.archive_path,
+            "--data-dir", str(target),
+        ])
+        # Refusal is a result, not a CLI error — exit 0 with the plan.
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "allowed         : False" in out
+        assert "already contains nova.db" in out
+        # The dry-run never touched the target.
+        assert (target / "nova.db").read_bytes() == b"existing"
+
+    def test_restore_dry_run_allows_clean_target(
+        self, configured_data_dir, tmp_path, capsys,
+    ):
+        result = de.create_data_export()
+        target = tmp_path / "FreshTarget"
+        target.mkdir()
+        rc = de._cli([
+            "restore-dry-run", result.archive_path,
+            "--data-dir", str(target),
+        ])
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "allowed         : True" in out
+        # Even on a clean target, the dry-run never extracts anything.
+        assert list(target.iterdir()) == []
+
+    def test_unknown_command_prints_usage(self, capsys):
+        rc = de._cli([])
+        assert rc == 2
+        err = capsys.readouterr().err
+        # argparse prints the program description / available subcommands.
+        assert "export" in err
+        assert "inspect" in err
+        assert "restore-dry-run" in err
+
+    def test_export_subcommand_rejects_unsafe_stem(
+        self, configured_data_dir, capsys, tmp_path,
+    ):
+        dest = tmp_path / "out"
+        rc = de._cli([
+            "export", "--output", str(dest), "--stem", "../escape",
+        ])
+        assert rc == 1
+        err = capsys.readouterr().err
+        assert "error" in err.lower()
