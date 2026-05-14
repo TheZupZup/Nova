@@ -1666,23 +1666,69 @@ def _copy_into_target(
     target_root: Path,
     relative_files: list[str],
 ) -> tuple[list[str], list[str], Optional[str]]:
-    """Copy staged files into ``target_root``.
+    """Copy staged files into ``target_root`` with rollback on failure.
 
     Returns ``(restored, conflicts, error)``. ``restored`` is the
-    list of POSIX-relative paths actually copied; ``conflicts`` lists
-    target paths that already existed and were replaced (those files
-    were already captured by the pre-restore backup). ``error`` is
+    list of POSIX-relative paths actually copied; ``conflicts``
+    lists target paths that already existed and were replaced
+    (those files were also captured by the pre-restore backup, plus
+    stashed in-staging for per-restore rollback). ``error`` is
     ``None`` on success.
 
-    The copy is done file-by-file with ``os.replace`` so each
-    individual destination flips atomically. We do not attempt a
-    whole-tree rename because the target directory contains files
-    Nova did not bring in (other backups, prior exports, etc.) and
-    the safety contract forbids deleting them.
+    Each per-file copy is staged in two steps so a mid-run failure
+    can be rolled back atomically:
+
+      1. If the target file already exists, move it to
+         ``<staging>/.replaced-originals/<rel>``.
+      2. Move the staged source file into the target via
+         ``os.replace`` (atomic on the same filesystem).
+
+    On any failure the function walks back over the successful
+    moves: each ``.replaced-originals`` file is moved back to its
+    original target path; files that did not exist before are
+    deleted. The pre-restore backup (created earlier by
+    :func:`_create_pre_restore_backup`) remains as the second
+    line of defence if even the rollback fails.
+
+    The returned ``restored`` / ``conflicts`` lists are intentionally
+    empty on a failure path so the caller does not report files as
+    "restored" when the rollback returned them to their previous
+    state.
     """
     restored: list[str] = []
     conflicts: list[str] = []
     target_resolved = target_root.resolve()
+    stash_dir = staging / ".replaced-originals"
+    try:
+        stash_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        return [], [], (
+            f"Could not create rollback stash: "
+            f"{exc.strerror or 'OS error'}."
+        )
+
+    # Successfully-committed moves so a later failure can roll back.
+    # Each entry is ``(dst, stash_path | None)``. ``stash_path is
+    # None`` means "the file did not exist before; rollback should
+    # delete it".
+    committed: list[tuple[Path, Optional[Path]]] = []
+
+    def _rollback() -> None:
+        # Walk in reverse so a newly-created directory tree unwinds
+        # in the right order. Best-effort: a failure here leaves
+        # the pre-restore backup as the operator-facing recovery.
+        for dst_path, stash in reversed(committed):
+            if stash is None:
+                try:
+                    dst_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+                continue
+            try:
+                os.replace(str(stash), str(dst_path))
+            except OSError:
+                pass
+
     for rel in relative_files:
         src = staging / Path(*rel.split("/"))
         dst = target_root / Path(*rel.split("/"))
@@ -1691,21 +1737,56 @@ def _copy_into_target(
             dst_resolved = dst.resolve(strict=False)
             dst_resolved.relative_to(target_resolved)
         except (OSError, ValueError):
-            return restored, conflicts, (
+            _rollback()
+            return [], [], (
                 f"Refusing to write {rel!r}: it would land outside "
                 "the target data directory."
             )
         try:
             dst.parent.mkdir(parents=True, exist_ok=True)
-            existed = dst.exists()
+        except OSError as exc:
+            _rollback()
+            return [], [], (
+                f"Could not prepare {rel!r}: "
+                f"{exc.strerror or 'OS error'}."
+            )
+
+        existed = dst.exists()
+        stash_path: Optional[Path] = None
+        if existed:
+            stash_path = stash_dir / Path(*rel.split("/"))
+            try:
+                stash_path.parent.mkdir(parents=True, exist_ok=True)
+                # Move existing file aside. ``os.replace`` is atomic
+                # on the same filesystem; staging lives inside the
+                # data root by construction.
+                os.replace(str(dst), str(stash_path))
+            except OSError as exc:
+                _rollback()
+                return [], [], (
+                    f"Could not stash existing {rel!r}: "
+                    f"{exc.strerror or 'OS error'}."
+                )
+
+        try:
             # ``os.replace`` is atomic on the same filesystem. The
             # staging directory lives **inside** the target root by
             # construction so this never falls back to a cross-FS
             # copy.
             os.replace(str(src), str(dst))
         except OSError as exc:
-            return restored, conflicts, (
-                f"Could not write {rel!r}: {exc.strerror or 'OS error'}."
+            # Best-effort recovery for *this* file before unwinding
+            # the rest: move the stash back into place if we just
+            # bumped a pre-existing file out of the way.
+            if stash_path is not None and stash_path.exists():
+                try:
+                    os.replace(str(stash_path), str(dst))
+                except OSError:
+                    pass
+            _rollback()
+            return [], [], (
+                f"Could not write {rel!r}: "
+                f"{exc.strerror or 'OS error'}."
             )
         try:
             os.chmod(dst, 0o600)
@@ -1714,6 +1795,7 @@ def _copy_into_target(
         restored.append(rel)
         if existed:
             conflicts.append(rel)
+        committed.append((dst, stash_path))
     return restored, conflicts, None
 
 
@@ -1848,28 +1930,12 @@ def apply_restore(
             manifest=inspection.manifest,
         )
 
-    try:
-        target_root.mkdir(parents=True, exist_ok=True)
-    except OSError as exc:
-        return RestoreResult(
-            archive_path=archive_path_s,
-            target_data_dir=str(target_root),
-            outcome=RESTORE_OUTCOME_FAILED,
-            refuse_reason=(
-                f"Target data directory could not be prepared: "
-                f"{exc.strerror or 'OS error'}"
-            ),
-            confirmed=bool(confirm),
-            restored_files=(),
-            skipped_files=(),
-            conflicts=(),
-            backup_path="",
-            backup_size=0,
-            restart_recommended=False,
-            warnings=inspection.warnings,
-            manifest=inspection.manifest,
-        )
-
+    # Resolve the target lexically. ``Path.resolve(strict=False)``
+    # does not require the directory to exist, so the dry-run path
+    # below stays strictly read-only — no mkdir, no statvfs, no
+    # touch. The actual ``mkdir`` is deferred until after the
+    # dry-run early return so a dry-run against a missing target
+    # never creates a directory on disk.
     target_resolved = target_root.resolve()
 
     # Phase 2: compute the "would restore" file list (also checks
@@ -1973,6 +2039,32 @@ def apply_restore(
                 "confirm=true after reviewing the dry-run plan."
             ),
             confirmed=False,
+            restored_files=(),
+            skipped_files=(),
+            conflicts=tuple(conflicts_seen),
+            backup_path="",
+            backup_size=0,
+            restart_recommended=has_nova_db_in_archive,
+            warnings=inspection.warnings,
+            manifest=inspection.manifest,
+        )
+
+    # Confirmation has cleared. Now (and only now) is it safe to
+    # create the target data directory on disk — the dry-run path
+    # never reaches this point so a dry-run against a missing
+    # target leaves the filesystem untouched.
+    try:
+        target_root.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        return RestoreResult(
+            archive_path=archive_path_s,
+            target_data_dir=str(target_resolved),
+            outcome=RESTORE_OUTCOME_FAILED,
+            refuse_reason=(
+                f"Target data directory could not be prepared: "
+                f"{exc.strerror or 'OS error'}"
+            ),
+            confirmed=bool(confirm),
             restored_files=(),
             skipped_files=(),
             conflicts=tuple(conflicts_seen),

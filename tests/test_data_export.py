@@ -755,6 +755,32 @@ class TestApplyRestoreDryRun:
         )
         assert out.outcome == de.RESTORE_OUTCOME_REFUSED
 
+    def test_dry_run_does_not_create_missing_target(
+        self, configured_data_dir, tmp_path,
+    ):
+        """A dry-run must be strictly read-only on the filesystem.
+
+        Earlier implementations called ``target_root.mkdir(...)``
+        before the dry-run early return, which created
+        ``NOVA_DATA_DIR`` on disk whenever the configured target did
+        not yet exist. The dry-run path is now deferred to *after*
+        the early return so a dry-run against a missing target
+        leaves the filesystem untouched.
+        """
+        result = de.create_data_export()
+        missing_target = tmp_path / "DoesNotExist"
+        assert not missing_target.exists()
+        out = de.apply_restore(
+            result.archive_path,
+            target_data_dir=missing_target,
+            dry_run=True,
+        )
+        # The plan was computed against the would-be target path.
+        assert out.outcome == de.RESTORE_OUTCOME_DRY_RUN
+        assert "nova.db" in out.restored_files
+        # Critical: the dry-run did NOT create the target directory.
+        assert not missing_target.exists()
+
 
 class TestApplyRestoreConfirmation:
     """The real restore refuses without explicit confirmation."""
@@ -1083,6 +1109,64 @@ class TestApplyRestoreSafety:
         assert out2.backup_path != out1.backup_path
         assert Path(out1.backup_path).is_file()
         assert Path(out2.backup_path).is_file()
+
+    def test_partial_copy_failure_rolls_back_earlier_files(
+        self, configured_data_dir, tmp_path, monkeypatch,
+    ):
+        """A mid-run copy failure must roll back every earlier replacement.
+
+        Without rollback, the per-file ``os.replace`` loop would
+        leave the target in a mixed state (files 1..N-1 from the
+        archive, file N original, files N+1.. original). The
+        rollback path moves the stashed originals back into place
+        so the target stays bit-for-bit identical to its pre-restore
+        state when any file fails to copy.
+        """
+        result = de.create_data_export()
+        target = tmp_path / "Target"
+        target.mkdir()
+        # Seed the target with two distinct canonical files so we
+        # can verify both survive a partial-failure rollback.
+        marker_db = b"-- original nova.db --"
+        marker_pack = b'{"old": "pack"}'
+        (target / "nova.db").write_bytes(marker_db)
+        (target / "memory-packs").mkdir()
+        (target / "memory-packs" / "trip-2026.json").write_bytes(marker_pack)
+
+        # Fail the third os.replace call. The first two are:
+        #   1. stash existing nova.db → .replaced-originals/nova.db
+        #   2. move staged nova.db → nova.db (commits file 1)
+        # The third is then either stash for file 2 or its copy. By
+        # the time it fires at least one file has been "committed"
+        # so rollback has work to do.
+        original_replace = os.replace
+        call_count = {"n": 0}
+
+        def flaky_replace(src, dst):
+            call_count["n"] += 1
+            if call_count["n"] == 3:
+                raise OSError("synthetic mid-run failure")
+            return original_replace(src, dst)
+
+        monkeypatch.setattr(de.os, "replace", flaky_replace)
+        out = de.apply_restore(
+            result.archive_path,
+            target_data_dir=target,
+            confirm=True,
+        )
+        monkeypatch.setattr(de.os, "replace", original_replace)
+        assert out.outcome == de.RESTORE_OUTCOME_FAILED
+        # Both target files are bit-for-bit identical to the original.
+        assert (target / "nova.db").read_bytes() == marker_db
+        assert (
+            (target / "memory-packs" / "trip-2026.json").read_bytes()
+            == marker_pack
+        )
+        # The failure path reports no restored files (rollback).
+        assert out.restored_files == ()
+        assert out.conflicts == ()
+        # Staging cleaned up.
+        assert not (target / de.RESTORE_STAGING_DIRNAME).exists()
 
 
 class TestApplyRestoreExcludedContent:
