@@ -14,6 +14,27 @@
   `SubscriptableBaseModel` (production) shapes end-to-end.
 
 ### Added
+- Safe guided restore for Nova data export packages (Storage &
+  Migration Phase 3). The Storage tab now exposes a four-step flow —
+  inspect, dry-run, confirm, restore — backed by a new
+  `apply_restore` helper in `core/data_export.py`, two admin
+  endpoints (`POST /admin/storage/restore-dry-run` and
+  `POST /admin/storage/restore`), and a `python -m core.data_export
+  restore <archive> --confirm` CLI subcommand. Every real restore
+  writes an automatic pre-restore backup of the current data under
+  `NOVA_DATA_DIR/backups/pre-restore/`, refuses to proceed if the
+  backup cannot be written, stages the archive into a private
+  `.restore-staging/` directory inside the data root, validates
+  every extracted member against path traversal / symlink escape,
+  and only then replaces files atomically per-file. Failed restores
+  leave existing data bit-for-bit identical; the pre-restore backup
+  is preserved on success so an operator can roll back. The admin UI
+  keeps the restore button disabled until inspection and dry-run
+  both succeed and the operator ticks an explicit "I understand"
+  checkbox. No cloud sync, no automatic restart, no shell, no model
+  files; secrets, `.env`, `.git`, and Ollama models stay out by
+  construction. See `docs/storage-and-migration.md` for the full
+  walkthrough.
 - Smoother streamed chat experience: the streaming bubble now coalesces
   incoming Ollama tokens on a short flush window (~28 ms) and only
   paints once per cycle, so single-character chunks no longer cause

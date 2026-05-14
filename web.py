@@ -2606,9 +2606,52 @@ def storage_inspect_endpoint(
     selects the archive by its plain filename — absolute paths are
     rejected at the validation layer.
     """
+    target = _resolve_storage_archive(req.name)
+    return _data_export.inspect_export(str(target)).as_dict()
+
+
+class StorageRestoreRequest(BaseModel):
+    """Body shape for ``/admin/storage/restore[-dry-run]``.
+
+    ``name`` selects an archive sitting under the configured exports
+    directory by its plain basename — the same convention the inspect
+    endpoint uses. ``confirm`` is required to be ``True`` for the
+    real restore endpoint; the dry-run endpoint accepts either value
+    and never writes a file. ``confirmed_manifest_id`` is an
+    optional pin: when provided, the archive's ``created_at``
+    timestamp (returned by inspect) must match or the restore is
+    refused.
+    """
+
+    name: str = Field(min_length=1, max_length=255)
+    confirm: bool = False
+    confirmed_manifest_id: str | None = None
+
+    model_config = {"extra": "forbid"}
+
+    @field_validator("name")
+    @classmethod
+    def _validate_name(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("name must not be empty")
+        if "/" in v or "\\" in v or ".." in v or v.startswith("."):
+            raise ValueError("name must be a plain filename, not a path")
+        return v
+
+
+def _resolve_storage_archive(name: str):
+    """Return the absolute path of an archive name under the exports dir.
+
+    Centralises the path-traversal guard used by inspect / restore /
+    restore-dry-run so the three endpoints stay consistent. Raises
+    ``HTTPException(400)`` for any name that resolves outside the
+    exports directory and ``HTTPException(404)`` when the file does
+    not exist.
+    """
     from core import paths as _paths_mod
     exports_root = _paths_mod.effective_data_root() / _paths_mod.EXPORTS_SUBDIR
-    target = exports_root / req.name
+    target = exports_root / name
     try:
         target_resolved = target.resolve(strict=False)
         exports_resolved = exports_root.resolve(strict=False)
@@ -2622,7 +2665,74 @@ def storage_inspect_endpoint(
         raise HTTPException(
             status_code=404, detail="Archive not found.",
         )
-    return _data_export.inspect_export(str(target)).as_dict()
+    return target
+
+
+@app.post("/admin/storage/restore-dry-run")
+def storage_restore_dry_run_endpoint(
+    req: StorageRestoreRequest,
+    _: CurrentUser = Depends(require_admin),
+):
+    """Dry-run a restore for an archive under the exports directory.
+
+    Reads the archive, validates every member, and returns the file
+    list the real restore would produce, along with conflicts,
+    warnings, and a flag for whether a restart is recommended. Does
+    **not** write to disk, does **not** create a backup, and does
+    **not** stage anything.
+
+    Confirmation is irrelevant for the dry-run flow (the body field
+    is accepted for symmetry with the real endpoint but ignored).
+    """
+    archive = _resolve_storage_archive(req.name)
+    result = _data_export.apply_restore(
+        str(archive),
+        target_data_dir=None,
+        confirm=False,
+        confirmed_manifest_id=req.confirmed_manifest_id,
+        dry_run=True,
+    )
+    return result.as_dict()
+
+
+@app.post("/admin/storage/restore")
+def storage_restore_endpoint(
+    req: StorageRestoreRequest,
+    _: CurrentUser = Depends(require_admin),
+):
+    """Restore an archive into ``NOVA_DATA_DIR`` after explicit confirm.
+
+    Refuses with 400 when ``confirm`` is not True. The underlying
+    helper:
+
+    * re-inspects the archive (manifest, traversal, symlink escape);
+    * creates a pre-restore backup under
+      ``NOVA_DATA_DIR/backups/pre-restore/`` and refuses if the
+      backup cannot be written;
+    * extracts into a staging directory inside the data root;
+    * atomically replaces canonical Nova files only;
+    * cleans up staging on success or failure;
+    * returns a structured result the UI can render verbatim.
+
+    On a refused or failed restore the response still has status
+    200 — the body's ``outcome`` and ``refuse_reason`` describe what
+    happened. This mirrors the maintenance endpoints, which surface
+    a ``"refused"`` outcome instead of a 500.
+    """
+    if not req.confirm:
+        raise HTTPException(
+            status_code=400,
+            detail="Restore requires explicit confirmation.",
+        )
+    archive = _resolve_storage_archive(req.name)
+    result = _data_export.apply_restore(
+        str(archive),
+        target_data_dir=None,
+        confirm=True,
+        confirmed_manifest_id=req.confirmed_manifest_id,
+        dry_run=False,
+    )
+    return result.as_dict()
 
 
 @app.get("/channel")

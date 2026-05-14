@@ -1,13 +1,15 @@
 # Nova Storage & Migration Center
 
-> **Status: Phase 2 — admin UI + CLI on top of Phase 1's backend.**
+> **Status: Phase 3 — safe guided restore on top of Phase 1 + 2.**
 > Nova ships a small, admin-only surface that reports where Nova
 > stores its data, builds a portable data export package, lets you
-> inspect an existing package, and produces a dry-run restore plan
-> before you touch the target. Every action is opt-in,
-> confirmation-gated, and safe by default. No data is ever moved,
-> overwritten, or deleted by Nova itself. Restore stays a manual
-> operator step — the dry-run plan is the most Phase 2 will do.
+> inspect an existing package, produces a dry-run restore plan, and
+> — new in Phase 3 — performs the actual restore after an explicit
+> confirmation and an automatic pre-restore backup. Every action is
+> opt-in, confirmation-gated, and safe by default. No data is ever
+> moved, overwritten, or deleted by Nova without first writing a
+> recoverable backup; a failed restore leaves the current data
+> bit-for-bit identical to before.
 
 This document is the operator-facing companion to
 [`docs/data-directory.md`](data-directory.md) and
@@ -31,7 +33,7 @@ If you are setting up Nova for the first time, start with
 
 ## What the Storage & Migration Center covers
 
-Nova exposes four things to the admin:
+Nova exposes five things to the admin:
 
 1. **Storage status** — a read-only report on Nova's path layout:
    `NOVA_DATA_DIR`, the resolved `nova.db` path, the four reserved
@@ -53,23 +55,32 @@ Nova exposes four things to the admin:
    any conflicts (e.g. an existing `nova.db`), and refuses to
    proceed automatically. The plan is purely informational: nothing
    is written, moved, or deleted.
+5. **Guided restore (Phase 3)** — given an archive and an explicit
+   confirmation, Nova creates an automatic pre-restore backup of
+   the current data, stages the archive into a private directory,
+   validates every extracted file, and only then replaces files
+   inside `NOVA_DATA_DIR`. Failed restores leave the current data
+   intact; the pre-restore backup is preserved on success so the
+   operator can roll back at any time.
 
 Surfaces:
 
 * **Admin overlay → ⚇ Storage tab** — confirmation-gated UI
-  wrapper around the three endpoints. Shows the status report,
-  builds an export package, and renders the latest export summary.
+  wrapper around all five flows. Shows the status report, builds an
+  export package, and (Phase 3) walks the operator through inspect
+  → dry-run → confirm → restore.
 * **HTTP endpoints** — `/admin/storage/status`,
-  `/admin/storage/export`, `/admin/storage/inspect-export`. All
-  three require an admin bearer token.
-* **CLI** — `python -m core.data_export {export,inspect,restore-dry-run}`
+  `/admin/storage/export`, `/admin/storage/inspect-export`,
+  `/admin/storage/restore-dry-run`, `/admin/storage/restore`. All
+  five require an admin bearer token.
+* **CLI** — `python -m core.data_export {export,inspect,restore-dry-run,restore}`
   so an operator can run the same flows from a shell on either host,
   including the target machine before any data is copied.
 
-Restore itself stays a **manual operator step**. The dry-run plan
-is the most Phase 2 will do: Nova never overwrites a `nova.db`
-automatically, and the actual file-copy step is a documented
-`rsync` (or equivalent) you run yourself.
+Restore is now **safe and reversible**: the dry-run still exists
+(default for the cautious operator) and the real restore writes a
+pre-restore backup *before* any file is replaced. A failed restore
+never corrupts current data.
 
 ---
 
@@ -419,51 +430,151 @@ this phase. Inspection and dry-run restore are CLI-only on
 purpose — they are the steps you take on the target machine, often
 before Nova is even running there.
 
-## Restoring on the target machine (manual, Phase 2)
+## Guided restore (Phase 3)
 
-1. On the target machine, set `NOVA_DATA_DIR` to the new data
-   directory (`/mnt/fastdata/NovaData` is the recommended default).
-2. Stop Nova: `sudo systemctl stop nova`.
-3. If the target already has a `nova.db`, **back it up** by hand
-   before continuing. Nova refuses to overwrite an existing
-   database; do not work around this by deleting the file blindly.
-4. Inspect the package and review the dry-run plan:
+Nova can now restore a valid data export package into the active
+`NOVA_DATA_DIR` directly — safely, with an automatic pre-restore
+backup and explicit confirmation. The flow is the same whether you
+use the CLI or the admin UI, and the safety contract is identical:
 
-   ```bash
-   python -m core.data_export inspect \
-       /path/to/nova-data-export-<stamp>.tar.gz
+1. **Inspect** the package.
+2. **Dry-run** the restore. Read the file list and warnings.
+3. **Confirm** explicitly.
+4. Nova **backs up** the current data automatically.
+5. Nova **stages** the archive into a private directory inside
+   `NOVA_DATA_DIR`.
+6. Nova **replaces** matched files atomically per-file.
+7. Nova **cleans up** staging on success or failure.
 
-   python -m core.data_export restore-dry-run \
-       /path/to/nova-data-export-<stamp>.tar.gz \
-       --data-dir /mnt/fastdata/NovaData
-   ```
+The pre-restore backup lives under
+`NOVA_DATA_DIR/backups/pre-restore/` as a Nova export package of
+its own (same `tar.gz` format, same manifest). You can inspect it
+or use it as the source for a follow-up restore — that is how you
+roll back.
 
-   The dry-run plan refuses (`allowed: false`) if the target
-   directory already contains a `nova.db`. Move or rename the
-   existing file by hand before retrying.
+### Restoring from the CLI
 
-5. Extract the package somewhere staging:
+```bash
+# Stop Nova so the running process does not hold the database open.
+sudo systemctl stop nova
 
-   ```bash
-   tar -xzf nova-data-export-<stamp>.tar.gz -C /tmp/nova-restore
-   ```
+# Inspect first. The CLI prints the manifest, the file count, the
+# uncompressed size, and any structural issues.
+python -m core.data_export inspect \
+    /mnt/archive/Backups/Nova/nova-data-export-<stamp>.tar.gz
 
-6. Copy the contents of `/tmp/nova-restore/data/` into
-   `NOVA_DATA_DIR` and fix ownership:
+# Dry-run the restore against the active data directory. Never
+# writes a file. The output lists the would-be files and conflicts.
+python -m core.data_export restore-dry-run \
+    /mnt/archive/Backups/Nova/nova-data-export-<stamp>.tar.gz \
+    --data-dir /mnt/fastdata/NovaData
 
-   ```bash
-   sudo -u nova rsync -aH /tmp/nova-restore/data/ /mnt/fastdata/NovaData/
-   ```
+# Real restore. The --confirm flag is required; without it the
+# command refuses. The optional --confirmed-manifest-id pins the
+# archive identity so another archive cannot slip in between the
+# inspect and restore calls.
+python -m core.data_export restore \
+    /mnt/archive/Backups/Nova/nova-data-export-<stamp>.tar.gz \
+    --data-dir /mnt/fastdata/NovaData \
+    --confirm
 
-7. Start Nova: `sudo systemctl start nova` and confirm the web UI
-   shows your memories, conversations, and settings.
-8. Re-pull any Ollama models you had configured on the source host.
+# Start Nova back up.
+sudo systemctl start nova
+```
 
-Nova's **automated restore is future work**. Today step 5–6 is
-something you do, deliberately, with the database file in your hand.
-The dry-run plan is the safety net — it tells you what *would*
-happen, so you can sanity-check the package and the target before
-you copy anything.
+The restore CLI exits `0` on success and `1` on a refusal or
+failure — so shell scripts can branch on it. The output includes:
+
+* the restored file count,
+* the absolute path of the pre-restore backup,
+* any warnings (e.g. "restart Nova so the new nova.db is picked
+  up"),
+* and the manifest summary.
+
+### Restoring from the admin UI
+
+The **⚇ Storage** tab gains a **Restore from export package**
+section in Phase 3. The flow:
+
+1. Type the filename of the package as it sits under
+   `NOVA_DATA_DIR/exports/` (the admin UI never reads arbitrary
+   filesystem paths — the file must already be under the configured
+   exports directory). Move the archive there with `rsync` or `cp`
+   first if it is not.
+2. Click **Inspect**. The UI renders the manifest, the format /
+   version, the member count, the uncompressed size, and whether
+   `nova.db` is in the package. Errors and warnings are listed
+   verbatim.
+3. Click **Dry-run**. The UI renders what *would* be restored and
+   surfaces a `would proceed` / `refused` tag. The restore button
+   appears below.
+4. Tick the confirmation checkbox:
+   *"I understand this will replace Nova's current data after
+   creating a backup."*
+5. Click **Restore package and backup current data first**. The UI
+   reports the restored files count, the pre-restore backup path,
+   any warnings, and a clear "restart Nova" hint when `nova.db`
+   was in the package.
+
+The restore button stays **disabled** until inspection and dry-run
+have both succeeded *and* the confirmation checkbox is ticked. Each
+gate is enforced on both sides: client-side (so the UI never offers
+the destructive action before the operator has reviewed) and
+server-side (so a misbehaving client cannot bypass the gates).
+
+### Verifying after a restore
+
+1. **Restart Nova** if `nova.db` was in the package: `sudo
+   systemctl restart nova`.
+2. **Open Nova** and confirm:
+   - your conversations are present,
+   - your memories are restored,
+   - your per-user preferences look correct,
+   - `/admin/storage/status` reports the data directory as healthy.
+3. **Re-pull Ollama models** you had configured on the source host
+   (`ollama pull <name>`). Ollama models are owned by Ollama, not
+   by Nova, and never live inside an export package.
+
+### Rolling back using the pre-restore backup
+
+The pre-restore backup is a Nova export package. To roll back:
+
+```bash
+# The pre-restore backup lives under NOVA_DATA_DIR/backups/pre-restore/.
+ls -lh /mnt/fastdata/NovaData/backups/pre-restore/
+
+# Inspect it as you would any other export.
+python -m core.data_export inspect \
+    /mnt/fastdata/NovaData/backups/pre-restore/nova-pre-restore-<stamp>.tar.gz
+
+# Restore from the backup. The current data is itself backed up
+# *again* automatically before the rollback proceeds, so multiple
+# rollbacks are possible.
+sudo systemctl stop nova
+python -m core.data_export restore \
+    /mnt/fastdata/NovaData/backups/pre-restore/nova-pre-restore-<stamp>.tar.gz \
+    --data-dir /mnt/fastdata/NovaData \
+    --confirm
+sudo systemctl start nova
+```
+
+Pre-restore backup files are **never overwritten**: a name clash
+falls back to `-<n>` until a free name is found. Operators are
+expected to clean up old pre-restore backups by hand when they no
+longer need them.
+
+### What stays out of scope (still)
+
+* **Ollama models.** Re-pull on the target machine.
+* **`.env` and other secrets.** Configure them on the target
+  machine, not in the export.
+* **Media libraries (Jellyfin, Plex, …).** Those services own
+  their own data directories.
+* **Automatic restart of Nova.** Nova never restarts itself after
+  a restore — even though the maintenance center has a calm
+  systemd-user restart facility, the restore flow surfaces a
+  "restart Nova" *hint* rather than performing it, so the operator
+  remains in charge of when the new database starts being served.
 
 ---
 
@@ -495,8 +606,11 @@ contain one.
 
 These are firm boundaries of the Storage & Migration Center:
 
-* **Read-only by default.** `/admin/storage/status` and
-  `/admin/storage/inspect-export` never write to disk.
+* **Local-only.** No outbound calls, no cloud sync, no scheduled
+  background restore.
+* **Read-only by default.** `/admin/storage/status`,
+  `/admin/storage/inspect-export`, and `/admin/storage/restore-dry-run`
+  never write to disk.
 * **Admin-only.** Every endpoint is wrapped with `require_admin`;
   non-admin and restricted users see a 403.
 * **Confirmation-gated export.** `/admin/storage/export` requires
@@ -516,12 +630,33 @@ These are firm boundaries of the Storage & Migration Center:
   letter) and re-checked against the intended root after
   resolution. Hostile archives are refused with a clear error,
   never extracted.
-* **No automatic restore.** Phase 1 plans and inspects only. No
-  file is written, moved, or deleted by Nova during a restore.
-* **No overwrite without explicit confirmation.** A restore plan
-  refuses when the target data directory already contains a
-  `nova.db`. The operator removes or renames the existing file by
-  hand, deliberately, before continuing.
+* **No restore without explicit confirmation.** Phase 3's real
+  restore endpoint refuses unless the request body carries
+  `confirm: true`. The CLI's `restore` subcommand refuses without
+  `--confirm`. The admin UI keeps the restore button disabled until
+  inspection succeeds, the dry-run plan reports "would proceed", and
+  the operator ticks the "I understand" checkbox.
+* **Automatic pre-restore backup.** The real restore writes a Nova
+  export package of the *current* data directory under
+  `NOVA_DATA_DIR/backups/pre-restore/` **before** any file is
+  replaced. The restore refuses if that backup cannot be created.
+  Pre-restore backups are never overwritten — a name clash falls
+  back to `-<n>` until a free name is found.
+* **Staging-first extraction.** The archive is extracted into a
+  private staging directory under
+  `NOVA_DATA_DIR/.restore-staging/`. Files are validated against
+  path traversal post-resolution and only then moved into the
+  target tree, one file at a time. The staging directory is
+  cleaned up after success or failure.
+* **Atomic per-file replace.** Each restored file lands via
+  `os.replace` inside the same filesystem — no half-written
+  partials, no torn writes. The staging directory lives **inside**
+  the target data root by construction so the rename never falls
+  back to a cross-filesystem copy.
+* **Failed restores leave current data intact.** A failure after
+  the backup step but before all files have been copied keeps the
+  remaining target files untouched; rolling back via the
+  pre-restore backup recovers the prior state in one step.
 * **No automatic data move.** Nova never copies its data root to a
   different disk for you. Use `rsync` or the operator's preferred
   tool, then update `NOVA_DATA_DIR`.

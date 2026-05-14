@@ -115,9 +115,11 @@ def configured_data_root(monkeypatch, tmp_path):
 
 class TestStorageEndpointsAuth:
     @pytest.mark.parametrize("method,path,body", [
-        ("GET",  "/admin/storage/status",          None),
-        ("POST", "/admin/storage/export",          {"confirm": True}),
-        ("POST", "/admin/storage/inspect-export",  {"name": "x.tar.gz"}),
+        ("GET",  "/admin/storage/status",            None),
+        ("POST", "/admin/storage/export",            {"confirm": True}),
+        ("POST", "/admin/storage/inspect-export",    {"name": "x.tar.gz"}),
+        ("POST", "/admin/storage/restore-dry-run",   {"name": "x.tar.gz"}),
+        ("POST", "/admin/storage/restore",           {"name": "x.tar.gz", "confirm": True}),
     ])
     def test_non_admin_forbidden(
         self, web_client, user_token, method, path, body,
@@ -129,9 +131,11 @@ class TestStorageEndpointsAuth:
         assert resp.status_code == 403
 
     @pytest.mark.parametrize("method,path,body", [
-        ("GET",  "/admin/storage/status",          None),
-        ("POST", "/admin/storage/export",          {"confirm": True}),
-        ("POST", "/admin/storage/inspect-export",  {"name": "x.tar.gz"}),
+        ("GET",  "/admin/storage/status",            None),
+        ("POST", "/admin/storage/export",            {"confirm": True}),
+        ("POST", "/admin/storage/inspect-export",    {"name": "x.tar.gz"}),
+        ("POST", "/admin/storage/restore-dry-run",   {"name": "x.tar.gz"}),
+        ("POST", "/admin/storage/restore",           {"name": "x.tar.gz", "confirm": True}),
     ])
     def test_restricted_forbidden(
         self, web_client, restricted_token, method, path, body,
@@ -145,9 +149,11 @@ class TestStorageEndpointsAuth:
         assert resp.status_code == 403
 
     @pytest.mark.parametrize("method,path,body", [
-        ("GET",  "/admin/storage/status",          None),
-        ("POST", "/admin/storage/export",          {"confirm": True}),
-        ("POST", "/admin/storage/inspect-export",  {"name": "x.tar.gz"}),
+        ("GET",  "/admin/storage/status",            None),
+        ("POST", "/admin/storage/export",            {"confirm": True}),
+        ("POST", "/admin/storage/inspect-export",    {"name": "x.tar.gz"}),
+        ("POST", "/admin/storage/restore-dry-run",   {"name": "x.tar.gz"}),
+        ("POST", "/admin/storage/restore",           {"name": "x.tar.gz", "confirm": True}),
     ])
     def test_unauthenticated_blocked(self, web_client, method, path, body):
         if method == "GET":
@@ -292,3 +298,136 @@ class TestInspectEndpoint:
         body = resp.json()
         assert body["valid"] is True
         assert body["manifest"]["format"] == "nova-data-export"
+
+
+# ── /admin/storage/restore-dry-run ─────────────────────────────────
+
+
+class TestRestoreDryRunEndpoint:
+    """The dry-run endpoint mirrors the apply_restore helper safely."""
+
+    def test_rejects_traversal_name(
+        self, web_client, admin_token, configured_data_root,
+    ):
+        resp = web_client.post(
+            "/admin/storage/restore-dry-run",
+            headers=_h(admin_token),
+            json={"name": "../etc/passwd"},
+        )
+        assert resp.status_code in (400, 422)
+
+    def test_rejects_absolute_path(
+        self, web_client, admin_token, configured_data_root,
+    ):
+        resp = web_client.post(
+            "/admin/storage/restore-dry-run",
+            headers=_h(admin_token),
+            json={"name": "/tmp/something.tar.gz"},
+        )
+        assert resp.status_code in (400, 422)
+
+    def test_missing_archive_returns_404(
+        self, web_client, admin_token, configured_data_root,
+    ):
+        resp = web_client.post(
+            "/admin/storage/restore-dry-run",
+            headers=_h(admin_token),
+            json={"name": "missing.tar.gz"},
+        )
+        assert resp.status_code == 404
+
+    def test_dry_run_returns_plan_for_real_archive(
+        self, web_client, admin_token, configured_data_root, tmp_path,
+        monkeypatch,
+    ):
+        # Build an export, but redirect NOVA_DATA_DIR so the dry-run
+        # targets a fresh empty directory after the export was built.
+        export = web_client.post(
+            "/admin/storage/export",
+            headers=_h(admin_token), json={"confirm": True},
+        )
+        assert export.status_code == 200, export.text
+        archive_path = Path(export.json()["archive_path"])
+
+        # Move the archive to a new exports/ dir.
+        new_root = tmp_path / "NovaFresh"
+        new_root.mkdir()
+        (new_root / "exports").mkdir()
+        moved = new_root / "exports" / archive_path.name
+        moved.write_bytes(archive_path.read_bytes())
+        monkeypatch.setenv(core_paths.ENV_VAR, str(new_root))
+
+        resp = web_client.post(
+            "/admin/storage/restore-dry-run",
+            headers=_h(admin_token),
+            json={"name": archive_path.name},
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["outcome"] == "dry_run"
+        # Dry-run never writes anything.
+        assert body["backup_path"] == ""
+
+
+# ── /admin/storage/restore ─────────────────────────────────────────
+
+
+class TestRestoreEndpoint:
+    """The real restore endpoint is admin-only and confirmation-gated."""
+
+    def test_restore_requires_confirm(
+        self, web_client, admin_token, configured_data_root,
+    ):
+        resp = web_client.post(
+            "/admin/storage/restore",
+            headers=_h(admin_token),
+            json={"name": "anything.tar.gz", "confirm": False},
+        )
+        assert resp.status_code == 400
+
+    def test_restore_rejects_traversal_name(
+        self, web_client, admin_token, configured_data_root,
+    ):
+        resp = web_client.post(
+            "/admin/storage/restore",
+            headers=_h(admin_token),
+            json={"name": "../etc/passwd", "confirm": True},
+        )
+        assert resp.status_code in (400, 422)
+
+    def test_restore_missing_archive_returns_404(
+        self, web_client, admin_token, configured_data_root,
+    ):
+        resp = web_client.post(
+            "/admin/storage/restore",
+            headers=_h(admin_token),
+            json={"name": "missing.tar.gz", "confirm": True},
+        )
+        assert resp.status_code == 404
+
+    def test_restore_happy_path_creates_backup_and_replaces_db(
+        self, web_client, admin_token, configured_data_root,
+    ):
+        # Build an export from the configured data root.
+        export = web_client.post(
+            "/admin/storage/export",
+            headers=_h(admin_token), json={"confirm": True},
+        )
+        assert export.status_code == 200, export.text
+        archive_name = Path(export.json()["archive_path"]).name
+        original = (configured_data_root / "nova.db").read_bytes()
+        # Mutate the on-disk db so the restore has something to roll
+        # back to — the archive holds the *previous* content.
+        (configured_data_root / "nova.db").write_bytes(b"-- mutated --")
+
+        resp = web_client.post(
+            "/admin/storage/restore",
+            headers=_h(admin_token),
+            json={"name": archive_name, "confirm": True},
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["outcome"] == "restored"
+        assert body["backup_path"] != ""
+        # The original archive content is restored.
+        assert (configured_data_root / "nova.db").read_bytes() == original

@@ -3016,6 +3016,57 @@
                     <div id="storage-export-error" style="color:var(--danger);font-size:0.82rem;min-height:0;"></div>
                 </div>
                 <div id="storage-export-result"></div>
+
+                <!-- Phase 3 — safe guided restore. Inspect first,
+                     then dry-run, then explicitly confirm. The
+                     restore button stays disabled until inspection
+                     and dry-run both succeed. -->
+                <div class="admin-section-title">Restore from export package</div>
+                <div id="storage-restore-form">
+                    <div class="admin-warning-summary">
+                        Restores a Nova data export package <strong>into the
+                        active data directory</strong>. A pre-restore backup of
+                        the current data is created automatically before any
+                        file is replaced. The package must already live under
+                        <code>NOVA_DATA_DIR/exports/</code> — Nova never reads
+                        arbitrary filesystem paths.
+                    </div>
+                    <div class="row" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                        <input id="storage-restore-name" type="text"
+                            placeholder="nova-data-export-…tar.gz"
+                            oninput="resetRestoreState(true)"
+                            style="flex:1;min-width:260px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:monospace;font-size:0.82rem;padding:6px 10px;outline:none;" />
+                        <button class="admin-btn" id="storage-restore-inspect-btn" onclick="inspectRestorePackage()">Inspect</button>
+                        <button class="admin-btn" id="storage-restore-dryrun-btn" onclick="dryRunRestorePackage()" disabled>Dry-run</button>
+                    </div>
+                    <div id="storage-restore-error" style="color:var(--danger);font-size:0.82rem;min-height:0;"></div>
+                    <div id="storage-restore-inspect-result"></div>
+                    <div id="storage-restore-dryrun-result"></div>
+                    <div id="storage-restore-confirm" style="display:none;">
+                        <div class="admin-warning warning">
+                            <span class="admin-warning-level">warning</span>
+                            <span class="admin-warning-msg">
+                                The restore replaces files inside
+                                <code>NOVA_DATA_DIR</code>. A pre-restore
+                                backup is created first so you can roll back.
+                                Stop Nova before continuing if it is running.
+                            </span>
+                        </div>
+                        <label style="display:flex;gap:8px;align-items:flex-start;font-size:0.82rem;margin:8px 0;">
+                            <input type="checkbox" id="storage-restore-checkbox" onchange="updateRestoreButtonState()" />
+                            <span>I understand this will replace Nova's current data after creating a backup.</span>
+                        </label>
+                        <div class="row" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+                            <button class="admin-btn primary" id="storage-restore-btn" onclick="applyRestorePackage()" disabled>
+                                Restore package and backup current data first
+                            </button>
+                            <span class="admin-warning-summary" style="padding:0;">
+                                Confirmation-gated · admin-only · creates backup first
+                            </span>
+                        </div>
+                    </div>
+                    <div id="storage-restore-result"></div>
+                </div>
             </div>
         </div>
     </div>
@@ -8799,6 +8850,291 @@
             `${warnings}` +
             `</div>` +
             `<div class="admin-warning-summary">Inspect or dry-run the package on the target machine with <code>python -m core.data_export inspect &lt;archive&gt;</code>. Phase 2 does not perform an automated restore — see <code>docs/storage-and-migration.md</code>.</div>`;
+    }
+
+    // ── PHASE 3: Safe guided restore ──
+    //
+    // The flow is enforced client-side:
+    //   1. Inspect the package by basename (sits under exports/).
+    //   2. Dry-run, which lists what would be restored.
+    //   3. Toggle the "I understand" checkbox.
+    //   4. Click the explicit restore button.
+    //
+    // Each step unlocks the next. The server enforces the same
+    // ordering: the restore endpoint requires confirm=true and the
+    // helper creates a pre-restore backup before any file is moved.
+
+    let restoreState = {
+        inspected: false,
+        dryRunPassed: false,
+        manifestId: "",
+        archiveName: "",
+    };
+
+    function updateRestoreButtonState() {
+        const checkbox = document.getElementById("storage-restore-checkbox");
+        const btn = document.getElementById("storage-restore-btn");
+        if (!btn) return;
+        btn.disabled = !(
+            restoreState.dryRunPassed &&
+            checkbox && checkbox.checked
+        );
+    }
+
+    function resetRestoreState(keepName) {
+        restoreState = {
+            inspected: false,
+            dryRunPassed: false,
+            manifestId: "",
+            archiveName: keepName ? restoreState.archiveName : "",
+        };
+        const dryBtn = document.getElementById("storage-restore-dryrun-btn");
+        if (dryBtn) dryBtn.disabled = true;
+        const confirmEl = document.getElementById("storage-restore-confirm");
+        if (confirmEl) confirmEl.style.display = "none";
+        const checkbox = document.getElementById("storage-restore-checkbox");
+        if (checkbox) checkbox.checked = false;
+        const dryEl = document.getElementById("storage-restore-dryrun-result");
+        if (dryEl) dryEl.innerHTML = "";
+        const resultEl = document.getElementById("storage-restore-result");
+        if (resultEl) resultEl.innerHTML = "";
+        updateRestoreButtonState();
+    }
+
+    function getRestoreName() {
+        const input = document.getElementById("storage-restore-name");
+        return input ? input.value.trim() : "";
+    }
+
+    async function inspectRestorePackage() {
+        const name = getRestoreName();
+        const errEl = document.getElementById("storage-restore-error");
+        const inspEl = document.getElementById("storage-restore-inspect-result");
+        if (errEl) errEl.textContent = "";
+        if (inspEl) inspEl.innerHTML = "";
+        resetRestoreState(false);
+        if (!name) {
+            if (errEl) errEl.textContent = "Enter an archive filename first.";
+            return;
+        }
+        try {
+            const res = await fetch("/admin/storage/inspect-export", {
+                method: "POST",
+                headers: {
+                    "Authorization": `Bearer ${token}`,
+                    "Content-Type": "application/json",
+                },
+                body: JSON.stringify({ name }),
+            });
+            if (res.status === 401) { logout(); return; }
+            if (!res.ok) {
+                let detail = `Failed (${res.status})`;
+                try {
+                    const body = await res.json();
+                    if (body && body.detail) detail = body.detail;
+                } catch (_) { /* ignore */ }
+                if (errEl) errEl.textContent = detail;
+                return;
+            }
+            const body = await res.json();
+            restoreState.archiveName = name;
+            renderInspectResult(body);
+            if (body.valid) {
+                restoreState.inspected = true;
+                restoreState.manifestId =
+                    (body.manifest && body.manifest.created_at) || "";
+                const dryBtn = document.getElementById("storage-restore-dryrun-btn");
+                if (dryBtn) dryBtn.disabled = false;
+            }
+        } catch (e) {
+            if (errEl) errEl.textContent = "Network error while inspecting package.";
+        }
+    }
+
+    function renderInspectResult(body) {
+        const el = document.getElementById("storage-restore-inspect-result");
+        if (!el) return;
+        const manifest = body.manifest || {};
+        const errors = (body.errors || []).map(e =>
+            `<div class="admin-warning error"><span class="admin-warning-level">error</span><span class="admin-warning-msg">${escapeHtml(e)}</span></div>`
+        ).join("");
+        const warnings = (body.warnings || []).map(w =>
+            `<div class="admin-warning warning"><span class="admin-warning-level">warning</span><span class="admin-warning-msg">${escapeHtml(w)}</span></div>`
+        ).join("");
+        const okTag = body.valid
+            ? `<span class="admin-tag installed">valid</span>`
+            : `<span class="admin-tag error">invalid</span>`;
+        const hasDb = (body.files || []).indexOf("data/nova.db") >= 0;
+        el.innerHTML =
+            `<div class="admin-section-title">Package inspection</div>` +
+            `<div class="admin-model-row">` +
+            `<div class="admin-model-head">` +
+            `<span class="admin-model-display">${escapeHtml(manifest.format || "?")} v${escapeHtml(String(manifest.format_version || ""))}</span>` +
+            okTag +
+            `</div>` +
+            `<div class="admin-model-name">${escapeHtml(body.archive_path || "")}</div>` +
+            `<div class="admin-progress-meta">created (UTC): ${escapeHtml(manifest.created_at || "")}</div>` +
+            `<div class="admin-progress-meta">members: ${(body.files || []).length} · uncompressed: ${formatBytes(body.total_uncompressed_size || 0)}</div>` +
+            `<div class="admin-progress-meta">nova.db present in package: ${hasDb ? "yes" : "no"}</div>` +
+            errors + warnings +
+            `</div>`;
+    }
+
+    async function dryRunRestorePackage() {
+        if (!restoreState.inspected) return;
+        const errEl = document.getElementById("storage-restore-error");
+        const dryEl = document.getElementById("storage-restore-dryrun-result");
+        const confirmEl = document.getElementById("storage-restore-confirm");
+        if (errEl) errEl.textContent = "";
+        if (dryEl) dryEl.innerHTML = "";
+        if (confirmEl) confirmEl.style.display = "none";
+        restoreState.dryRunPassed = false;
+        updateRestoreButtonState();
+        try {
+            const res = await fetch("/admin/storage/restore-dry-run", {
+                method: "POST",
+                headers: {
+                    "Authorization": `Bearer ${token}`,
+                    "Content-Type": "application/json",
+                },
+                body: JSON.stringify({
+                    name: restoreState.archiveName,
+                    confirm: false,
+                    confirmed_manifest_id: restoreState.manifestId || null,
+                }),
+            });
+            if (res.status === 401) { logout(); return; }
+            if (!res.ok) {
+                let detail = `Failed (${res.status})`;
+                try {
+                    const body = await res.json();
+                    if (body && body.detail) detail = body.detail;
+                } catch (_) { /* ignore */ }
+                if (errEl) errEl.textContent = detail;
+                return;
+            }
+            const body = await res.json();
+            renderDryRunResult(body);
+            if (body.outcome === "dry_run") {
+                restoreState.dryRunPassed = true;
+                if (confirmEl) confirmEl.style.display = "";
+            }
+            updateRestoreButtonState();
+        } catch (e) {
+            if (errEl) errEl.textContent = "Network error while running dry-run.";
+        }
+    }
+
+    function renderDryRunResult(body) {
+        const el = document.getElementById("storage-restore-dryrun-result");
+        if (!el) return;
+        const warnings = (body.warnings || []).map(w =>
+            `<div class="admin-warning warning"><span class="admin-warning-level">warning</span><span class="admin-warning-msg">${escapeHtml(w)}</span></div>`
+        ).join("");
+        const allowed = body.outcome === "dry_run";
+        const okTag = allowed
+            ? `<span class="admin-tag installed">would proceed</span>`
+            : `<span class="admin-tag error">refused</span>`;
+        const refuseLine = body.refuse_reason
+            ? `<div class="admin-progress-meta">refuse reason: ${escapeHtml(body.refuse_reason)}</div>`
+            : "";
+        const restartLine = body.restart_recommended
+            ? `<div class="admin-progress-meta">restart Nova after restore (nova.db will be replaced)</div>`
+            : "";
+        el.innerHTML =
+            `<div class="admin-section-title">Dry-run plan</div>` +
+            `<div class="admin-model-row">` +
+            `<div class="admin-model-head">` +
+            `<span class="admin-model-display">target: ${escapeHtml(body.target_data_dir || "")}</span>` +
+            okTag +
+            `</div>` +
+            `<div class="admin-progress-meta">would restore: ${(body.restored_files || []).length} file(s)</div>` +
+            `<div class="admin-progress-meta">would replace existing: ${(body.conflicts || []).length} file(s)</div>` +
+            restartLine +
+            refuseLine +
+            warnings +
+            `</div>`;
+    }
+
+    async function applyRestorePackage() {
+        if (!restoreState.dryRunPassed) return;
+        const checkbox = document.getElementById("storage-restore-checkbox");
+        if (!checkbox || !checkbox.checked) return;
+        const btn = document.getElementById("storage-restore-btn");
+        const errEl = document.getElementById("storage-restore-error");
+        const resultEl = document.getElementById("storage-restore-result");
+        if (errEl) errEl.textContent = "";
+        if (resultEl) resultEl.innerHTML = "";
+        if (!btn) return;
+        const original = btn.textContent;
+        btn.disabled = true;
+        btn.textContent = "Restoring…";
+        try {
+            const res = await fetch("/admin/storage/restore", {
+                method: "POST",
+                headers: {
+                    "Authorization": `Bearer ${token}`,
+                    "Content-Type": "application/json",
+                },
+                body: JSON.stringify({
+                    name: restoreState.archiveName,
+                    confirm: true,
+                    confirmed_manifest_id: restoreState.manifestId || null,
+                }),
+            });
+            if (res.status === 401) { logout(); return; }
+            if (!res.ok) {
+                let detail = `Failed (${res.status})`;
+                try {
+                    const body = await res.json();
+                    if (body && body.detail) detail = body.detail;
+                } catch (_) { /* ignore */ }
+                if (errEl) errEl.textContent = detail;
+                return;
+            }
+            const body = await res.json();
+            renderRestoreResult(body);
+        } catch (e) {
+            if (errEl) errEl.textContent = "Network error while restoring.";
+        } finally {
+            btn.disabled = false;
+            btn.textContent = original;
+        }
+    }
+
+    function renderRestoreResult(body) {
+        const el = document.getElementById("storage-restore-result");
+        if (!el) return;
+        const warnings = (body.warnings || []).map(w =>
+            `<div class="admin-warning warning"><span class="admin-warning-level">warning</span><span class="admin-warning-msg">${escapeHtml(w)}</span></div>`
+        ).join("");
+        const ok = body.outcome === "restored";
+        const tag = ok
+            ? `<span class="admin-tag installed">restored</span>`
+            : `<span class="admin-tag error">${escapeHtml(body.outcome || "failed")}</span>`;
+        const refuseLine = body.refuse_reason
+            ? `<div class="admin-progress-meta">reason: ${escapeHtml(body.refuse_reason)}</div>`
+            : "";
+        const backupLine = body.backup_path
+            ? `<div class="admin-progress-meta">pre-restore backup: <code>${escapeHtml(body.backup_path)}</code> (${formatBytes(body.backup_size || 0)})</div>`
+            : "";
+        const restartLine = body.restart_recommended
+            ? `<div class="admin-warning warning"><span class="admin-warning-level">action</span><span class="admin-warning-msg">Restart Nova so the new database is picked up. The previous data is preserved inside the pre-restore backup.</span></div>`
+            : "";
+        el.innerHTML =
+            `<div class="admin-section-title">Restore result</div>` +
+            `<div class="admin-model-row">` +
+            `<div class="admin-model-head">` +
+            `<span class="admin-model-display">target: ${escapeHtml(body.target_data_dir || "")}</span>` +
+            tag +
+            `</div>` +
+            `<div class="admin-progress-meta">restored files: ${(body.restored_files || []).length}</div>` +
+            `<div class="admin-progress-meta">replaced existing: ${(body.conflicts || []).length}</div>` +
+            backupLine +
+            refuseLine +
+            `</div>` +
+            restartLine +
+            warnings;
     }
 
     // ── UTILS ──

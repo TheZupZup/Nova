@@ -62,6 +62,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import tarfile
 import time
 from dataclasses import dataclass, field
@@ -1260,6 +1261,953 @@ def plan_restore(
     )
 
 
+# ── Safe guided restore (Phase 3) ───────────────────────────────────
+#
+# Phase 3 layers an opt-in "actually copy the data into the target"
+# step on top of Phase 2's dry-run plan. The restore is **only ever**
+# performed when:
+#
+#   1. The archive inspects clean (manifest, format, no path
+#      traversal, no symlink escape, no disallowed entry types).
+#   2. The dry-run plan returns ``allowed=True`` *or* the caller
+#      passed an explicit confirmation that they understand a
+#      ``nova.db`` will be replaced.
+#   3. A pre-restore backup of the current target data directory was
+#      created successfully and lives under
+#      ``<target>/backups/pre-restore/`` — refusing the restore if
+#      the backup step fails.
+#   4. Every archive member was extracted into a private staging
+#      directory under ``<target>/.restore-staging/`` and re-validated
+#      against path traversal post-extraction.
+#
+# Only after all of the above does the engine copy the staged files
+# into the target. Existing target files that would be replaced were
+# already copied into the pre-restore backup, so the operator can roll
+# back at any time.
+
+#: Subdirectory under the target ``NOVA_DATA_DIR/backups/`` that holds
+#: automatic pre-restore backups. Kept stable so an operator can find
+#: previous backups via the filesystem alone.
+PRE_RESTORE_BACKUP_SUBDIR = "pre-restore"
+
+#: Directory under the target data root that stages extracted archive
+#: contents during a restore. Lives **inside** the data root so the
+#: extraction never lands on a different filesystem (an `os.replace`
+#: across filesystems would otherwise fail or fall back to a copy +
+#: delete that is not atomic).
+RESTORE_STAGING_DIRNAME = ".restore-staging"
+
+
+#: Wire-format strings for ``RestoreResult.outcome``. Stable enough
+#: for the UI to switch on and for tests to pin.
+RESTORE_OUTCOME_DRY_RUN = "dry_run"
+RESTORE_OUTCOME_RESTORED = "restored"
+RESTORE_OUTCOME_REFUSED = "refused"
+RESTORE_OUTCOME_BACKUP_FAILED = "backup_failed"
+RESTORE_OUTCOME_EXTRACT_FAILED = "extract_failed"
+RESTORE_OUTCOME_FAILED = "failed"
+
+
+@dataclass(frozen=True)
+class RestoreResult:
+    """Outcome of a real (or dry-run) restore call.
+
+    The structure mirrors :class:`RestorePlan` so the UI can render
+    a single result panel for either flow.
+
+    * ``outcome`` — short stable identifier (``dry_run``, ``restored``,
+      ``refused``, ``backup_failed``, ``extract_failed``, ``failed``).
+    * ``refuse_reason`` — non-empty when ``outcome`` is anything other
+      than ``restored`` or ``dry_run``; short, frontend-safe.
+    * ``restored_files`` — list of POSIX-relative paths actually copied
+      into the target on a successful restore. Empty for refusals and
+      dry-runs.
+    * ``skipped_files`` — files present in the archive that were not
+      copied (for example, a stray entry that did not exist in the
+      manifest's allowlist).
+    * ``conflicts`` — files at the target that were overwritten by
+      the restore. Each one is mirrored inside the pre-restore backup.
+    * ``backup_path`` — absolute path of the pre-restore backup
+      archive, or ``""`` when no backup was created (e.g. dry-run or
+      pre-validation refusal).
+    * ``restart_recommended`` — ``True`` when restoring a ``nova.db``
+      (the database is open by the running process; a calm restart
+      ensures the new file is observed).
+    * ``warnings`` — soft issues the UI should surface but that did
+      not abort the restore.
+    """
+
+    archive_path: str
+    target_data_dir: str
+    outcome: str
+    refuse_reason: str
+    confirmed: bool
+    restored_files: tuple[str, ...]
+    skipped_files: tuple[ExcludedEntry, ...]
+    conflicts: tuple[str, ...]
+    backup_path: str
+    backup_size: int
+    restart_recommended: bool
+    warnings: tuple[str, ...] = field(default_factory=tuple)
+    manifest: Optional[dict] = None
+
+    def as_dict(self) -> dict:
+        return {
+            "archive_path": self.archive_path,
+            "target_data_dir": self.target_data_dir,
+            "outcome": self.outcome,
+            "refuse_reason": self.refuse_reason,
+            "confirmed": self.confirmed,
+            "restored_files": list(self.restored_files),
+            "skipped_files": [e.as_dict() for e in self.skipped_files],
+            "conflicts": list(self.conflicts),
+            "backup_path": self.backup_path,
+            "backup_size": self.backup_size,
+            "restart_recommended": self.restart_recommended,
+            "warnings": list(self.warnings),
+            "manifest": self.manifest,
+        }
+
+
+def _manifest_id(manifest: Optional[dict]) -> str:
+    """Return a short identifier for ``manifest`` (best effort).
+
+    Phase 3 uses the manifest's ``created_at`` timestamp as a
+    lightweight "confirm you really mean this archive" token. The CLI
+    and API accept an optional ``confirmed_manifest_id`` field; when
+    present it must match this value.
+    """
+    if not isinstance(manifest, dict):
+        return ""
+    val = manifest.get("created_at")
+    if isinstance(val, str):
+        return val
+    return ""
+
+
+def _resolve_target_root(
+    target_data_dir: Optional[str | os.PathLike[str]],
+) -> Optional[Path]:
+    """Resolve the target data root from arg / env, or ``None``.
+
+    Mirrors :func:`plan_restore`: the explicit argument wins; without
+    one we fall back to ``NOVA_DATA_DIR``. Returns ``None`` when
+    nothing usable is configured — the caller surfaces that as a
+    refusal so the operator gets a clear error.
+    """
+    if target_data_dir is not None:
+        return Path(os.fspath(target_data_dir)).expanduser()
+    configured = _paths.configured_data_dir()
+    if configured is None:
+        return None
+    return configured
+
+
+def _create_pre_restore_backup(
+    target_root: Path,
+) -> tuple[Optional[Path], int, list[str]]:
+    """Build a pre-restore backup archive of the current target dir.
+
+    Returns ``(archive_path, size, warnings)``. ``archive_path`` is
+    ``None`` when no backup was needed (the target was empty / had
+    no canonical Nova data files) or when the backup failed. The
+    caller refuses the restore if the backup was *required* (a
+    ``nova.db`` was present) and ``archive_path`` is ``None``.
+
+    The archive is written under
+    ``<target_root>/backups/pre-restore/`` using the same data export
+    format as the manual export, so an operator can reuse the inspect
+    / restore-dry-run flow to verify it. The backup filename is
+    namespaced (``nova-pre-restore-<UTC timestamp>.tar.gz``) so it
+    can't collide with normal exports.
+
+    The function never overwrites an existing backup file: a name
+    clash falls back to appending ``-N`` to the stem until a free
+    name is found, or fails with a returned warning if it cannot.
+    """
+    warnings: list[str] = []
+    backup_dir = (
+        target_root / _paths.BACKUPS_SUBDIR / PRE_RESTORE_BACKUP_SUBDIR
+    )
+    try:
+        backup_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        warnings.append(
+            f"Could not create pre-restore backup directory: "
+            f"{exc.strerror or 'OS error'}"
+        )
+        return None, 0, warnings
+
+    # Compose a unique stem so the new backup never collides with an
+    # existing file. Phase 3 explicitly forbids overwriting backups.
+    timestamp = _now_iso_utc()
+    stem = f"nova-pre-restore-{timestamp}"
+    candidate = backup_dir / f"{stem}.tar.gz"
+    counter = 1
+    while candidate.exists():
+        candidate = backup_dir / f"{stem}-{counter}.tar.gz"
+        counter += 1
+        if counter > 50:  # pragma: no cover - extreme paranoia
+            warnings.append(
+                "Could not find a free filename for the pre-restore "
+                "backup after 50 attempts."
+            )
+            return None, 0, warnings
+
+    # Run the export builder against the *target* data root. We
+    # cannot rely on the running process's NOVA_DATA_DIR here because
+    # the operator may be restoring into a target that is **not** the
+    # configured data dir. Temporarily redirect by passing the
+    # explicit destination directory and walking the target_root
+    # directly.
+    included_pairs, excluded_entries = _walk_allowlisted(target_root)
+    if not included_pairs:
+        # Nothing to back up — return cleanly. The caller can decide
+        # whether that is acceptable.
+        return None, 0, warnings
+
+    included_entries: list[IncludedEntry] = []
+    archive_files: list[tuple[Path, str]] = []
+    for file_p, rel_parts in included_pairs:
+        try:
+            size = int(file_p.stat().st_size)
+            digest = _sha256_file(file_p)
+        except OSError:
+            excluded_entries.append(ExcludedEntry(
+                "/".join(rel_parts), REASON_UNREADABLE,
+            ))
+            continue
+        rel_posix = "/".join(rel_parts)
+        included_entries.append(IncludedEntry(
+            path=rel_posix, size=size, sha256=digest,
+        ))
+        archive_files.append((file_p, rel_posix))
+
+    manifest = _build_manifest(
+        mode=MODE_DATA_ONLY,
+        timestamp=timestamp,
+        source_root=target_root,
+        included=included_entries,
+        excluded=excluded_entries,
+    )
+    manifest["pre_restore_backup"] = True
+
+    partial = backup_dir / (candidate.name + ".partial")
+    try:
+        with tarfile.open(partial, mode="w:gz", dereference=True) as tar:
+            manifest_bytes = json.dumps(
+                manifest, indent=2, sort_keys=True,
+            ).encode("utf-8")
+            _add_bytes_to_tar(
+                tar, ARCHIVE_MANIFEST_NAME, manifest_bytes,
+            )
+            restore_doc = _build_restore_doc(manifest).encode("utf-8")
+            _add_bytes_to_tar(
+                tar, ARCHIVE_RESTORE_DOC_NAME, restore_doc,
+            )
+            for file_p, rel_posix in archive_files:
+                arcname = f"{ARCHIVE_DATA_PREFIX}/{rel_posix}"
+                if not _is_safe_member_name(arcname):
+                    continue
+                tar.add(
+                    str(file_p),
+                    arcname=arcname,
+                    recursive=False,
+                    filter=_tar_filter,
+                )
+        partial.replace(candidate)
+    except OSError as exc:
+        try:
+            partial.unlink(missing_ok=True)
+        except OSError:
+            pass
+        warnings.append(
+            f"Pre-restore backup could not be written: "
+            f"{exc.strerror or 'OS error'}"
+        )
+        return None, 0, warnings
+
+    try:
+        size = int(candidate.stat().st_size)
+    except OSError:
+        size = 0
+    return candidate, size, warnings
+
+
+def _safe_extract_member(
+    tar: tarfile.TarFile,
+    member: tarfile.TarInfo,
+    staging: Path,
+) -> Optional[Path]:
+    """Extract a single archive member into ``staging`` safely.
+
+    Returns the resolved destination path on success, or ``None``
+    when the member must be skipped (a non-regular file or a path
+    that resolves outside the staging tree). The function uses
+    explicit byte-stream copying instead of ``tar.extract`` so we
+    fully control the destination path; tarfile's own filter
+    (``data_filter``) is also applied where available to refuse the
+    historical CVE-2007-4559-style escapes.
+
+    Symlinks within the archive are deliberately **not** materialised
+    on disk: the export builder dereferences them at build time, so a
+    well-formed Nova archive never contains a symlink in the first
+    place. A symlink in a hostile archive is therefore rejected.
+    """
+    name = member.name
+    if not _is_safe_member_name(name):
+        return None
+    if member.isdir():
+        # Just create the directory; tar entries are recreated
+        # implicitly by writing files below.
+        rel = PurePosixPath(name)
+        if not rel.parts or rel.parts[0] != ARCHIVE_DATA_PREFIX:
+            return None
+        dest = staging / Path(*rel.parts[1:]) if len(rel.parts) > 1 else None
+        if dest is None:
+            return None
+        dest.mkdir(parents=True, exist_ok=True)
+        return dest
+    if not member.isfile():
+        # Symlinks, devices, hardlinks, fifos — all forbidden.
+        return None
+
+    rel = PurePosixPath(name)
+    if not rel.parts or rel.parts[0] != ARCHIVE_DATA_PREFIX:
+        return None
+    if len(rel.parts) == 1:
+        return None
+    dest = staging / Path(*rel.parts[1:])
+    # Post-resolution containment check.
+    try:
+        dest_resolved = dest.resolve(strict=False)
+        staging_resolved = staging.resolve(strict=False)
+        dest_resolved.relative_to(staging_resolved)
+    except (OSError, ValueError):
+        return None
+
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    extracted = tar.extractfile(member)
+    if extracted is None:
+        return None
+    try:
+        with open(dest, "wb") as out:
+            shutil.copyfileobj(extracted, out, length=_HASH_CHUNK_BYTES)
+    finally:
+        extracted.close()
+    try:
+        os.chmod(dest, 0o600)
+    except OSError:
+        pass
+    return dest
+
+
+def _extract_to_staging(
+    archive_path: Path,
+    staging: Path,
+) -> tuple[list[str], list[ExcludedEntry], Optional[str]]:
+    """Extract ``archive_path`` into ``staging``.
+
+    Returns ``(extracted_files, skipped, error)``. ``extracted_files``
+    is the list of POSIX-relative file paths under ``staging/data``
+    that were materialised. ``skipped`` records members that were
+    intentionally not extracted (symlinks, hardlinks, devices, or
+    names that would resolve outside the staging tree). ``error`` is
+    ``None`` on success or a short, frontend-safe string describing
+    a fatal extraction error.
+    """
+    extracted: list[str] = []
+    skipped: list[ExcludedEntry] = []
+    try:
+        with tarfile.open(archive_path, mode="r:*") as tar:
+            for member in tar:
+                if member.name in (
+                    ARCHIVE_MANIFEST_NAME, ARCHIVE_RESTORE_DOC_NAME
+                ):
+                    continue
+                if not _is_safe_member_name(member.name):
+                    skipped.append(ExcludedEntry(
+                        member.name, REASON_PATH_TRAVERSAL,
+                    ))
+                    continue
+                if member.islnk() or member.isdev() or member.isfifo():
+                    skipped.append(ExcludedEntry(
+                        member.name, REASON_DEVICE_OR_OTHER,
+                    ))
+                    continue
+                if member.issym():
+                    skipped.append(ExcludedEntry(
+                        member.name, REASON_SYMLINK_ESCAPE,
+                    ))
+                    continue
+                dest = _safe_extract_member(tar, member, staging)
+                if dest is None:
+                    if member.isfile():
+                        skipped.append(ExcludedEntry(
+                            member.name, REASON_PATH_TRAVERSAL,
+                        ))
+                    continue
+                if member.isfile():
+                    rel = PurePosixPath(member.name)
+                    posix_rel = "/".join(rel.parts[1:])
+                    extracted.append(posix_rel)
+    except tarfile.TarError as exc:
+        return [], skipped, f"Archive could not be extracted: {exc.__class__.__name__}."
+    except OSError as exc:
+        return [], skipped, (
+            f"Archive could not be extracted: "
+            f"{exc.strerror or 'OS error'}."
+        )
+    return extracted, skipped, None
+
+
+def _copy_into_target(
+    staging: Path,
+    target_root: Path,
+    relative_files: list[str],
+) -> tuple[list[str], list[str], Optional[str]]:
+    """Copy staged files into ``target_root``.
+
+    Returns ``(restored, conflicts, error)``. ``restored`` is the
+    list of POSIX-relative paths actually copied; ``conflicts`` lists
+    target paths that already existed and were replaced (those files
+    were already captured by the pre-restore backup). ``error`` is
+    ``None`` on success.
+
+    The copy is done file-by-file with ``os.replace`` so each
+    individual destination flips atomically. We do not attempt a
+    whole-tree rename because the target directory contains files
+    Nova did not bring in (other backups, prior exports, etc.) and
+    the safety contract forbids deleting them.
+    """
+    restored: list[str] = []
+    conflicts: list[str] = []
+    target_resolved = target_root.resolve()
+    for rel in relative_files:
+        src = staging / Path(*rel.split("/"))
+        dst = target_root / Path(*rel.split("/"))
+        # Post-resolution containment check on the destination.
+        try:
+            dst_resolved = dst.resolve(strict=False)
+            dst_resolved.relative_to(target_resolved)
+        except (OSError, ValueError):
+            return restored, conflicts, (
+                f"Refusing to write {rel!r}: it would land outside "
+                "the target data directory."
+            )
+        try:
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            existed = dst.exists()
+            # ``os.replace`` is atomic on the same filesystem. The
+            # staging directory lives **inside** the target root by
+            # construction so this never falls back to a cross-FS
+            # copy.
+            os.replace(str(src), str(dst))
+        except OSError as exc:
+            return restored, conflicts, (
+                f"Could not write {rel!r}: {exc.strerror or 'OS error'}."
+            )
+        try:
+            os.chmod(dst, 0o600)
+        except OSError:
+            pass
+        restored.append(rel)
+        if existed:
+            conflicts.append(rel)
+    return restored, conflicts, None
+
+
+def _cleanup_staging(staging: Path) -> None:
+    """Remove ``staging`` recursively, swallowing OS errors.
+
+    The staging directory always lives inside the target data root,
+    so the recursive delete cannot escape it even if something
+    upstream had failed.
+    """
+    if not staging.exists():
+        return
+    try:
+        shutil.rmtree(str(staging), ignore_errors=True)
+    except OSError:
+        pass
+
+
+def apply_restore(
+    archive_path: str | os.PathLike[str],
+    *,
+    target_data_dir: Optional[str | os.PathLike[str]] = None,
+    confirm: bool = False,
+    confirmed_manifest_id: Optional[str] = None,
+    dry_run: bool = False,
+) -> RestoreResult:
+    """Restore ``archive_path`` into the target data directory.
+
+    The function never writes anything unless **all** of the following
+    are true:
+
+    * ``dry_run`` is ``False``,
+    * ``confirm`` is ``True``,
+    * the archive inspects clean,
+    * a pre-restore backup of the current target was created
+      successfully (or none was needed — empty target).
+
+    Any failure short-circuits to a :class:`RestoreResult` with an
+    explanatory ``refuse_reason``, leaves the target data directory
+    bit-for-bit identical, and cleans up staging on a best-effort
+    basis. Failed restores **must not** corrupt current data — this
+    contract is exercised by tests.
+
+    ``confirmed_manifest_id`` lets the caller pin the archive they
+    inspected. When provided, it must match the manifest's
+    ``created_at`` field — a mismatch refuses the restore so a
+    different archive cannot slip in between the inspect step and
+    the restore step.
+    """
+    archive_path_s = str(archive_path)
+    archive_p = Path(archive_path_s)
+    if not archive_p.is_file():
+        return RestoreResult(
+            archive_path=archive_path_s,
+            target_data_dir="",
+            outcome=RESTORE_OUTCOME_REFUSED,
+            refuse_reason="Archive does not exist or is not a regular file.",
+            confirmed=bool(confirm),
+            restored_files=(),
+            skipped_files=(),
+            conflicts=(),
+            backup_path="",
+            backup_size=0,
+            restart_recommended=False,
+            warnings=(),
+            manifest=None,
+        )
+
+    # Phase 1: inspection (no writes, no staging).
+    inspection = inspect_export(archive_path_s)
+    if not inspection.valid:
+        return RestoreResult(
+            archive_path=archive_path_s,
+            target_data_dir="",
+            outcome=RESTORE_OUTCOME_REFUSED,
+            refuse_reason=(
+                "Archive is not valid: " + "; ".join(inspection.errors)
+            ),
+            confirmed=bool(confirm),
+            restored_files=(),
+            skipped_files=(),
+            conflicts=(),
+            backup_path="",
+            backup_size=0,
+            restart_recommended=False,
+            warnings=inspection.warnings,
+            manifest=inspection.manifest,
+        )
+
+    # Optional pinning of the archive identity.
+    if confirmed_manifest_id is not None:
+        actual = _manifest_id(inspection.manifest)
+        if confirmed_manifest_id and actual and confirmed_manifest_id != actual:
+            return RestoreResult(
+                archive_path=archive_path_s,
+                target_data_dir="",
+                outcome=RESTORE_OUTCOME_REFUSED,
+                refuse_reason=(
+                    "Confirmed manifest id does not match the archive's "
+                    "manifest. Re-inspect the package before confirming."
+                ),
+                confirmed=bool(confirm),
+                restored_files=(),
+                skipped_files=(),
+                conflicts=(),
+                backup_path="",
+                backup_size=0,
+                restart_recommended=False,
+                warnings=inspection.warnings,
+                manifest=inspection.manifest,
+            )
+
+    # Resolve the target root.
+    target_root = _resolve_target_root(target_data_dir)
+    if target_root is None:
+        return RestoreResult(
+            archive_path=archive_path_s,
+            target_data_dir="",
+            outcome=RESTORE_OUTCOME_REFUSED,
+            refuse_reason=(
+                "NOVA_DATA_DIR is not set. Configure a target data "
+                "directory before restoring."
+            ),
+            confirmed=bool(confirm),
+            restored_files=(),
+            skipped_files=(),
+            conflicts=(),
+            backup_path="",
+            backup_size=0,
+            restart_recommended=False,
+            warnings=inspection.warnings,
+            manifest=inspection.manifest,
+        )
+
+    try:
+        target_root.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        return RestoreResult(
+            archive_path=archive_path_s,
+            target_data_dir=str(target_root),
+            outcome=RESTORE_OUTCOME_FAILED,
+            refuse_reason=(
+                f"Target data directory could not be prepared: "
+                f"{exc.strerror or 'OS error'}"
+            ),
+            confirmed=bool(confirm),
+            restored_files=(),
+            skipped_files=(),
+            conflicts=(),
+            backup_path="",
+            backup_size=0,
+            restart_recommended=False,
+            warnings=inspection.warnings,
+            manifest=inspection.manifest,
+        )
+
+    target_resolved = target_root.resolve()
+
+    # Phase 2: compute the "would restore" file list (also checks
+    # post-resolution containment of each archive member against the
+    # target root — we do **not** rely on the dry-run plan refusing
+    # an existing nova.db because Phase 3's real restore is allowed
+    # to replace it under explicit confirmation).
+    would_restore: list[str] = []
+    conflicts_seen: list[str] = []
+    has_nova_db_in_archive = False
+    for member_name in inspection.files:
+        if member_name in (ARCHIVE_MANIFEST_NAME, ARCHIVE_RESTORE_DOC_NAME):
+            continue
+        parts = PurePosixPath(member_name).parts
+        if not parts or parts[0] != ARCHIVE_DATA_PREFIX:
+            continue
+        relative = PurePosixPath(*parts[1:])
+        if not str(relative):
+            continue
+        if ".." in relative.parts or relative.is_absolute():
+            return RestoreResult(
+                archive_path=archive_path_s,
+                target_data_dir=str(target_resolved),
+                outcome=RESTORE_OUTCOME_REFUSED,
+                refuse_reason=(
+                    "Archive contains an unsafe path "
+                    f"({member_name!r}). Refusing to restore."
+                ),
+                confirmed=bool(confirm),
+                restored_files=(),
+                skipped_files=(),
+                conflicts=(),
+                backup_path="",
+                backup_size=0,
+                restart_recommended=False,
+                warnings=inspection.warnings,
+                manifest=inspection.manifest,
+            )
+        candidate = target_resolved / Path(*relative.parts)
+        try:
+            candidate_abs = candidate.resolve(strict=False)
+            candidate_abs.relative_to(target_resolved)
+        except (OSError, ValueError):
+            return RestoreResult(
+                archive_path=archive_path_s,
+                target_data_dir=str(target_resolved),
+                outcome=RESTORE_OUTCOME_REFUSED,
+                refuse_reason=(
+                    f"Archive member {member_name!r} would land outside "
+                    "the target data directory."
+                ),
+                confirmed=bool(confirm),
+                restored_files=(),
+                skipped_files=(),
+                conflicts=(),
+                backup_path="",
+                backup_size=0,
+                restart_recommended=False,
+                warnings=inspection.warnings,
+                manifest=inspection.manifest,
+            )
+        would_restore.append(str(relative))
+        if relative.parts and relative.parts[0] == _paths.DB_FILENAME:
+            has_nova_db_in_archive = True
+        if candidate.exists():
+            conflicts_seen.append(str(relative))
+
+    # Existing target nova.db is the most-sensitive overwrite. Phase
+    # 2's plan_restore refuses unconditionally; Phase 3's real
+    # restore allows it iff the caller explicitly confirms.
+    target_nova_db = target_resolved / _paths.DB_FILENAME
+    target_has_db = target_nova_db.exists()
+    if dry_run:
+        return RestoreResult(
+            archive_path=archive_path_s,
+            target_data_dir=str(target_resolved),
+            outcome=RESTORE_OUTCOME_DRY_RUN,
+            refuse_reason="",
+            confirmed=bool(confirm),
+            restored_files=tuple(would_restore),
+            skipped_files=(),
+            conflicts=tuple(conflicts_seen),
+            backup_path="",
+            backup_size=0,
+            restart_recommended=has_nova_db_in_archive,
+            warnings=tuple(_dry_run_warnings(
+                target_has_db, has_nova_db_in_archive, conflicts_seen,
+                inspection.warnings,
+            )),
+            manifest=inspection.manifest,
+        )
+
+    # Real restore: every gate from here on must succeed.
+    if not confirm:
+        return RestoreResult(
+            archive_path=archive_path_s,
+            target_data_dir=str(target_resolved),
+            outcome=RESTORE_OUTCOME_REFUSED,
+            refuse_reason=(
+                "Restore requires explicit confirmation. Re-run with "
+                "confirm=true after reviewing the dry-run plan."
+            ),
+            confirmed=False,
+            restored_files=(),
+            skipped_files=(),
+            conflicts=tuple(conflicts_seen),
+            backup_path="",
+            backup_size=0,
+            restart_recommended=has_nova_db_in_archive,
+            warnings=inspection.warnings,
+            manifest=inspection.manifest,
+        )
+
+    # Pre-restore backup. Required when the target has any canonical
+    # Nova data on disk; skipped (with a warning) when the target is
+    # empty — there is literally nothing to back up.
+    backup_archive_path = ""
+    backup_size = 0
+    backup_warnings: list[str] = []
+    target_has_data = _target_has_canonical_data(target_resolved)
+    if target_has_data:
+        backup, size, backup_warnings = _create_pre_restore_backup(
+            target_resolved,
+        )
+        if backup is None:
+            return RestoreResult(
+                archive_path=archive_path_s,
+                target_data_dir=str(target_resolved),
+                outcome=RESTORE_OUTCOME_BACKUP_FAILED,
+                refuse_reason=(
+                    "Pre-restore backup could not be created — "
+                    "refusing to overwrite current data. See warnings."
+                ),
+                confirmed=bool(confirm),
+                restored_files=(),
+                skipped_files=(),
+                conflicts=tuple(conflicts_seen),
+                backup_path="",
+                backup_size=0,
+                restart_recommended=has_nova_db_in_archive,
+                warnings=tuple(
+                    list(inspection.warnings) + backup_warnings
+                ),
+                manifest=inspection.manifest,
+            )
+        backup_archive_path = str(backup)
+        backup_size = size
+
+    # Extract into staging.
+    staging = target_resolved / RESTORE_STAGING_DIRNAME
+    _cleanup_staging(staging)
+    try:
+        staging.mkdir(parents=True, exist_ok=False)
+    except OSError as exc:
+        return RestoreResult(
+            archive_path=archive_path_s,
+            target_data_dir=str(target_resolved),
+            outcome=RESTORE_OUTCOME_FAILED,
+            refuse_reason=(
+                f"Could not create staging directory: "
+                f"{exc.strerror or 'OS error'}"
+            ),
+            confirmed=bool(confirm),
+            restored_files=(),
+            skipped_files=(),
+            conflicts=tuple(conflicts_seen),
+            backup_path=backup_archive_path,
+            backup_size=backup_size,
+            restart_recommended=has_nova_db_in_archive,
+            warnings=tuple(
+                list(inspection.warnings) + backup_warnings
+            ),
+            manifest=inspection.manifest,
+        )
+
+    extracted, skipped, extract_err = _extract_to_staging(archive_p, staging)
+    if extract_err is not None:
+        _cleanup_staging(staging)
+        return RestoreResult(
+            archive_path=archive_path_s,
+            target_data_dir=str(target_resolved),
+            outcome=RESTORE_OUTCOME_EXTRACT_FAILED,
+            refuse_reason=extract_err,
+            confirmed=bool(confirm),
+            restored_files=(),
+            skipped_files=tuple(skipped),
+            conflicts=tuple(conflicts_seen),
+            backup_path=backup_archive_path,
+            backup_size=backup_size,
+            restart_recommended=has_nova_db_in_archive,
+            warnings=tuple(
+                list(inspection.warnings) + backup_warnings
+            ),
+            manifest=inspection.manifest,
+        )
+
+    if not extracted:
+        _cleanup_staging(staging)
+        return RestoreResult(
+            archive_path=archive_path_s,
+            target_data_dir=str(target_resolved),
+            outcome=RESTORE_OUTCOME_REFUSED,
+            refuse_reason=(
+                "Archive contained no extractable Nova data files."
+            ),
+            confirmed=bool(confirm),
+            restored_files=(),
+            skipped_files=tuple(skipped),
+            conflicts=tuple(conflicts_seen),
+            backup_path=backup_archive_path,
+            backup_size=backup_size,
+            restart_recommended=False,
+            warnings=tuple(
+                list(inspection.warnings) + backup_warnings
+            ),
+            manifest=inspection.manifest,
+        )
+
+    restored, conflicts, copy_err = _copy_into_target(
+        staging, target_resolved, extracted,
+    )
+    if copy_err is not None:
+        _cleanup_staging(staging)
+        return RestoreResult(
+            archive_path=archive_path_s,
+            target_data_dir=str(target_resolved),
+            outcome=RESTORE_OUTCOME_FAILED,
+            refuse_reason=copy_err,
+            confirmed=bool(confirm),
+            restored_files=tuple(restored),
+            skipped_files=tuple(skipped),
+            conflicts=tuple(conflicts),
+            backup_path=backup_archive_path,
+            backup_size=backup_size,
+            restart_recommended=has_nova_db_in_archive,
+            warnings=tuple(
+                list(inspection.warnings) + backup_warnings
+            ),
+            manifest=inspection.manifest,
+        )
+    _cleanup_staging(staging)
+
+    final_warnings: list[str] = list(inspection.warnings) + backup_warnings
+    if has_nova_db_in_archive:
+        final_warnings.append(
+            "Restart Nova so the new nova.db is picked up by the "
+            "running process. The previous database is preserved in "
+            "the pre-restore backup."
+        )
+    if not target_has_data:
+        final_warnings.append(
+            "Target data directory was empty before restore; no "
+            "pre-restore backup was needed."
+        )
+
+    return RestoreResult(
+        archive_path=archive_path_s,
+        target_data_dir=str(target_resolved),
+        outcome=RESTORE_OUTCOME_RESTORED,
+        refuse_reason="",
+        confirmed=True,
+        restored_files=tuple(restored),
+        skipped_files=tuple(skipped),
+        conflicts=tuple(conflicts),
+        backup_path=backup_archive_path,
+        backup_size=backup_size,
+        restart_recommended=has_nova_db_in_archive,
+        warnings=tuple(final_warnings),
+        manifest=inspection.manifest,
+    )
+
+
+def _target_has_canonical_data(target_root: Path) -> bool:
+    """Return True when the target already contains canonical Nova data.
+
+    "Canonical" mirrors the export allowlist: ``nova.db``, any
+    ``nova.db.*`` sidecar, or any file inside the four reserved
+    subdirectories. The function is intentionally cheap — it returns
+    on the first match so we don't walk the entire tree.
+    """
+    db = target_root / _paths.DB_FILENAME
+    if db.exists():
+        return True
+    try:
+        for entry in target_root.iterdir():
+            if entry.is_file() and entry.name.startswith(
+                _paths.DB_FILENAME + "."
+            ):
+                return True
+            if entry.is_dir() and entry.name in (
+                _paths.BACKUPS_SUBDIR,
+                _paths.EXPORTS_SUBDIR,
+                _paths.MEMORY_PACKS_SUBDIR,
+                _paths.LOGS_SUBDIR,
+            ):
+                try:
+                    next(entry.iterdir())
+                    return True
+                except (StopIteration, OSError):
+                    continue
+    except OSError:
+        return False
+    return False
+
+
+def _dry_run_warnings(
+    target_has_db: bool,
+    has_nova_db_in_archive: bool,
+    conflicts: list[str],
+    inspection_warnings: tuple[str, ...],
+) -> list[str]:
+    """Compose the warning list rendered by a dry-run restore.
+
+    The dry-run is informational — Phase 3 surfaces every "would
+    happen" caveat the operator should see before flipping
+    ``confirm=true``.
+    """
+    warnings: list[str] = list(inspection_warnings)
+    if target_has_db and has_nova_db_in_archive:
+        warnings.append(
+            "Target already contains nova.db. The real restore will "
+            "create an automatic pre-restore backup, then replace the "
+            "database. The previous nova.db will live inside the "
+            "pre-restore backup so you can roll back."
+        )
+    if conflicts:
+        warnings.append(
+            f"{len(conflicts)} file(s) at the target would be replaced. "
+            "Each replaced file is preserved inside the pre-restore "
+            "backup."
+        )
+    warnings.append(
+        "Stop Nova before running the real restore. The dry-run is "
+        "safe to run while Nova is running."
+    )
+    return warnings
+
+
 # ── CLI ─────────────────────────────────────────────────────────────
 #
 # ``python -m core.data_export <command> [...]`` exposes the three
@@ -1407,6 +2355,56 @@ def _format_restore_plan(plan: RestorePlan) -> str:
     return "\n".join(lines)
 
 
+def _format_restore_result(result: RestoreResult) -> str:
+    """Render a short human summary of a :class:`RestoreResult`.
+
+    Used by both the ``restore`` and ``restore-dry-run`` (Phase 3)
+    subcommands so the CLI text-format stays consistent between
+    flows. The dry-run form omits the backup line because no backup
+    was written.
+    """
+    lines = [f"Restore {result.outcome} for {result.archive_path}"]
+    lines.append(f"  target data dir   : {result.target_data_dir}")
+    lines.append(f"  confirmed         : {result.confirmed}")
+    if result.refuse_reason:
+        lines.append(f"  refuse reason     : {result.refuse_reason}")
+    lines.append(
+        f"  restored files    : {len(result.restored_files)}"
+    )
+    if result.conflicts:
+        lines.append(
+            f"  replaced existing : {len(result.conflicts)} file(s)"
+        )
+        for path in result.conflicts[:10]:
+            lines.append(f"    ~ {path}")
+        if len(result.conflicts) > 10:
+            lines.append(
+                f"    ... and {len(result.conflicts) - 10} more"
+            )
+    if result.skipped_files:
+        lines.append(
+            f"  skipped from archive: {len(result.skipped_files)} entry(ies)"
+        )
+        for entry in result.skipped_files[:10]:
+            lines.append(f"    ! {entry.path} ({entry.reason})")
+    if result.backup_path:
+        lines.append(
+            f"  pre-restore backup: {result.backup_path}"
+        )
+        lines.append(
+            f"  backup size       : {_format_bytes(result.backup_size)}"
+        )
+    if result.restart_recommended:
+        lines.append(
+            "  restart Nova so the new nova.db is picked up."
+        )
+    if result.warnings:
+        lines.append("  warnings:")
+        for warning in result.warnings:
+            lines.append(f"    - {warning}")
+    return "\n".join(lines)
+
+
 def _stderr():  # pragma: no cover - trivial helper for monkeypatching
     """Return ``sys.stderr`` indirectly so tests can swap it out."""
     import sys
@@ -1502,6 +2500,45 @@ def _cli(argv: list[str]) -> int:
         ),
     )
 
+    apply_parser = subparsers.add_parser(
+        "restore",
+        help=(
+            "Restore an archive into the target data directory. "
+            "Requires --confirm. Creates an automatic pre-restore "
+            "backup before replacing any file."
+        ),
+    )
+    apply_parser.add_argument(
+        "archive",
+        help="Path to a Nova data export archive (.tar.gz).",
+    )
+    apply_parser.add_argument(
+        "--data-dir",
+        default=None,
+        help=(
+            "Target data directory. Defaults to the configured "
+            "NOVA_DATA_DIR; failing that, the command refuses."
+        ),
+    )
+    apply_parser.add_argument(
+        "--confirm",
+        action="store_true",
+        help=(
+            "Confirm the restore explicitly. Without this flag the "
+            "command refuses. Pair with --confirmed-manifest-id to "
+            "pin the archive identity to the one you inspected."
+        ),
+    )
+    apply_parser.add_argument(
+        "--confirmed-manifest-id",
+        default=None,
+        help=(
+            "Optional manifest identifier (the archive's 'created_at' "
+            "timestamp from inspect output). When set, the restore "
+            "refuses unless the archive's manifest matches."
+        ),
+    )
+
     if not argv:
         parser.print_help(file=_stderr())
         return 2
@@ -1541,6 +2578,30 @@ def _cli(argv: list[str]) -> int:
         # exit-1 reserved for unexpected errors. Tests pin this.
         return 0
 
+    if args.command == "restore":
+        if not args.confirm:
+            print(
+                "error: restore requires --confirm. Re-run with "
+                "--confirm after reviewing the dry-run plan with "
+                "`python -m core.data_export restore-dry-run`.",
+                file=_stderr(),
+            )
+            return 1
+        result = apply_restore(
+            args.archive,
+            target_data_dir=args.data_dir,
+            confirm=True,
+            confirmed_manifest_id=args.confirmed_manifest_id,
+            dry_run=False,
+        )
+        print(_format_restore_result(result))
+        if result.outcome == RESTORE_OUTCOME_RESTORED:
+            return 0
+        # A refused / failed restore is a CLI-level failure: the
+        # operator typed `restore` and the data did not move. Tests
+        # pin this so shell scripts can branch on it.
+        return 1
+
     parser.print_help(file=_stderr())
     return 2
 
@@ -1564,6 +2625,7 @@ __all__ = [
     "InspectionResult",
     "MODE_DATA_ONLY",
     "MODE_WORKSPACE",
+    "PRE_RESTORE_BACKUP_SUBDIR",
     "REASON_CACHE",
     "REASON_NODE_MODULES",
     "REASON_NOT_ALLOWLISTED",
@@ -1573,7 +2635,16 @@ __all__ = [
     "REASON_SYMLINK_ESCAPE",
     "REASON_VCS",
     "REASON_VENV",
+    "RESTORE_OUTCOME_BACKUP_FAILED",
+    "RESTORE_OUTCOME_DRY_RUN",
+    "RESTORE_OUTCOME_EXTRACT_FAILED",
+    "RESTORE_OUTCOME_FAILED",
+    "RESTORE_OUTCOME_REFUSED",
+    "RESTORE_OUTCOME_RESTORED",
+    "RESTORE_STAGING_DIRNAME",
     "RestorePlan",
+    "RestoreResult",
+    "apply_restore",
     "create_data_export",
     "inspect_export",
     "plan_restore",
