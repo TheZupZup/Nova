@@ -1368,6 +1368,54 @@ class TestApplyRestoreExcludedContent:
         assert "backups/llama-7b.gguf" in skipped_paths
         assert skipped_paths["backups/llama-7b.gguf"] == de.REASON_OLLAMA_MODEL
 
+    def test_stray_excluded_files_do_not_trigger_backup_failed(
+        self, tmp_path,
+    ):
+        """A target whose reserved subdir holds only excluded entries
+        must not produce a spurious ``backup_failed`` outcome.
+
+        ``_target_has_canonical_data`` used to flag any non-empty
+        reserved subdirectory as "canonical data", but
+        ``_create_pre_restore_backup`` filters through the same
+        allowlist used by ``_walk_allowlisted``. A target like
+        ``backups/.env`` (a stray secret left behind by tooling) is
+        non-empty but contains nothing the backup builder would
+        actually pack — flagging it as needing a backup would force
+        the backup builder to produce an empty archive and the
+        restore would refuse with ``outcome=backup_failed``. The
+        detection now matches the allowlist, so this scenario
+        succeeds as a normal restore.
+        """
+        # Build an archive with a real nova.db payload.
+        archive = _make_archive_with_payload(
+            tmp_path, {"nova.db": b"-- db --"},
+        )
+        # Seed the target with ONLY excluded entries — a stray
+        # .env inside backups/ and a __pycache__ under logs/.
+        target = tmp_path / "Target"
+        target.mkdir()
+        (target / "backups").mkdir()
+        (target / "backups" / ".env").write_text("SECRET=x\n")
+        (target / "logs").mkdir()
+        (target / "logs" / "__pycache__").mkdir()
+        (target / "logs" / "__pycache__" / "stale.pyc").write_bytes(b"\x00")
+
+        out = de.apply_restore(
+            archive, target_data_dir=target, confirm=True,
+        )
+        # Restore succeeds because the target has nothing canonical
+        # to back up — no spurious backup_failed.
+        assert out.outcome == de.RESTORE_OUTCOME_RESTORED, (
+            out.outcome, out.refuse_reason
+        )
+        assert out.backup_path == ""
+        # The new database lands at the target.
+        assert (target / "nova.db").is_file()
+        # The stray excluded files are still where they were —
+        # restore never touches them.
+        assert (target / "backups" / ".env").is_file()
+        assert (target / "logs" / "__pycache__" / "stale.pyc").is_file()
+
     def test_dry_run_surfaces_allowlist_skips(self, tmp_path):
         """The dry-run preview lists disallowed entries up front."""
         archive = _make_archive_with_payload(

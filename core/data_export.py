@@ -2307,8 +2307,8 @@ def apply_restore(
         )
     if not target_has_data:
         final_warnings.append(
-            "Target data directory was empty before restore; no "
-            "pre-restore backup was needed."
+            "Target data directory contained no canonical Nova data; "
+            "no pre-restore backup was needed."
         )
 
     return RestoreResult(
@@ -2329,36 +2329,27 @@ def apply_restore(
 
 
 def _target_has_canonical_data(target_root: Path) -> bool:
-    """Return True when the target already contains canonical Nova data.
+    """Return True when the target contains a file the backup would pack.
 
-    "Canonical" mirrors the export allowlist: ``nova.db``, any
-    ``nova.db.*`` sidecar, or any file inside the four reserved
-    subdirectories. The function is intentionally cheap — it returns
-    on the first match so we don't walk the entire tree.
+    The decision must match :func:`_create_pre_restore_backup`'s
+    allowlist — otherwise ``apply_restore`` will demand a backup,
+    the backup builder will skip every entry, and the restore is
+    refused with a spurious ``outcome=backup_failed``. That false
+    positive shows up on installations where a reserved
+    subdirectory holds only excluded files (a stray
+    ``backups/.env``, a ``logs/__pycache__/foo.pyc`` left behind by
+    tooling, …): the directory is non-empty but contains nothing
+    the backup builder would actually preserve.
+
+    The check therefore reuses :func:`_walk_allowlisted` (the same
+    walk the backup builder uses) and returns ``True`` only when
+    that walk would pack at least one file. The walk is cheap for
+    typical Nova installs and never raises into the caller.
     """
-    db = target_root / _paths.DB_FILENAME
-    if db.exists():
-        return True
-    try:
-        for entry in target_root.iterdir():
-            if entry.is_file() and entry.name.startswith(
-                _paths.DB_FILENAME + "."
-            ):
-                return True
-            if entry.is_dir() and entry.name in (
-                _paths.BACKUPS_SUBDIR,
-                _paths.EXPORTS_SUBDIR,
-                _paths.MEMORY_PACKS_SUBDIR,
-                _paths.LOGS_SUBDIR,
-            ):
-                try:
-                    next(entry.iterdir())
-                    return True
-                except (StopIteration, OSError):
-                    continue
-    except OSError:
+    if not target_root.exists():
         return False
-    return False
+    included_pairs, _ = _walk_allowlisted(target_root)
+    return bool(included_pairs)
 
 
 def _dry_run_warnings(
