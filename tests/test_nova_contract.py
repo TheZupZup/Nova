@@ -76,6 +76,57 @@ class TestBlocks:
         assert "silentguard" in lower
         assert "projet" in lower or "project" in lower
 
+    def test_response_style_honors_short_answer_request(self):
+        # When the user asks for a short / natural answer, Nova must not
+        # produce a long structured report. The block names the common
+        # French shorthands ("pas trop long", "court", "en bref") so the
+        # model recognises them as compactness signals.
+        lower = RESPONSE_STYLE_BLOCK.lower()
+        assert "pas trop long" in lower
+        assert "court" in lower or "en bref" in lower or "rapidement" in lower
+
+    def test_response_style_caps_short_replies_to_a_few_paragraphs(self):
+        # Compact replies should land in 2-4 short paragraphs or
+        # 2-4 phrases — not as a numbered plan with headings.
+        lower = RESPONSE_STYLE_BLOCK.lower()
+        assert "2-4" in lower or "2 à 4" in lower
+
+    def test_response_style_avoids_document_layout_for_short_answers(self):
+        # The block must explicitly suppress headings / horizontal rules /
+        # long numbered lists when the user asked for something compact —
+        # those are the patterns that make Nova feel like a policy doc.
+        lower = RESPONSE_STYLE_BLOCK.lower()
+        assert "titre" in lower or "###" in lower or "##" in lower
+        assert "séparateur" in lower or "---" in lower
+
+    def test_response_style_warns_against_heavy_markdown(self):
+        # Markdown should serve content, not decorate it: the block must
+        # say that bold isn't for normal phrasing and lists should be
+        # used only when they help.
+        lower = RESPONSE_STYLE_BLOCK.lower()
+        assert "gras" in lower or "bold" in lower
+        assert "liste" in lower
+
+    def test_response_style_forbids_pretending_to_be_human(self):
+        # "Human but honest": Nova may sound warm but must never claim
+        # to be a human. The block needs to spell this out so a
+        # role-play prompt can't talk the model into a fake-identity
+        # answer.
+        lower = RESPONSE_STYLE_BLOCK.lower()
+        assert "humain" in lower
+        assert (
+            "pas pour un humain" in lower
+            or "passer pour un humain" in lower
+            or "ne te fais jamais passer" in lower
+        )
+
+    def test_response_style_discourages_policy_doc_voice(self):
+        # When the user asks a casual question, Nova should answer
+        # casually — not in the "policy document" voice that reads as
+        # cold and over-structured.
+        lower = RESPONSE_STYLE_BLOCK.lower()
+        assert "document" in lower or "politique" in lower or "rapport" in lower
+
 
 class TestCapabilitiesBlock:
     def test_has_capabilities_label(self):

@@ -232,3 +232,56 @@ class TestChatPullsPerUserPersonalization:
         # No block, but the contract is still there.
         assert "PRÉFÉRENCES UTILISATEUR" not in sys_msg
         assert IDENTITY_CONTRACT in sys_msg
+
+
+# ── Compact / natural reply contract reaches Ollama ─────────────────────────
+#
+# The previous round of polish made Nova *stream*; this round makes Nova
+# answer compactly when the user explicitly asks for a short / natural
+# reply. The contract directives live in `RESPONSE_STYLE_BLOCK` — these
+# tests pin that the directives actually end up in the system message
+# that Ollama sees for a typical French prompt like
+# "explique-moi en pas trop long ...".
+
+class TestShortReplyDirectiveReachesOllama:
+    def test_contract_compact_directive_is_in_system_prompt(
+        self, db_path, make_user,
+    ):
+        alice = make_user("alice")
+        with stub_chat_runtime() as fake_client:
+            chat([], "explique-moi en pas trop long ce que tu fais", [], alice)
+        sys_msg = _system_prompt(fake_client.call_args).lower()
+        # The contract names the compactness signals so the model maps
+        # the French shorthand onto a tight reply.
+        assert "pas trop long" in sys_msg
+        # And it caps short replies at a small number of paragraphs.
+        assert "2-4" in sys_msg or "2 à 4" in sys_msg
+
+    def test_contract_warns_against_document_layout(
+        self, db_path, make_user,
+    ):
+        alice = make_user("alice")
+        with stub_chat_runtime() as fake_client:
+            chat([], "réponds simplement", [], alice)
+        sys_msg = _system_prompt(fake_client.call_args).lower()
+        # Headings and horizontal rules are the two patterns that turn a
+        # casual answer into a report — the prompt must name them.
+        assert "titre" in sys_msg or "##" in sys_msg
+        assert "séparateur" in sys_msg or "---" in sys_msg
+
+    def test_contract_blocks_pretending_to_be_human(
+        self, db_path, make_user,
+    ):
+        # Warm tone is allowed, but Nova must never claim to be human.
+        # Test verifies the directive lands in the live system prompt,
+        # not just in the static block.
+        alice = make_user("alice")
+        with stub_chat_runtime() as fake_client:
+            chat([], "tu es un humain ?", [], alice)
+        sys_msg = _system_prompt(fake_client.call_args).lower()
+        assert "humain" in sys_msg
+        assert (
+            "pas pour un humain" in sys_msg
+            or "passer pour un humain" in sys_msg
+            or "ne te fais jamais passer" in sys_msg
+        )

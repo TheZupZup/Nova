@@ -1108,26 +1108,38 @@
            line-height makes prose readable without feeling cramped.
            Headings, paragraphs and lists collapse first-/last-child margins
            so the bubble never reserves empty vertical space at the edges.
-           Paragraphs and list items get a touch more breathing room than a
-           dense doc dump so long replies stay scannable. */
+           Paragraphs and list items get a touch of breathing room — enough
+           to scan, never enough to feel like a printed report. Heading
+           sizes are kept close to body text so a short answer that drifts
+           into a heading still reads conversationally, not document-like. */
         .message.nova h1, .message.nova h2, .message.nova h3 {
             color: var(--text);
-            margin: 12px 0 6px;
+            margin: 10px 0 4px;
             font-weight: 600;
             letter-spacing: -0.005em;
+            line-height: 1.35;
         }
-        .message.nova h1 { font-size: 1.16rem; }
-        .message.nova h2 { font-size: 1.04rem; }
-        .message.nova h3 { font-size: 0.96rem; color: var(--cyan); }
-        .message.nova p { margin: 7px 0; }
-        .message.nova ul, .message.nova ol { padding-left: 22px; margin: 7px 0; }
-        .message.nova li { margin: 4px 0; }
+        .message.nova h1 { font-size: 1.08rem; }
+        .message.nova h2 { font-size: 1.0rem; }
+        .message.nova h3 { font-size: 0.94rem; color: var(--cyan); }
+        .message.nova p { margin: 6px 0; }
+        .message.nova p + p { margin-top: 8px; }
+        .message.nova ul, .message.nova ol { padding-left: 20px; margin: 6px 0; }
+        .message.nova li { margin: 3px 0; }
         .message.nova li > p { margin: 2px 0; }
-        .message.nova li + li { margin-top: 5px; }
+        .message.nova li + li { margin-top: 4px; }
         .message.nova > div > *:first-child,
         .message.nova > *:first-child { margin-top: 0; }
         .message.nova > div > *:last-child,
         .message.nova > *:last-child { margin-bottom: 0; }
+        /* When the entire reply is a single short paragraph or a single
+           list, suppress the extra vertical breathing room so the bubble
+           hugs its content. Targets the common "natural short answer"
+           shape — two or three sentences with no other block siblings. */
+        .message.nova > div:only-child > p:only-child,
+        .message.nova > p:only-child { margin: 0; }
+        .message.nova > div:only-child > ul:only-child,
+        .message.nova > div:only-child > ol:only-child { margin: 2px 0; }
         .message.nova code {
             background: rgba(124, 197, 212, 0.10);
             padding: 1px 6px;
@@ -1174,7 +1186,11 @@
         .code-copy-btn:focus { opacity: 1; }
         .code-copy-btn:hover { color: var(--cyan); border-color: var(--cyan-glow); background: var(--cyan-soft); opacity: 1; }
         .code-copy-btn.copied { color: var(--cyan); border-color: var(--cyan-glow); background: var(--cyan-soft); opacity: 1; }
-        .message.nova strong { color: var(--text); font-weight: 600; }
+        /* `strong` is kept slightly calmer than browser default: same colour
+           as body text and a 590 weight, so a model that over-bolds parts
+           of a sentence still reads as prose rather than as alternating
+           shouting. Reserve true emphasis for the user. */
+        .message.nova strong { color: var(--text); font-weight: 590; }
         .message.nova em { color: var(--text-mid); }
         .message.nova a {
             color: var(--cyan);
@@ -1187,7 +1203,8 @@
             border: none;
             height: 1px;
             background: linear-gradient(90deg, transparent, var(--border), transparent);
-            margin: 12px 0;
+            margin: 10px 0;
+            opacity: 0.7;
         }
         .message.nova table {
             border-collapse: collapse;
