@@ -172,3 +172,13 @@ If a future Nova release introduces an opt-in migration helper, it
 will be additive (a single explicit command), preserve the legacy
 file, and require explicit confirmation. Nothing about the current
 data is at risk from this PR.
+
+## See also
+
+* [`docs/portable-workspace.md`](portable-workspace.md) — wrap the
+  Nova checkout, data directory, logs, backups, and config under
+  one parent folder so the whole thing can be moved as a unit.
+* [`docs/storage-and-migration.md`](storage-and-migration.md) —
+  admin-only Storage & Migration Center: read-only status report,
+  portable data export packages, and a dry-run inspection / restore
+  plan for moving Nova between machines safely.

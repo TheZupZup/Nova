@@ -592,6 +592,40 @@ optionally set up a user-level Nova unit if you want the restart
 button to work without leaving the secure-deployment guide's
 boundaries.
 
+## Optional admin Storage & Migration Center
+
+Nova ships an **optional**, **admin-only** Storage & Migration
+surface that reports where Nova stores its data, builds portable
+data export packages, and lets an administrator inspect an existing
+package before restoring it on another machine. Every endpoint is
+read-only or confirmation-gated; nothing in this feature moves,
+overwrites, or deletes Nova data on its own.
+
+The full walkthrough lives in
+[`docs/storage-and-migration.md`](docs/storage-and-migration.md).
+The three endpoints are:
+
+* `GET /admin/storage/status` — calm read-only snapshot of the
+  data directory, database file, reserved subdirectories, free
+  disk space, mount-class warnings, and (informational) Ollama
+  models path. Warns when `NOVA_DATA_DIR` is unset or on a
+  transient mount such as `/run/media/...`.
+* `POST /admin/storage/export` — builds a `nova-data-export-<UTC
+  stamp>.tar.gz` package containing `manifest.json`, `RESTORE.md`,
+  and an **allowlisted** copy of Nova's runtime data. Requires
+  `{"confirm": true}`. The export never includes `.env`, `.git`,
+  `.venv`, caches, Ollama models, media libraries, SSH keys, or
+  anything outside the data directory; symlinks whose target
+  resolves outside the data root are skipped.
+* `POST /admin/storage/inspect-export` — validates an existing
+  archive in the configured exports directory. Parses the
+  manifest, refuses path traversal or symlink-escape members, and
+  returns a structured report. Read-only.
+
+Restore in Phase 1 is the documented **manual** procedure in
+`docs/storage-and-migration.md`. The dry-run plan (no file writes)
+refuses to proceed when the target already contains a `nova.db`.
+
 ## Voice and TTS
 
 Every assistant message has a "Read aloud" button. By default Nova uses

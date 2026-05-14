@@ -68,6 +68,8 @@ from core.security import ensure_silentguard_running as _ensure_silentguard_runn
 from core.security import lifecycle as _silentguard_lifecycle
 from core.security import SilentGuardProvider as _SilentGuardProvider
 from core import maintenance as _maintenance
+from core import storage_status as _storage_status
+from core import data_export as _data_export
 from core import voice as _voice
 import sqlite3 as _sqlite3
 from core import users as _users_mod
@@ -2493,6 +2495,134 @@ def maintenance_restart(
     """
     _require_confirm(req)
     return _maintenance.restart().as_dict()
+
+
+# ── ADMIN: STORAGE & MIGRATION CENTER ─────────────────────────────
+# Phase 1 admin-only surface for inspecting Nova's storage layout
+# and building portable data export packages. Every endpoint is
+# wrapped with ``require_admin``. The underlying modules
+# (``core.storage_status`` and ``core.data_export``) enforce:
+#
+#   * read-only status reporting,
+#   * allowlist-only exports (nova.db + sidecars + reserved
+#     subdirectories — never .env, .git, .venv, caches, Ollama
+#     models, or anything else),
+#   * no symlink escape outside the data directory,
+#   * inspection / restore are dry-run only — Phase 1 never writes,
+#     moves, or deletes anything on a restore,
+#   * confirmation-gated export so a stray click never produces an
+#     archive.
+#
+# The export endpoint takes an explicit ``confirm`` payload mirroring
+# the maintenance endpoints. The inspect endpoint is read-only but
+# still admin-only — the operator's data layout is sensitive.
+
+
+class StorageExportRequest(BaseModel):
+    """Explicit confirmation + options for the export endpoint.
+
+    ``mode`` defaults to the safe ``data-only`` option. The
+    ``workspace`` mode is reserved for a follow-up PR and rejected
+    today.
+    """
+
+    confirm: bool = False
+    mode: str = _data_export.MODE_DATA_ONLY
+
+    model_config = {"extra": "forbid"}
+
+
+class StorageInspectRequest(BaseModel):
+    """Inspect an archive by its basename under the exports directory.
+
+    To prevent path traversal via the API, the admin selects an
+    archive by its filename (not by absolute path). The server
+    resolves it against ``core.paths.exports_dir()`` and refuses any
+    name that contains a path separator, an absolute path, or a
+    ``..`` component.
+    """
+
+    name: str = Field(min_length=1, max_length=255)
+
+    model_config = {"extra": "forbid"}
+
+    @field_validator("name")
+    @classmethod
+    def _validate_name(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("name must not be empty")
+        if "/" in v or "\\" in v or ".." in v or v.startswith("."):
+            raise ValueError("name must be a plain filename, not a path")
+        return v
+
+
+@app.get("/admin/storage/status")
+def storage_status_endpoint(_: CurrentUser = Depends(require_admin)):
+    """Calm read-only snapshot of Nova's storage layout.
+
+    Returns the data directory, the resolved database path, the
+    reserved subdirectories, free disk space (best effort), and any
+    warnings — for example when ``NOVA_DATA_DIR`` is unset or when
+    the configured path is on a transient mount such as
+    ``/run/media/...``.
+    """
+    return _storage_status.get_storage_status().as_dict()
+
+
+@app.post("/admin/storage/export")
+def storage_export_endpoint(
+    req: StorageExportRequest,
+    _: CurrentUser = Depends(require_admin),
+):
+    """Build a portable data-only export package.
+
+    Returns 400 when ``confirm`` is not True or when an unknown mode
+    is requested. The underlying helper writes the archive to
+    ``NOVA_DATA_DIR/exports`` (or the legacy ``./exports``) and
+    returns the absolute path along with a manifest summary so the
+    UI can render a "download / inspect" panel.
+    """
+    _require_confirm(req)
+    try:
+        result = _data_export.create_data_export(mode=req.mode)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+    return result.as_dict()
+
+
+@app.post("/admin/storage/inspect-export")
+def storage_inspect_endpoint(
+    req: StorageInspectRequest,
+    _: CurrentUser = Depends(require_admin),
+):
+    """Inspect an existing export archive under the exports directory.
+
+    Reads the manifest, validates the archive structure (no path
+    traversal, no symlink escape, format / version match), and
+    returns a structured report. Never writes to disk. The body
+    selects the archive by its plain filename — absolute paths are
+    rejected at the validation layer.
+    """
+    from core import paths as _paths_mod
+    exports_root = _paths_mod.effective_data_root() / _paths_mod.EXPORTS_SUBDIR
+    target = exports_root / req.name
+    try:
+        target_resolved = target.resolve(strict=False)
+        exports_resolved = exports_root.resolve(strict=False)
+        target_resolved.relative_to(exports_resolved)
+    except (OSError, ValueError):
+        raise HTTPException(
+            status_code=400,
+            detail="Archive name does not resolve inside the exports directory.",
+        )
+    if not target.is_file():
+        raise HTTPException(
+            status_code=404, detail="Archive not found.",
+        )
+    return _data_export.inspect_export(str(target)).as_dict()
 
 
 @app.get("/channel")

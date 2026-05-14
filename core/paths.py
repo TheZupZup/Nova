@@ -102,6 +102,23 @@ def database_path() -> Path:
     return root / DB_FILENAME
 
 
+def effective_data_root() -> Path:
+    """Return the absolute parent directory of every Nova-owned file.
+
+    With ``NOVA_DATA_DIR`` set this is identical to
+    :func:`configured_data_dir`. Without it, Nova runs in legacy mode
+    and the data root is the parent of the resolved
+    :func:`database_path` — i.e. the current working directory. The
+    helper exists so downstream modules (status reporter, export
+    builder, admin endpoints) all agree on a single "where does Nova
+    live?" answer instead of re-deriving the fallback.
+    """
+    root = configured_data_dir()
+    if root is not None:
+        return root
+    return database_path().resolve().parent
+
+
 def backups_dir() -> Path:
     """Return the path of the ``backups`` subdirectory.
 
