@@ -1249,6 +1249,50 @@ class TestApplyRestoreSafety:
         # Dry-run never writes anything.
         assert list(target.iterdir()) == []
 
+    def test_refuses_when_staging_directory_already_exists(
+        self, configured_data_dir, tmp_path,
+    ):
+        """Two restores against the same target must not interfere.
+
+        The previous implementation unconditionally cleaned up the
+        staging directory at startup. A second restore launched
+        while the first was still running would therefore delete
+        the first restore's rollback stash, breaking the "failed
+        restore leaves data intact" guarantee for the original
+        caller. The fix uses ``mkdir(exist_ok=False)`` atomically
+        and refuses when the staging directory is already present,
+        whether from a concurrent restore or from a previous run
+        that crashed before cleanup.
+        """
+        result = de.create_data_export()
+        target = tmp_path / "Target"
+        target.mkdir()
+        marker = b"original-db"
+        (target / "nova.db").write_bytes(marker)
+        # Simulate a concurrent (or crashed) restore's staging:
+        # the directory exists with in-flight state inside.
+        staging = target / de.RESTORE_STAGING_DIRNAME
+        staging.mkdir()
+        stash = staging / ".replaced-originals"
+        stash.mkdir()
+        (stash / "nova.db").write_bytes(b"in-flight-stash-payload")
+
+        out = de.apply_restore(
+            result.archive_path,
+            target_data_dir=target,
+            confirm=True,
+        )
+        assert out.outcome == de.RESTORE_OUTCOME_REFUSED
+        assert "staging" in out.refuse_reason.lower()
+        # Existing target file untouched.
+        assert (target / "nova.db").read_bytes() == marker
+        # The "in-flight" staging area was not clobbered — the
+        # stash file inside it is still intact, so the other
+        # (hypothetical) restore can still roll back if it needs
+        # to.
+        assert stash.is_dir()
+        assert (stash / "nova.db").read_bytes() == b"in-flight-stash-payload"
+
     def test_failed_restore_leaves_existing_data_intact(
         self, configured_data_dir, tmp_path, monkeypatch,
     ):

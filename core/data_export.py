@@ -2486,11 +2486,47 @@ def apply_restore(
         backup_archive_path = str(backup)
         backup_size = size
 
-    # Extract into staging.
+    # Extract into staging. The staging directory holds (a) the
+    # extracted archive contents and (b) the rollback stash of any
+    # files we displaced during the copy phase. It is **never
+    # blindly cleaned up at startup**: doing so used to silently
+    # delete a concurrent restore's in-flight stash, breaking the
+    # "failed restore leaves data intact" guarantee for the other
+    # caller. ``mkdir(exist_ok=False)`` atomically creates the
+    # directory, so two concurrent restores deterministically lose
+    # one: the loser sees ``FileExistsError`` and returns
+    # ``outcome=refused`` with a clear message. A staging directory
+    # left behind by a crashed restore also triggers the same
+    # refusal; the operator can investigate and remove it by hand
+    # once they have confirmed no other restore is running.
     staging = target_resolved / RESTORE_STAGING_DIRNAME
-    _cleanup_staging(staging)
     try:
         staging.mkdir(parents=True, exist_ok=False)
+    except FileExistsError:
+        return RestoreResult(
+            archive_path=archive_path_s,
+            target_data_dir=str(target_resolved),
+            outcome=RESTORE_OUTCOME_REFUSED,
+            refuse_reason=(
+                f"Staging directory {RESTORE_STAGING_DIRNAME!r} "
+                "already exists in the target. Another restore may "
+                "be in progress, or a previous restore was "
+                "interrupted. Confirm no other restore is running, "
+                "then remove the staging directory by hand and "
+                "retry."
+            ),
+            confirmed=bool(confirm),
+            restored_files=(),
+            skipped_files=(),
+            conflicts=tuple(conflicts_seen),
+            backup_path=backup_archive_path,
+            backup_size=backup_size,
+            restart_recommended=has_nova_db_in_archive,
+            warnings=tuple(
+                list(inspection.warnings) + backup_warnings
+            ),
+            manifest=inspection.manifest,
+        )
     except OSError as exc:
         return RestoreResult(
             archive_path=archive_path_s,
