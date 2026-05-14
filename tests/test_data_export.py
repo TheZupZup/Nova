@@ -829,6 +829,59 @@ class TestApplyRestoreConfirmation:
         )
         assert out.outcome == de.RESTORE_OUTCOME_RESTORED
 
+    def test_pin_refuses_archive_with_missing_manifest_id(self, tmp_path):
+        """A pin must refuse even when the archive has no created_at.
+
+        Otherwise a hostile archive could omit ``created_at`` from
+        its manifest and bypass the pin check entirely (the previous
+        implementation only rejected when both strings were
+        non-empty). The pin is a deliberate "I inspected exactly
+        this archive" assertion — a missing archive id is not the
+        same identity as the operator's pin.
+        """
+        archive = _make_archive_with_payload(
+            tmp_path,
+            {"nova.db": b"-- fake db --"},
+            manifest_overrides={"created_at": ""},
+        )
+        target = tmp_path / "Target"
+        target.mkdir()
+        out = de.apply_restore(
+            archive,
+            target_data_dir=target,
+            confirm=True,
+            confirmed_manifest_id="20260514T120000Z",
+        )
+        assert out.outcome == de.RESTORE_OUTCOME_REFUSED
+        assert "manifest" in out.refuse_reason.lower()
+        # Target untouched.
+        assert list(target.iterdir()) == []
+
+    def test_empty_pin_is_treated_as_no_pin(self, tmp_path):
+        """An empty ``confirmed_manifest_id`` is "no pin requested"."""
+        archive = _make_archive_with_payload(
+            tmp_path,
+            {"nova.db": b"-- fake db --"},
+            manifest_overrides={"created_at": ""},
+        )
+        target = tmp_path / "Target"
+        target.mkdir()
+        # Empty string and None both mean "no pin". Verify both.
+        for pin in ("", None):
+            (target / "nova.db").unlink(missing_ok=True)
+            # Clear backups so the second pass starts fresh.
+            backups = target / "backups"
+            if backups.exists():
+                import shutil
+                shutil.rmtree(backups)
+            out = de.apply_restore(
+                archive,
+                target_data_dir=target,
+                confirm=True,
+                confirmed_manifest_id=pin,
+            )
+            assert out.outcome == de.RESTORE_OUTCOME_RESTORED, (pin, out.refuse_reason)
+
 
 class TestApplyRestoreSuccess:
     """A confirmed restore copies the archive's data files into target."""

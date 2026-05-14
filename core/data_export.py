@@ -1885,10 +1885,16 @@ def apply_restore(
             manifest=inspection.manifest,
         )
 
-    # Optional pinning of the archive identity.
-    if confirmed_manifest_id is not None:
+    # Optional pinning of the archive identity. A non-empty
+    # ``confirmed_manifest_id`` is a deliberate "I inspected
+    # exactly this archive" assertion — it must match the
+    # archive's manifest id exactly, including when the archive
+    # has no usable id of its own. ``None`` and ``""`` both mean
+    # "no pin requested" (the CLI omits the flag, the UI sends
+    # ``null`` when it has no id to pin against).
+    if confirmed_manifest_id:
         actual = _manifest_id(inspection.manifest)
-        if confirmed_manifest_id and actual and confirmed_manifest_id != actual:
+        if actual != confirmed_manifest_id:
             return RestoreResult(
                 archive_path=archive_path_s,
                 target_data_dir="",
