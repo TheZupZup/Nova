@@ -1,0 +1,37 @@
+name: Mirror to Codeberg
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "*"
+  workflow_dispatch:
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout full repository history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Configure SSH for Codeberg
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.CODEBERG_SSH_KEY }}" > ~/.ssh/codeberg_mirror
+          chmod 600 ~/.ssh/codeberg_mirror
+          ssh-keyscan codeberg.org >> ~/.ssh/known_hosts
+
+      - name: Mirror main and tags to Codeberg
+        run: |
+          git remote add codeberg git@codeberg.org:TheZupZup/Nova.git
+
+          GIT_SSH_COMMAND="ssh -i ~/.ssh/codeberg_mirror -o IdentitiesOnly=yes" \
+            git push codeberg main:main
+
+          GIT_SSH_COMMAND="ssh -i ~/.ssh/codeberg_mirror -o IdentitiesOnly=yes" \
+            git push codeberg --tags
