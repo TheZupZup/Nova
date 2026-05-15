@@ -1,17 +1,34 @@
+# Python
 .venv/
-nexus.db
 __pycache__/
-core/auth.py
-core/auth.py
-.env
-nova.db
-nova.db
 
-# Database
+# Generated auth module (rendered at install time)
+core/auth.py
+
+# Local environment files (may contain secrets)
+.env
+*.env
+nova.env
+
+# SQLite databases — Nova runtime data must never be committed
+nova.db
+nexus.db
 *.db
 *.db.*
+*.sqlite
+*.sqlite3
 
-# Backup
+# Nova Portable Workspace — private runtime directories
+# Listed defensively so a stray cp/rsync into the repo does not get staged.
+data/
+NovaData/
+NovaPortable/
+backups/
+exports/
+memory-packs/
+logs/
+
+# Backups
 *.backup
 
 # Temp
