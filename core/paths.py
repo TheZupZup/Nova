@@ -306,6 +306,7 @@ _WORKSPACE_SUBDIRS: tuple[str, ...] = (
 )
 
 WORKSPACE_ENV_EXAMPLE_NAME = "nova.env.example"
+WORKSPACE_README_NAME = "README.md"
 
 
 def _workspace_env_example_body(data_dir: Path) -> str:
@@ -329,6 +330,59 @@ def _workspace_env_example_body(data_dir: Path) -> str:
         "# so nova.db, backups, exports, memory-packs, and logs all\n"
         "# live inside the portable workspace.\n"
         f"NOVA_DATA_DIR={data_dir}\n"
+    )
+
+
+def _workspace_readme_body(root: Path) -> str:
+    """Return the contents of the workspace's top-level ``README.md``.
+
+    The README is a short pointer file aimed at an operator opening the
+    workspace folder for the first time (or six months later). It names
+    what each subdirectory is for, restates the "data stays out of Git"
+    rule, and links to the canonical walkthrough at
+    ``docs/portable-workspace.md`` inside the Nova checkout.
+    """
+    return (
+        f"# Nova Portable Workspace — {root.name}\n"
+        "\n"
+        "This directory is a Nova Portable Workspace. It bundles the\n"
+        "Nova application checkout, runtime data, configuration, logs,\n"
+        "and backups under one parent folder so the whole thing can be\n"
+        "moved between disks or machines as a single unit.\n"
+        "\n"
+        "## Layout\n"
+        "\n"
+        "```\n"
+        f"{root.name}/\n"
+        "  app/        # clone Nova into app/Nova (not done by the helper)\n"
+        "  data/       # NOVA_DATA_DIR — nova.db, exports, memory-packs, etc.\n"
+        "  config/     # nova.env, nova.env.example (local config, may hold secrets)\n"
+        "  logs/       # operator-owned log files (Nova does not write here today)\n"
+        "  backups/    # operator-owned backup packs (rsync snapshots, etc.)\n"
+        "  scripts/    # operator-owned helper scripts (start/stop/backup)\n"
+        "```\n"
+        "\n"
+        "## Rules\n"
+        "\n"
+        "* `app/Nova/` is the Git checkout — public code only.\n"
+        "* `data/`, `config/`, `logs/`, and `backups/` are **private**\n"
+        "  and must never be committed to Git.\n"
+        "* This README and the example env file are the only things the\n"
+        "  init helper writes. It never clones Nova, never copies\n"
+        "  `nova.db`, and never overwrites a file you customised.\n"
+        "\n"
+        "## Next steps\n"
+        "\n"
+        "1. Clone Nova into `app/Nova` (see the walkthrough).\n"
+        "2. Copy `config/nova.env.example` to `config/nova.env` and\n"
+        "   `chmod 600` it. Add secrets there, not in the repo.\n"
+        "3. Point your systemd unit or Docker compose file at\n"
+        "   `config/nova.env` and at `data/`.\n"
+        "\n"
+        "See `docs/portable-workspace.md` inside the Nova checkout for\n"
+        "the full walkthrough, including systemd and Docker examples,\n"
+        "backup/restore guidance, and the rationale for keeping active\n"
+        "data on SSD while archives live on slower HDD/NAS storage.\n"
     )
 
 
@@ -362,15 +416,22 @@ class WorkspaceInitResult:
             self.root / WORKSPACE_CONFIG_SUBDIR / WORKSPACE_ENV_EXAMPLE_NAME
         )
 
+    @property
+    def readme_path(self) -> Path:
+        """Absolute path of the generated workspace-level ``README.md``."""
+        return self.root / WORKSPACE_README_NAME
+
 
 def init_workspace(parent: str | os.PathLike[str]) -> WorkspaceInitResult:
     """Scaffold a Nova Portable Workspace layout under ``parent``.
 
     Creates the directory structure documented in
     ``docs/portable-workspace.md`` (``app/``, ``data/``, ``logs/``,
-    ``backups/``, ``config/``, ``scripts/``) and writes a single
-    example env file at ``config/nova.env.example`` pointing at the
-    workspace's ``data/`` directory.
+    ``backups/``, ``config/``, ``scripts/``), writes a single example
+    env file at ``config/nova.env.example`` pointing at the workspace's
+    ``data/`` directory, and drops a short ``README.md`` at the
+    workspace root so a future operator can orient themselves without
+    digging through the Nova checkout.
 
     The helper is **safe to run repeatedly**:
 
@@ -378,6 +439,8 @@ def init_workspace(parent: str | os.PathLike[str]) -> WorkspaceInitResult:
       touched.
     * The example env file is only written when it does not already
       exist. An operator who customised it keeps their copy.
+    * The workspace ``README.md`` is only written when it does not
+      already exist. An operator who customised it keeps their copy.
     * Nothing else is created, copied, moved, or deleted.
 
     Raises :class:`RuntimeError` if the parent path exists but is not
@@ -441,6 +504,20 @@ def init_workspace(parent: str | os.PathLike[str]) -> WorkspaceInitResult:
                 f"be written: {exc.strerror or exc}"
             ) from exc
         created_files.append(env_example)
+
+    readme = root / WORKSPACE_README_NAME
+    if readme.exists():
+        existing_files.append(readme)
+    else:
+        readme_body = _workspace_readme_body(root)
+        try:
+            readme.write_text(readme_body, encoding="utf-8")
+        except OSError as exc:
+            raise RuntimeError(
+                f"Nova workspace README {readme!s} could not be written: "
+                f"{exc.strerror or exc}"
+            ) from exc
+        created_files.append(readme)
 
     return WorkspaceInitResult(
         root=root,

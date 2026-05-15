@@ -519,6 +519,54 @@ class TestInitWorkspace:
         # Empty: no Nova checkout, no .venv, no models.
         assert list(app_dir.iterdir()) == []
 
+    def test_writes_workspace_readme(self, tmp_path):
+        # A short README at the workspace root helps an operator
+        # opening the folder six months later understand the layout
+        # without digging through the Nova checkout.
+        parent = tmp_path / "NovaPortable"
+        result = core_paths.init_workspace(parent)
+
+        readme = parent / "README.md"
+        assert readme.is_file()
+        body = readme.read_text(encoding="utf-8")
+        # The README must name the workspace, the layout rule, and the
+        # canonical walkthrough so an operator can find it later.
+        assert "Nova Portable Workspace" in body
+        assert "app/Nova" in body
+        assert "docs/portable-workspace.md" in body
+        assert result.readme_path == readme
+        assert readme in result.created_files
+
+    def test_does_not_overwrite_existing_readme(self, tmp_path):
+        # If the operator already wrote their own README at the
+        # workspace root (e.g. with site-specific runbook notes), the
+        # init helper must leave it alone.
+        parent = tmp_path / "NovaPortable"
+        parent.mkdir()
+        readme = parent / "README.md"
+        readme.write_text("# my custom runbook\n", encoding="utf-8")
+
+        result = core_paths.init_workspace(parent)
+
+        assert readme.read_text(encoding="utf-8") == "# my custom runbook\n"
+        assert readme in result.existing_files
+        assert readme not in result.created_files
+
+    def test_idempotent_run_leaves_readme_untouched(self, tmp_path):
+        parent = tmp_path / "NovaPortable"
+        first = core_paths.init_workspace(parent)
+        readme_body_after_first = first.readme_path.read_text(encoding="utf-8")
+
+        second = core_paths.init_workspace(parent)
+
+        # Second run sees the README as existing, never overwrites it.
+        assert second.readme_path in second.existing_files
+        assert second.readme_path not in second.created_files
+        assert (
+            second.readme_path.read_text(encoding="utf-8")
+            == readme_body_after_first
+        )
+
 
 class TestInitWorkspaceCLI:
     """The ``python -m core.paths init-workspace`` entry point.
@@ -641,6 +689,77 @@ class TestPortableDockerComposeExample:
         # uses bind mounts.
         assert ":/data" in body
         assert "- nova-data:" not in body
+
+
+# ── repository-level git-ignore for private runtime data ───────────
+
+
+class TestRepoGitignoreBlocksWorkspaceData:
+    """The repo's ``.gitignore`` must defensively block private data.
+
+    The portable workspace is designed to live *outside* the Git
+    checkout, but a misplaced ``cp -r`` or a developer who creates a
+    test workspace under the repo can still drop runtime data into a
+    tracked directory. The ``.gitignore`` rules below pin the safety
+    net so the data cannot be accidentally staged.
+
+    These assertions read ``.gitignore`` as plain text rather than
+    shelling out to ``git`` so they pass even in environments where
+    ``git`` is not installed or the working tree is not a checkout.
+    """
+
+    @staticmethod
+    def _gitignore_lines() -> list[str]:
+        gitignore = Path(__file__).resolve().parents[1] / ".gitignore"
+        return [
+            line.strip()
+            for line in gitignore.read_text(encoding="utf-8").splitlines()
+            if line.strip() and not line.strip().startswith("#")
+        ]
+
+    def test_blocks_database_filenames(self):
+        lines = self._gitignore_lines()
+        assert "nova.db" in lines
+        assert "*.db" in lines
+        assert "*.sqlite" in lines
+        assert "*.sqlite3" in lines
+
+    def test_blocks_env_files(self):
+        lines = self._gitignore_lines()
+        # Bare ``.env`` for the conventional file; ``*.env`` for any
+        # other-named local env file; explicit ``nova.env`` for clarity.
+        assert ".env" in lines
+        assert "*.env" in lines
+        assert "nova.env" in lines
+
+    def test_blocks_private_workspace_directories(self):
+        lines = self._gitignore_lines()
+        for entry in (
+            "data/",
+            "NovaData/",
+            "backups/",
+            "exports/",
+            "memory-packs/",
+            "logs/",
+        ):
+            assert entry in lines, (
+                f".gitignore must defensively block {entry!r} so "
+                "private workspace data cannot be staged."
+            )
+
+    def test_does_not_block_committed_env_example(self):
+        # ``.env.example`` is a tracked file at the repo root; make
+        # sure the ``*.env`` rule does not accidentally match it.
+        # (``*.env`` matches a literal ``.env`` suffix — ``.example``
+        # is a different suffix — but pin the behaviour explicitly.)
+        env_example = (
+            Path(__file__).resolve().parents[1] / ".env.example"
+        )
+        assert env_example.is_file()
+        # We rely on Python's fnmatch semantics matching gitignore's
+        # glob behaviour for this simple prefix check.
+        import fnmatch
+        assert not fnmatch.fnmatch(env_example.name, "*.env")
 
 
 # ── stability of path helpers ───────────────────────────────────────
