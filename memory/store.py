@@ -21,6 +21,28 @@ DB_PATH = str(_resolved_db_path())
 _EMBED_THRESHOLD = 0.85
 _KEYWORD_THRESHOLD = 0.50
 
+# Sentinel meaning "do not filter by project at all" (every row for the
+# user). ``None`` is a *meaningful* scope value — it means "General /
+# global only" — so a distinct object is needed to tell the audit path
+# (``/memories``, "what do you remember") apart from a General chat.
+ALL_PROJECTS = object()
+
+
+def _project_scope_clause(project_scope) -> tuple[str, tuple]:
+    """Translate a project scope into an SQL fragment + params.
+
+    * ``ALL_PROJECTS``  → no project predicate (every row).
+    * ``None``          → ``project_id IS NULL`` (General / global only).
+    * an ``int`` (P)    → ``project_id IS NULL OR project_id = P``
+                           (global memory stays visible inside a
+                           project; other projects never leak in).
+    """
+    if project_scope is ALL_PROJECTS:
+        return "", ()
+    if project_scope is None:
+        return " AND project_id IS NULL", ()
+    return " AND (project_id IS NULL OR project_id = ?)", (project_scope,)
+
 
 def _resolve_db_path(db_path: str | None) -> str:
     """Return the explicit `db_path` if given, else the current module DB_PATH.
@@ -54,6 +76,7 @@ def initialize_memory_database(db_path: str | None = None):
         except sqlite3.OperationalError:
             pass  # column already exists
     _migrate_natural_memories_ownership(db_path)
+    _migrate_natural_memories_project(db_path)
 
 
 def _migrate_natural_memories_ownership(db_path: str) -> None:
@@ -108,23 +131,60 @@ def _migrate_natural_memories_ownership(db_path: str) -> None:
         )
 
 
-def save_memory(memory: Memory, user_id: int, db_path: str | None = None):
+def _migrate_natural_memories_project(db_path: str) -> None:
+    """
+    Add a nullable ``project_id`` column to ``natural_memories`` (Nova
+    Projects Phase 1).
+
+    Idempotent. NULL ``project_id`` means the memory is global and
+    visible in every project; existing rows keep that behaviour with no
+    backfill and no automatic reclassification.
+    """
+    with sqlite3.connect(db_path) as conn:
+        cols = {
+            row[1]
+            for row in conn.execute(
+                "PRAGMA table_info(natural_memories)"
+            ).fetchall()
+        }
+        if "project_id" not in cols:
+            conn.execute(
+                "ALTER TABLE natural_memories "
+                "ADD COLUMN project_id INTEGER REFERENCES projects(id)"
+            )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_natural_memories_project_id "
+            "ON natural_memories(project_id)"
+        )
+
+
+def save_memory(
+    memory: Memory,
+    user_id: int,
+    db_path: str | None = None,
+    project_id: int | None = None,
+):
     """
     Saves a memory for `user_id`, deduplicating only against that user's
-    existing memories with the same kind + topic. If a sufficiently similar
-    memory already exists it is updated in place (preserving created_at)
-    rather than inserting a duplicate.
+    existing memories with the same kind + topic **within the same
+    project scope**. If a sufficiently similar memory already exists it
+    is updated in place (preserving created_at) rather than inserting a
+    duplicate.
+
+    ``project_id`` defaults to ``None`` (global memory, exactly the
+    pre-projects behaviour). Dedup is project-aware so a project-scoped
+    fact never silently overwrites a global one (and vice-versa).
     """
     db_path = _resolve_db_path(db_path)
     if memory.embedding is None:
         memory = memory.model_copy(update={"embedding": generate_embedding(memory.content)})
 
-    duplicate = _find_duplicate(memory, user_id, db_path)
+    duplicate = _find_duplicate(memory, user_id, db_path, project_id)
     if duplicate:
         to_save = memory.model_copy(update={"id": duplicate.id, "created_at": duplicate.created_at})
         update_memory(to_save, user_id, db_path)
     else:
-        _insert_memory(memory, user_id, db_path)
+        _insert_memory(memory, user_id, db_path, project_id)
 
 
 def update_memory(memory: Memory, user_id: int, db_path: str | None = None):
@@ -155,40 +215,61 @@ def delete_memory(memory_id: str, user_id: int, db_path: str | None = None):
         )
 
 
-def list_memories(user_id: int, db_path: str | None = None) -> list[Memory]:
-    """Returns all memories owned by `user_id`, newest first."""
+def list_memories(
+    user_id: int, db_path: str | None = None, project_scope=ALL_PROJECTS
+) -> list[Memory]:
+    """Returns memories owned by `user_id`, newest first.
+
+    ``project_scope`` (see :func:`_project_scope_clause`) defaults to
+    ``ALL_PROJECTS`` so existing callers (the ``/memories`` view, "what
+    do you remember", tests) keep returning every memory. The chat
+    retriever passes an explicit scope to apply General / per-project
+    visibility.
+    """
     db_path = _resolve_db_path(db_path)
+    clause, params = _project_scope_clause(project_scope)
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     try:
         rows = conn.execute(
-            "SELECT * FROM natural_memories WHERE user_id = ? "
-            "ORDER BY created_at DESC",
-            (user_id,),
+            "SELECT * FROM natural_memories WHERE user_id = ?" + clause
+            + " ORDER BY created_at DESC",
+            (user_id, *params),
         ).fetchall()
     finally:
         conn.close()
     return [_row_to_memory(r) for r in rows]
 
 
-def search_memories(query: str, user_id: int, limit: int = 8, db_path: str | None = None) -> list[Memory]:
+def search_memories(
+    query: str,
+    user_id: int,
+    limit: int = 8,
+    db_path: str | None = None,
+    project_scope=ALL_PROJECTS,
+) -> list[Memory]:
     """
     Returns up to `limit` memories owned by `user_id`, scored by token
     overlap with `query`. Tokens are normalized (lowercased, punctuation
     and underscores stripped).
+
+    ``project_scope`` defaults to ``ALL_PROJECTS`` (every memory). The
+    chat retriever passes an explicit scope so a project session only
+    sees global + that project's memory.
     """
     db_path = _resolve_db_path(db_path)
     words = _tokenize(query)
     if not words:
         return []
 
+    clause, params = _project_scope_clause(project_scope)
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     try:
         rows = conn.execute(
-            "SELECT * FROM natural_memories WHERE user_id = ? "
-            "ORDER BY created_at DESC",
-            (user_id,),
+            "SELECT * FROM natural_memories WHERE user_id = ?" + clause
+            + " ORDER BY created_at DESC",
+            (user_id, *params),
         ).fetchall()
     finally:
         conn.close()
@@ -247,31 +328,49 @@ def delete_memories_matching(query: str, user_id: int, db_path: str | None = Non
 
 # ── private helpers ────────────────────────────────────────────────────────────
 
-def _insert_memory(memory: Memory, user_id: int, db_path: str):
+def _insert_memory(
+    memory: Memory,
+    user_id: int,
+    db_path: str,
+    project_id: int | None = None,
+):
     emb_json = json.dumps(memory.embedding) if memory.embedding is not None else None
     with sqlite3.connect(db_path) as conn:
         conn.execute(
             """
             INSERT OR REPLACE INTO natural_memories
             (id, kind, topic, content, confidence, source,
-             created_at, updated_at, last_seen_at, embedding, user_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             created_at, updated_at, last_seen_at, embedding, user_id,
+             project_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (memory.id, memory.kind, memory.topic, memory.content,
              memory.confidence, memory.source,
              memory.created_at, memory.updated_at, memory.last_seen_at,
-             emb_json, user_id),
+             emb_json, user_id, project_id),
         )
 
 
-def _find_duplicate(memory: Memory, user_id: int, db_path: str) -> Memory | None:
+def _find_duplicate(
+    memory: Memory,
+    user_id: int,
+    db_path: str,
+    project_id: int | None = None,
+) -> Memory | None:
     """
     Returns the most recent memory owned by `user_id` with the same kind +
-    topic that is similar enough to be treated as the same logical memory,
-    or None if no such memory exists. Cross-user dedup is intentionally
-    avoided so distinct users keep distinct memories.
+    topic **and the same project scope** that is similar enough to be
+    treated as the same logical memory, or None if no such memory
+    exists.
+
+    Cross-user dedup is intentionally avoided so distinct users keep
+    distinct memories; cross-project dedup is avoided for the same
+    reason — a project fact and a global fact with the same kind/topic
+    are different memories and must not overwrite each other.
     """
-    candidates = _get_by_kind_topic(memory.kind, memory.topic, user_id, db_path)
+    candidates = _get_by_kind_topic(
+        memory.kind, memory.topic, user_id, db_path, project_id
+    )
     for candidate in candidates:
         if memory.embedding and candidate.embedding:
             if cosine_similarity(memory.embedding, candidate.embedding) >= _EMBED_THRESHOLD:
@@ -281,15 +380,30 @@ def _find_duplicate(memory: Memory, user_id: int, db_path: str) -> Memory | None
     return None
 
 
-def _get_by_kind_topic(kind: str, topic: str, user_id: int, db_path: str) -> list[Memory]:
+def _get_by_kind_topic(
+    kind: str,
+    topic: str,
+    user_id: int,
+    db_path: str,
+    project_id: int | None = None,
+) -> list[Memory]:
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     try:
-        rows = conn.execute(
-            "SELECT * FROM natural_memories "
-            "WHERE kind=? AND topic=? AND user_id=? ORDER BY created_at DESC",
-            (kind, topic, user_id),
-        ).fetchall()
+        if project_id is None:
+            rows = conn.execute(
+                "SELECT * FROM natural_memories "
+                "WHERE kind=? AND topic=? AND user_id=? "
+                "AND project_id IS NULL ORDER BY created_at DESC",
+                (kind, topic, user_id),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM natural_memories "
+                "WHERE kind=? AND topic=? AND user_id=? "
+                "AND project_id=? ORDER BY created_at DESC",
+                (kind, topic, user_id, project_id),
+            ).fetchall()
     finally:
         conn.close()
     return [_row_to_memory(r) for r in rows]

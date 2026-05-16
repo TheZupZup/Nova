@@ -14,6 +14,27 @@
   `SubscriptableBaseModel` (production) shapes end-to-end.
 
 ### Added
+- Nova Projects / Workspaces (Phase 1): a local-first, per-user
+  foundation for organising conversations and memory by project (e.g.
+  `Nova`, `Auryn`, `SilentGuard`, `Home Lab`, `Personal`). Adds an
+  additive `projects` table and a nullable `project_id` column on
+  `conversations`, `memories`, and `natural_memories` — all idempotent,
+  with **no backfill and no reclassification**: existing conversations
+  and memory stay "General" / global and behave exactly as before.
+  Memory is now scoped: a General chat sees global memory only; a
+  project chat sees global memory **plus** that project's memory and
+  never another project's. Project context is contextual user data and
+  is injected **below** the identity/safety contract, so it can never
+  override safety, identity, auth, or admin rules. New endpoints
+  (`GET/POST /projects`, `PATCH /projects/{id}`,
+  `POST /projects/{id}/archive|unarchive`); `/conversations` is
+  filterable by `?scope=general` / `?project_id=`; `/conversations`,
+  `/chat`, and `/chat/stream` accept an optional `project_id` for new
+  conversations. Archiving is a soft, reversible, non-destructive flag —
+  there are no destructive project deletes. The sidebar gains a small
+  `General + projects` selector; the rest of the UI is unchanged.
+  Storage/migration, export/restore, and Ollama behaviour are
+  untouched. See [`docs/projects.md`](docs/projects.md).
 - Safe guided restore for Nova data export packages (Storage &
   Migration Phase 3). The Storage tab now exposes a four-step flow —
   inspect, dry-run, confirm, restore — backed by a new

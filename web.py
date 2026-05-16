@@ -27,12 +27,13 @@ from core.memory import (
     create_conversation, load_conversations,
     load_conversation_messages, save_message,
     delete_conversation, update_conversation_title,
-    conversation_belongs_to,
+    conversation_belongs_to, get_conversation_project_id,
     get_setting, save_setting,
     list_memories, update_memory, delete_memory,
     update_message_content, delete_message,
     MESSAGE_CONTENT_MAX_LEN,
 )
+from core import projects as _projects
 from core import feedback as _feedback
 from core.settings import (
     get_user_setting, save_user_setting,
@@ -275,10 +276,31 @@ class ChatRequest(BaseModel):
     mode: str = "auto"
     search: bool = False
     image: str | None = Field(default=None, max_length=13_000_000)
+    # Active project for a *new* conversation. Ignored when
+    # ``conversation_id`` is set — an existing thread keeps the project
+    # it was created in. ``None`` means General / unscoped, exactly the
+    # pre-projects behaviour.
+    project_id: int | None = None
 
 
 class NewConversationRequest(BaseModel):
     title: str = "Nouvelle conversation"
+    project_id: int | None = None
+
+
+class ProjectCreateRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    name: str
+    description: str | None = None
+
+
+class ProjectUpdateRequest(BaseModel):
+    """Body for ``PATCH /projects/{id}``. Only non-null fields change."""
+    model_config = {"extra": "forbid"}
+
+    name: str | None = None
+    description: str | None = None
 
 
 class MemoryUpdateRequest(BaseModel):
@@ -451,8 +473,43 @@ def login(request: LoginRequest, _: None = Depends(check_login_rate_limit)):
     return {"token": create_token(user)}
 
 
+def _validate_project_for_new_conversation(
+    project_id: int | None, user: CurrentUser
+) -> int | None:
+    """Resolve the project a *new* conversation should belong to.
+
+    ``None`` → General (unscoped). A non-null id must belong to the
+    caller and not be archived; otherwise we raise 404 (not 403) so a
+    foreign / unknown project id cannot be probed for existence — the
+    same pattern conversations use.
+    """
+    if project_id is None:
+        return None
+    if not _projects.is_active_project(project_id, user.id):
+        raise HTTPException(status_code=404, detail="Projet introuvable.")
+    return project_id
+
+
 @app.get("/conversations")
-def get_conversations(user: CurrentUser = Depends(get_current_user)):
+def get_conversations(
+    project_id: int | None = None,
+    scope: str | None = None,
+    user: CurrentUser = Depends(get_current_user),
+):
+    """List the caller's conversations.
+
+    Without query params this returns *every* conversation (unchanged
+    sidebar behaviour). ``?scope=general`` narrows to unscoped threads;
+    ``?project_id=<id>`` narrows to one project the caller owns (a
+    foreign / unknown id yields an empty list rather than leaking
+    existence).
+    """
+    if scope == "general":
+        return load_conversations(user.id, project_scope=None)
+    if project_id is not None:
+        if not _projects.project_belongs_to(project_id, user.id):
+            return []
+        return load_conversations(user.id, project_scope=project_id)
     return load_conversations(user.id)
 
 
@@ -476,8 +533,86 @@ def new_conversation(
     request: NewConversationRequest,
     user: CurrentUser = Depends(get_current_user),
 ):
-    conv_id = create_conversation(request.title, user.id)
-    return {"id": conv_id, "title": request.title}
+    project_id = _validate_project_for_new_conversation(
+        request.project_id, user
+    )
+    conv_id = create_conversation(request.title, user.id, project_id)
+    return {"id": conv_id, "title": request.title, "project_id": project_id}
+
+
+# ── PROJECT ENDPOINTS ──
+#
+# Nova Projects / Workspaces Phase 1. Projects are user-scoped, exactly
+# like conversations: every endpoint resolves the current user and a
+# foreign / unknown project id yields 404 (never 403) so existence is
+# not leaked across users. Projects are *contextual user data only* —
+# nothing here can raise project context above the safety / identity
+# contract; see ``docs/projects.md``.
+
+@app.get("/projects")
+def list_projects_endpoint(
+    include_archived: bool = False,
+    user: CurrentUser = Depends(get_current_user),
+):
+    return _projects.list_projects(
+        user.id, include_archived=include_archived
+    )
+
+
+@app.post("/projects")
+def create_project_endpoint(
+    request: ProjectCreateRequest,
+    user: CurrentUser = Depends(get_current_user),
+):
+    try:
+        return _projects.create_project(
+            request.name, user.id, description=request.description
+        )
+    except _projects.ProjectError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.patch("/projects/{project_id}")
+def update_project_endpoint(
+    project_id: int,
+    request: ProjectUpdateRequest,
+    user: CurrentUser = Depends(get_current_user),
+):
+    try:
+        updated = _projects.update_project(
+            project_id, user.id,
+            name=request.name, description=request.description,
+        )
+    except _projects.ProjectError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Projet introuvable.")
+    return updated
+
+
+@app.post("/projects/{project_id}/archive")
+def archive_project_endpoint(
+    project_id: int,
+    user: CurrentUser = Depends(get_current_user),
+):
+    """Soft-archive a project. Non-destructive: its conversations and
+    memory are untouched and keep working; the project is just hidden
+    from the default list."""
+    archived = _projects.archive_project(project_id, user.id)
+    if archived is None:
+        raise HTTPException(status_code=404, detail="Projet introuvable.")
+    return archived
+
+
+@app.post("/projects/{project_id}/unarchive")
+def unarchive_project_endpoint(
+    project_id: int,
+    user: CurrentUser = Depends(get_current_user),
+):
+    restored = _projects.unarchive_project(project_id, user.id)
+    if restored is None:
+        raise HTTPException(status_code=404, detail="Projet introuvable.")
+    return restored
 
 
 @app.get("/conversations/{conversation_id}/messages")
@@ -577,6 +712,25 @@ def delete_message_endpoint(
     }
 
 
+def _resolve_active_project_id(
+    request: ChatRequest, user: CurrentUser
+) -> int | None:
+    """The project that scopes memory for this chat turn.
+
+    An existing conversation keeps the project it was created in
+    (``request.project_id`` is ignored for it). A brand-new conversation
+    uses the validated ``request.project_id``. Returns ``None`` for a
+    General / unscoped chat.
+
+    For an existing conversation this only resolves threads the caller
+    owns; a foreign / missing id yields ``None`` here and the real
+    ownership check + 404 happens later in ``_resolve_conversation_id``.
+    """
+    if request.conversation_id:
+        return get_conversation_project_id(request.conversation_id, user.id)
+    return _validate_project_for_new_conversation(request.project_id, user)
+
+
 def _chat_preflight(request: ChatRequest, user: CurrentUser):
     """Shared validation + memory-command handling for chat endpoints.
 
@@ -624,7 +778,16 @@ def _chat_preflight(request: ChatRequest, user: CurrentUser):
             detail="Memory saving is disabled for this account.",
         )
 
-    reply = handle_manual_memory_command(request.message, user.id)
+    # An explicit "remember this" is scoped to the active project so it
+    # mirrors auto-extracted memory. "forget X" / "what do you remember"
+    # below stay deliberately *unscoped*: a destructive forget and a
+    # full memory audit should act on everything the user has, not just
+    # the current project (see docs/projects.md — follow-ups may scope
+    # these).
+    active_project_id = _resolve_active_project_id(request, user)
+    reply = handle_manual_memory_command(
+        request.message, user.id, active_project_id
+    )
     if reply is not None:
         return policy, reply, "system"
 
@@ -693,13 +856,21 @@ def _check_forced_model_access(forced_model: str | None, user: CurrentUser) -> N
 
 
 def _resolve_conversation_id(request: ChatRequest, user: CurrentUser) -> int:
-    """Either validate ownership of an existing conversation or create one."""
+    """Either validate ownership of an existing conversation or create one.
+
+    A newly created conversation is opened inside the validated active
+    project (``None`` → General). An existing conversation keeps its own
+    project; ``request.project_id`` is intentionally ignored for it.
+    """
     conversation_id = request.conversation_id
     if conversation_id:
         if not conversation_belongs_to(conversation_id, user.id):
             raise HTTPException(status_code=404, detail="Conversation introuvable.")
         return conversation_id
-    return create_conversation(request.message[:40], user.id)
+    project_id = _validate_project_for_new_conversation(
+        request.project_id, user
+    )
+    return create_conversation(request.message[:40], user.id, project_id)
 
 
 @app.post("/chat")
@@ -712,8 +883,13 @@ def chat_endpoint(request: ChatRequest, user: CurrentUser = Depends(get_current_
             "conversation_id": request.conversation_id,
         }
 
-    memories = load_memories(user.id)
     conversation_id = _resolve_conversation_id(request, user)
+    # The conversation is the single source of truth for the active
+    # project: a new thread was just created in the validated project,
+    # an existing one keeps its own. Memory is scoped to it so a project
+    # session sees global + that project's memory and nothing else.
+    active_project_id = get_conversation_project_id(conversation_id, user.id)
+    memories = load_memories(user.id, project_scope=active_project_id)
 
     history = [
         {"role": m["role"], "content": m["content"]}
@@ -729,6 +905,7 @@ def chat_endpoint(request: ChatRequest, user: CurrentUser = Depends(get_current_
         force_search=request.search,
         image=request.image,
         policy=policy,
+        project_id=active_project_id,
     )
 
     user_message_id = save_message(
@@ -802,8 +979,11 @@ def chat_stream_endpoint(
 
         return StreamingResponse(_short_circuit(), media_type="application/x-ndjson")
 
-    memories = load_memories(user.id)
     conversation_id = _resolve_conversation_id(request, user)
+    # The resolved conversation is the source of truth for the active
+    # project (new thread → validated project, existing → its own).
+    active_project_id = get_conversation_project_id(conversation_id, user.id)
+    memories = load_memories(user.id, project_scope=active_project_id)
     is_first_message = len(load_conversation_messages(conversation_id, user.id) or []) == 0
 
     history = [
@@ -824,6 +1004,7 @@ def chat_stream_endpoint(
             force_search=request.search,
             image=request.image,
             policy=policy,
+            project_id=active_project_id,
         )
 
         final_reply = ""

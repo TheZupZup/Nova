@@ -129,18 +129,34 @@ Données SilentGuard (read-only):
 {security_data}"""
 
 
-def _extract_and_save_natural_memories(user_message: str, user_id: int):
-    """Runs the rule-based extractor on the user message and persists allowed memories under `user_id`."""
+def _extract_and_save_natural_memories(
+    user_message: str, user_id: int, project_id: int | None = None
+):
+    """Runs the rule-based extractor on the user message and persists
+    allowed memories under `user_id`.
+
+    ``project_id`` is the *active* project for this turn (the
+    conversation's project, resolved by the web layer) or ``None`` for a
+    General chat. Memory surfaced inside a project is stored as that
+    project's memory; General chats keep storing global memory exactly
+    as before.
+    """
     try:
         for mem in extract_memories(user_message):
             if is_memory_allowed(mem):
-                save_natural_memory(mem, user_id)
+                save_natural_memory(mem, user_id, project_id=project_id)
     except Exception:
         pass  # never let memory extraction break the chat flow
 
 
-def extract_and_save_memory(user_message: str, assistant_response: str, user_id: int):
-    """Extrait automatiquement les infos importantes et les sauvegarde sous `user_id`."""
+def extract_and_save_memory(
+    user_message: str,
+    assistant_response: str,
+    user_id: int,
+    project_id: int | None = None,
+):
+    """Extrait automatiquement les infos importantes et les sauvegarde
+    sous `user_id` (et le projet actif `project_id`, le cas échéant)."""
     prompt = MEMORY_EXTRACTION_PROMPT.format(
         user_message=user_message,
         assistant_response=assistant_response
@@ -153,7 +169,7 @@ def extract_and_save_memory(user_message: str, assistant_response: str, user_id:
     except (ollama.ResponseError, ConnectionError, httpx.HTTPError):
         return
     result = response["message"]["content"].strip()
-    parse_and_save(result, user_id)
+    parse_and_save(result, user_id, project_id)
 
 
 def build_messages(
@@ -229,13 +245,22 @@ def build_image_messages(user_input: str, image: str) -> list[dict]:
     }]
 
 
-def chat(history: list[dict], user_input: str, memories: list[dict], user_id: int, forced_model: str = None, force_search: bool = False, image: str = None, policy: Policy | None = None) -> tuple[str, str]:  # noqa: E501
+def chat(history: list[dict], user_input: str, memories: list[dict], user_id: int, forced_model: str = None, force_search: bool = False, image: str = None, policy: Policy | None = None, project_id: int | None = None) -> tuple[str, str]:  # noqa: E501
     """
     Envoie un message à Nova et retourne sa réponse et le modèle utilisé.
 
     Toutes les opérations mémoire (récupération, extraction, sauvegarde)
     sont scopées à `user_id` — un utilisateur ne voit jamais les souvenirs
     d'un autre.
+
+    `project_id` is the active project for this conversation (resolved by
+    the web layer from the conversation's ``project_id``) or ``None`` for
+    a General/unscoped chat. It only bounds *contextual user memory*:
+    global memory stays visible, the active project's memory is added,
+    and other projects' memory is never retrieved. It can never raise a
+    project's priority above the identity/safety contract — project
+    memory flows through the same memory block that already sits below
+    ``IDENTITY_CONTRACT`` in :func:`build_messages`.
 
     `policy` gates the dual-use side effects (weather lookup, web search,
     memory extraction). It defaults to the admin policy so non-HTTP
@@ -251,12 +276,16 @@ def chat(history: list[dict], user_input: str, memories: list[dict], user_id: in
             response = client.chat(model=MODELS["default"], messages=messages)
             reply = response["message"]["content"]
             if policy.memory_save_enabled:
-                extract_and_save_memory(user_input or "image", reply, user_id)
+                extract_and_save_memory(
+                    user_input or "image", reply, user_id, project_id
+                )
             return reply, MODELS["default"]
 
         model = forced_model if forced_model else route(user_input)
 
-        natural_mems = get_relevant_memories(user_input, user_id)
+        natural_mems = get_relevant_memories(
+            user_input, user_id, project_scope=project_id
+        )
         # Per-user style preferences. A failure here must never block the
         # chat flow — the panel is opt-in and a fresh DB has no rows.
         try:
@@ -341,8 +370,10 @@ def chat(history: list[dict], user_input: str, memories: list[dict], user_id: in
                 reply = response["message"]["content"]
 
         if policy.memory_save_enabled:
-            extract_and_save_memory(user_input, reply, user_id)
-            _extract_and_save_natural_memories(user_input, user_id)
+            extract_and_save_memory(user_input, reply, user_id, project_id)
+            _extract_and_save_natural_memories(
+                user_input, user_id, project_id
+            )
         return reply, model
 
     except (ollama.ResponseError, ConnectionError, httpx.HTTPError) as e:
@@ -359,6 +390,7 @@ def chat_stream(
     force_search: bool = False,
     image: str = None,
     policy: Policy | None = None,
+    project_id: int | None = None,
 ) -> Iterator[dict]:
     """Generator twin of :func:`chat` that yields incremental events.
 
@@ -393,7 +425,9 @@ def chat_stream(
             response = client.chat(model=MODELS["default"], messages=messages)
             reply = response["message"]["content"]
             if policy.memory_save_enabled:
-                extract_and_save_memory(user_input or "image", reply, user_id)
+                extract_and_save_memory(
+                    user_input or "image", reply, user_id, project_id
+                )
             yield {"type": "meta", "model": MODELS["default"]}
             if reply:
                 yield {"type": "delta", "content": reply}
@@ -403,7 +437,9 @@ def chat_stream(
         model = forced_model if forced_model else route(user_input)
         yield {"type": "meta", "model": model}
 
-        natural_mems = get_relevant_memories(user_input, user_id)
+        natural_mems = get_relevant_memories(
+            user_input, user_id, project_scope=project_id
+        )
         try:
             personalization = get_personalization(user_id)
         except Exception:
@@ -489,8 +525,10 @@ def chat_stream(
                 reply = yield from _stream_and_accumulate(model, messages)
 
         if policy.memory_save_enabled:
-            extract_and_save_memory(user_input, reply, user_id)
-            _extract_and_save_natural_memories(user_input, user_id)
+            extract_and_save_memory(user_input, reply, user_id, project_id)
+            _extract_and_save_natural_memories(
+                user_input, user_id, project_id
+            )
 
         yield {"type": "done", "reply": reply, "model": model}
 

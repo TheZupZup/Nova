@@ -345,6 +345,44 @@
         }
         #conv-search::placeholder { color: var(--text-dim); }
 
+        #project-bar {
+            display: flex;
+            gap: 6px;
+            align-items: center;
+            padding: 4px 12px 8px;
+        }
+        #project-select {
+            flex: 1;
+            min-width: 0;
+            padding: 7px 10px;
+            background: rgba(255, 255, 255, 0.025);
+            border: 1px solid transparent;
+            border-radius: 10px;
+            color: var(--text);
+            font-size: 0.82rem;
+            outline: none;
+            cursor: pointer;
+            transition: border-color var(--t-base), box-shadow var(--t-base), background var(--t-base);
+        }
+        #project-select:focus {
+            border-color: var(--cyan-glow);
+            box-shadow: 0 0 0 3px var(--cyan-soft);
+            background: rgba(255, 255, 255, 0.04);
+        }
+        #project-select option { background: #0f1117; color: var(--text); }
+        .project-btn {
+            flex: 0 0 auto;
+            padding: 7px 9px;
+            background: rgba(255, 255, 255, 0.025);
+            border: 1px solid transparent;
+            border-radius: 10px;
+            color: var(--text-dim);
+            font-size: 0.82rem;
+            cursor: pointer;
+            transition: color var(--t-base), background var(--t-base);
+        }
+        .project-btn:hover { color: var(--text); background: rgba(255, 255, 255, 0.05); }
+
         .conv-group-header {
             font-size: 0.66rem;
             color: var(--text-dim);
@@ -2836,6 +2874,11 @@
                     <button id="new-conv-btn" onclick="newConversation()">+ Nouveau</button>
                 </div>
             </div>
+            <div id="project-bar">
+                <select id="project-select" onchange="onProjectChange()" title="Projet"></select>
+                <button id="new-project-btn" class="project-btn" type="button" onclick="createProjectPrompt()" title="Nouveau projet">+</button>
+                <button id="archive-project-btn" class="project-btn" type="button" onclick="archiveActiveProject()" title="Archiver" style="display:none;">⊟</button>
+            </div>
             <div id="conv-search-wrap">
                 <input type="text" id="conv-search" placeholder="Rechercher..." autocomplete="off" oninput="onConvSearchInput(this.value)" />
             </div>
@@ -3473,6 +3516,12 @@
             new_conv: "+ Nouveau",
             logout: "Déconnexion",
             no_conv: "Aucune conversation",
+            project_general: "Général",
+            project_new: "Nouveau projet",
+            project_new_title: "Créer un projet",
+            project_name_prompt: "Nom du projet :",
+            project_archive_confirm: "Archiver ce projet ? Ses conversations et sa mémoire sont conservées.",
+            project_archive: "Archiver le projet actif",
             no_match: "Aucun résultat",
             search_placeholder: "Rechercher...",
             group_today: "AUJOURD'HUI",
@@ -3661,6 +3710,12 @@
             new_conv: "+ New",
             logout: "Logout",
             no_conv: "No conversations",
+            project_general: "General",
+            project_new: "New project",
+            project_new_title: "Create a project",
+            project_name_prompt: "Project name:",
+            project_archive_confirm: "Archive this project? Its conversations and memory are kept.",
+            project_archive: "Archive active project",
             no_match: "No matches",
             search_placeholder: "Search...",
             group_today: "TODAY",
@@ -3855,6 +3910,13 @@
         document.getElementById("logout-btn").textContent = t("logout");
         document.getElementById("sidebar-header").querySelector("span").textContent = t("title");
 
+        // Project selector (keeps the current selection; only labels change)
+        const newProjBtn = document.getElementById("new-project-btn");
+        if (newProjBtn) newProjBtn.title = t("project_new");
+        const archProjBtn = document.getElementById("archive-project-btn");
+        if (archProjBtn) archProjBtn.title = t("project_archive");
+        renderProjectSelect();
+
         // Input
         document.getElementById("user-input").placeholder = t("placeholder");
         _setText("image-ready-label", t("image_ready"));
@@ -4033,6 +4095,13 @@
     let userCancelledChat = false;
     let allConversations = [];
     let convSearchQuery = "";
+    // Projects (Nova Projects/Workspaces Phase 1). activeProjectId is a
+    // string: "" means General / unscoped (the default and the
+    // pre-projects behaviour); otherwise it is the numeric project id
+    // as a string. Persisted so a reload keeps the active workspace.
+    let allProjects = [];
+    let projectsLoaded = false;
+    let activeProjectId = localStorage.getItem("nova_project") || "";
 
     const SUGGESTION_KEYS = [
         "suggest_brainstorm",
@@ -4377,6 +4446,7 @@
         renderSuggestionChips();
         autoResizeInput();
         loadCurrentUser();
+        loadProjects();
         loadConversations();
     }
 
@@ -4413,9 +4483,129 @@
         document.getElementById("mode-dropdown").classList.remove("open");
     }
 
+    // ── PROJECTS ──
+    // A project is a local-first workspace that scopes which
+    // conversations are listed and which memory Nova sees. "General"
+    // (activeProjectId === "") is the unscoped default and behaves
+    // exactly as Nova did before projects existed. The selector never
+    // affects safety/identity — project context is plain user data the
+    // server places below the safety contract.
+    function projectFilterQuery() {
+        if (activeProjectId === "") return "?scope=general";
+        return "?project_id=" + encodeURIComponent(activeProjectId);
+    }
+
+    function renderProjectSelect() {
+        const sel = document.getElementById("project-select");
+        if (!sel) return;
+        sel.innerHTML = "";
+        const general = document.createElement("option");
+        general.value = "";
+        general.textContent = t("project_general");
+        sel.appendChild(general);
+        for (const p of allProjects) {
+            const opt = document.createElement("option");
+            opt.value = String(p.id);
+            opt.textContent = p.name;
+            sel.appendChild(opt);
+        }
+        // If the persisted project is gone (archived elsewhere), fall
+        // back to General so the UI never points at a dead workspace.
+        // Only do this once projects have actually been fetched —
+        // otherwise the first (pre-fetch) render would wipe a valid
+        // persisted selection.
+        const ids = new Set(allProjects.map(p => String(p.id)));
+        if (projectsLoaded && activeProjectId !== "" && !ids.has(activeProjectId)) {
+            activeProjectId = "";
+            try { localStorage.setItem("nova_project", ""); } catch {}
+        }
+        sel.value = activeProjectId;
+        const archiveBtn = document.getElementById("archive-project-btn");
+        if (archiveBtn) {
+            archiveBtn.style.display = activeProjectId === "" ? "none" : "";
+        }
+    }
+
+    async function loadProjects() {
+        try {
+            const res = await fetch("/projects", {
+                headers: { "Authorization": `Bearer ${token}` }
+            });
+            if (res.status === 401) { logout(); return; }
+            if (!res.ok) { allProjects = []; renderProjectSelect(); return; }
+            const data = await res.json();
+            allProjects = Array.isArray(data) ? data : [];
+        } catch {
+            allProjects = [];
+        }
+        projectsLoaded = true;
+        renderProjectSelect();
+    }
+
+    function onProjectChange() {
+        const sel = document.getElementById("project-select");
+        activeProjectId = sel ? sel.value : "";
+        try { localStorage.setItem("nova_project", activeProjectId); } catch {}
+        const archiveBtn = document.getElementById("archive-project-btn");
+        if (archiveBtn) {
+            archiveBtn.style.display = activeProjectId === "" ? "none" : "";
+        }
+        // Switching workspace starts a fresh, unselected view so the
+        // user does not accidentally keep typing into a thread from a
+        // different project; the conversation list reloads filtered.
+        newConversation();
+        loadConversations();
+    }
+
+    async function createProjectPrompt() {
+        const name = window.prompt(t("project_name_prompt"));
+        if (name === null) return;
+        const trimmed = name.trim();
+        if (!trimmed) return;
+        try {
+            const res = await fetch("/projects", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "Authorization": `Bearer ${token}`
+                },
+                body: JSON.stringify({ name: trimmed })
+            });
+            if (res.status === 401) { logout(); return; }
+            if (!res.ok) return;
+            const project = await res.json();
+            await loadProjects();
+            // Auto-activate the just-created project.
+            activeProjectId = String(project.id);
+            try { localStorage.setItem("nova_project", activeProjectId); } catch {}
+            renderProjectSelect();
+            newConversation();
+            loadConversations();
+        } catch {}
+    }
+
+    async function archiveActiveProject() {
+        if (activeProjectId === "") return;
+        if (!window.confirm(t("project_archive_confirm"))) return;
+        const id = activeProjectId;
+        try {
+            const res = await fetch(`/projects/${encodeURIComponent(id)}/archive`, {
+                method: "POST",
+                headers: { "Authorization": `Bearer ${token}` }
+            });
+            if (res.status === 401) { logout(); return; }
+            if (!res.ok) return;
+        } catch { return; }
+        activeProjectId = "";
+        try { localStorage.setItem("nova_project", ""); } catch {}
+        await loadProjects();
+        newConversation();
+        loadConversations();
+    }
+
     // ── CONVERSATIONS ──
     async function loadConversations() {
-        const res = await fetch("/conversations", {
+        const res = await fetch("/conversations" + projectFilterQuery(), {
             headers: { "Authorization": `Bearer ${token}` }
         });
         if (res.status === 401) { logout(); return; }
@@ -6559,7 +6749,12 @@
                     conversation_id: currentConvId,
                     mode: currentMode,
                     search: searchEnabled,
-                    image: currentImage
+                    image: currentImage,
+                    // Only meaningful when starting a *new* conversation
+                    // (currentConvId === null). For an existing thread
+                    // the server keeps that thread's own project. "" =
+                    // General / unscoped.
+                    project_id: activeProjectId === "" ? null : Number(activeProjectId)
                 }),
                 signal: activeChatController.signal
             });

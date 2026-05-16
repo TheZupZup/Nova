@@ -21,6 +21,7 @@ from core.model_pulls import migrate as _migrate_model_pulls
 from core.model_access import migrate as _migrate_model_access
 from core.local_models import migrate as _migrate_local_models
 from core.feedback import migrate as _migrate_feedback
+from core.projects import migrate as _migrate_projects
 
 logger = logging.getLogger(__name__)
 
@@ -152,21 +153,64 @@ def initialize_db():
     _migrate_model_access(DB_PATH)
     _migrate_local_models(DB_PATH)
     _migrate_feedback(DB_PATH)
+    # Projects (Nova Projects/Workspaces Phase 1). The table migration
+    # is purely additive; the project_id column migrations below are
+    # idempotent ALTERs that never backfill or reclassify existing
+    # conversations / memories — pre-project data stays "General".
+    _migrate_projects(DB_PATH)
+    _migrate_conversation_project(DB_PATH)
+    _migrate_memories_project(DB_PATH)
     _init_natural_memory(DB_PATH)
 
 
-def save_memory(category: str, content: str, user_id: int):
-    """Sauvegarde un nouveau souvenir attribué à `user_id`."""
+# Sentinel for "do not filter by project at all" — used by the audit /
+# admin / settings paths (``/memories``, "what do you remember") so they
+# keep returning every row exactly as before projects existed. ``None``
+# is a meaningful value (it means *General / global only*), so a
+# distinct sentinel object is required to tell the two apart.
+ALL_PROJECTS = object()
+
+
+def _project_scope_clause(project_scope) -> tuple[str, tuple]:
+    """Translate a project scope into an SQL fragment + params.
+
+    * ``ALL_PROJECTS``  → no project predicate (every row).
+    * ``None``          → ``project_id IS NULL`` (General / global only).
+    * an ``int`` (P)    → ``project_id IS NULL OR project_id = P``
+                           (global memory stays visible inside a project,
+                           other projects' memory never leaks in).
+    """
+    if project_scope is ALL_PROJECTS:
+        return "", ()
+    if project_scope is None:
+        return " AND project_id IS NULL", ()
+    return " AND (project_id IS NULL OR project_id = ?)", (project_scope,)
+
+
+def save_memory(
+    category: str, content: str, user_id: int, project_id: int | None = None
+):
+    """Sauvegarde un nouveau souvenir attribué à `user_id`.
+
+    ``project_id`` defaults to ``None`` (global memory, available in
+    every project — the exact pre-projects behaviour). A non-null value
+    scopes the memory to that project; the resolution of "which project
+    is active" happens in the web/chat layer, never here.
+    """
     backup_db()
     with _get_connection() as conn:
         conn.execute(
-            "INSERT INTO memories (category, content, created, user_id) "
-            "VALUES (?, ?, ?, ?)",
-            (category, content, datetime.now().isoformat(), user_id)
+            "INSERT INTO memories "
+            "(category, content, created, user_id, project_id) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (category, content, datetime.now().isoformat(), user_id,
+             project_id)
         )
 
 
-def parse_and_save(result: str, user_id: int) -> bool:
+def parse_and_save(
+    result: str, user_id: int, project_id: int | None = None
+) -> bool:
     """
     Parse un résultat de l'LLM et sauvegarde la mémoire si le format est valide.
     Retourne True si une mémoire a été sauvegardée, False sinon.
@@ -189,17 +233,37 @@ def parse_and_save(result: str, user_id: int) -> bool:
     if not category or not content:
         return False
 
-    save_memory(category, content, user_id)
+    # General chats keep the original 3-arg call shape so existing
+    # behaviour (and call-signature expectations) is unchanged; the
+    # project id is only threaded when a project is active.
+    if project_id is None:
+        save_memory(category, content, user_id)
+    else:
+        save_memory(category, content, user_id, project_id)
     return True
 
 
-def load_memories(user_id: int) -> list[dict]:
-    """Charge les souvenirs appartenant à `user_id`."""
+def load_memories(user_id: int, project_scope=ALL_PROJECTS) -> list[dict]:
+    """Charge les souvenirs appartenant à `user_id`.
+
+    ``project_scope`` controls project filtering (see
+    :func:`_project_scope_clause`):
+
+    * ``ALL_PROJECTS`` (default) → every memory (audit / pre-projects).
+    * ``None``                   → global memory only (General).
+    * an ``int`` project id      → global memory **plus** that
+      project's memory, so global facts stay available inside a
+      project while other projects' memory never leaks in.
+
+    The chat prompt path passes an explicit scope; everything else
+    keeps the default and is therefore unchanged.
+    """
+    clause, params = _project_scope_clause(project_scope)
     with _get_connection() as conn:
         rows = conn.execute(
             "SELECT category, content FROM memories "
-            "WHERE user_id = ? ORDER BY created ASC",
-            (user_id,)
+            "WHERE user_id = ?" + clause + " ORDER BY created ASC",
+            (user_id, *params)
         ).fetchall()
     return [{"category": row["category"], "content": row["content"]} for row in rows]
 
@@ -309,16 +373,102 @@ def _migrate_conversation_ownership(db_path: str) -> None:
         )
 
 
-def create_conversation(title: str, user_id: int) -> int:
-    """Crée une nouvelle conversation pour `user_id` et retourne son ID."""
+def _migrate_conversation_project(db_path: str) -> None:
+    """
+    Add a nullable ``project_id`` column to ``conversations`` (Nova
+    Projects Phase 1).
+
+    Idempotent: returns immediately if the column already exists (after
+    ensuring its index). NULL ``project_id`` means the conversation is
+    "General" / unscoped — every existing conversation stays that way;
+    there is **no backfill** and no reclassification.
+    """
+    with sqlite3.connect(db_path) as conn:
+        cols = {
+            row[1]
+            for row in conn.execute(
+                "PRAGMA table_info(conversations)"
+            ).fetchall()
+        }
+        if "project_id" not in cols:
+            conn.execute(
+                "ALTER TABLE conversations "
+                "ADD COLUMN project_id INTEGER REFERENCES projects(id)"
+            )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_conversations_project_id "
+            "ON conversations(project_id)"
+        )
+
+
+def _migrate_memories_project(db_path: str) -> None:
+    """
+    Add a nullable ``project_id`` column to the legacy ``memories``
+    table (Nova Projects Phase 1).
+
+    Idempotent. NULL ``project_id`` means the memory is global and
+    available in every project — existing memories keep that behaviour;
+    there is no backfill and no automatic reclassification.
+    """
+    with sqlite3.connect(db_path) as conn:
+        cols = {
+            row[1]
+            for row in conn.execute(
+                "PRAGMA table_info(memories)"
+            ).fetchall()
+        }
+        if "project_id" not in cols:
+            conn.execute(
+                "ALTER TABLE memories "
+                "ADD COLUMN project_id INTEGER REFERENCES projects(id)"
+            )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_memories_project_id "
+            "ON memories(project_id)"
+        )
+
+
+def create_conversation(
+    title: str, user_id: int, project_id: int | None = None
+) -> int:
+    """Crée une nouvelle conversation pour `user_id` et retourne son ID.
+
+    ``project_id`` is optional: ``None`` keeps the conversation in
+    "General" (unscoped) exactly like every conversation created before
+    projects existed. A non-null value ties the conversation to a
+    project the caller owns — the web layer validates ownership before
+    calling this.
+    """
     now = datetime.now().isoformat()
     with _get_connection() as conn:
         cursor = conn.execute(
-            "INSERT INTO conversations (user_id, title, created, updated) "
-            "VALUES (?, ?, ?, ?)",
-            (user_id, title, now, now)
+            "INSERT INTO conversations "
+            "(user_id, title, created, updated, project_id) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (user_id, title, now, now, project_id)
         )
         return cursor.lastrowid
+
+
+def get_conversation_project_id(
+    conversation_id: int, user_id: int
+) -> int | None:
+    """Return the conversation's ``project_id`` (or ``None`` for General).
+
+    Only resolves conversations owned by ``user_id``; a foreign or
+    missing conversation yields ``None`` so the caller transparently
+    falls back to General scoping rather than leaking another user's
+    project association.
+    """
+    with _get_connection() as conn:
+        row = conn.execute(
+            "SELECT project_id FROM conversations "
+            "WHERE id = ? AND user_id = ?",
+            (conversation_id, user_id),
+        ).fetchone()
+    if row is None:
+        return None
+    return row["project_id"]
 
 
 def update_conversation_title(conversation_id: int, title: str):
@@ -351,13 +501,33 @@ def save_message(conversation_id: int, role: str, content: str, model: str = Non
     return new_id
 
 
-def load_conversations(user_id: int) -> list[dict]:
-    """Charge les conversations de `user_id` triées par date."""
+def load_conversations(
+    user_id: int, project_scope=ALL_PROJECTS
+) -> list[dict]:
+    """Charge les conversations de `user_id` triées par date.
+
+    ``project_scope`` filters the list:
+
+    * ``ALL_PROJECTS`` (default) → every conversation, exactly the
+      pre-projects behaviour the sidebar / existing callers rely on.
+    * ``None``                   → only "General" (unscoped) threads.
+    * an ``int`` project id      → only that project's threads.
+
+    The default is intentionally ALL so existing tests and any caller
+    that does not care about projects keep their current behaviour.
+    """
+    clause, params = _project_scope_clause(project_scope)
+    # For the conversation list "General" must mean *exactly* the
+    # unscoped threads and a project must mean *exactly* that project —
+    # the global-bleed semantics only make sense for memory, so collapse
+    # the int case to an equality filter here.
+    if project_scope is not ALL_PROJECTS and project_scope is not None:
+        clause, params = " AND project_id = ?", (project_scope,)
     with _get_connection() as conn:
         rows = conn.execute(
             "SELECT id, title, updated FROM conversations "
-            "WHERE user_id = ? ORDER BY updated DESC",
-            (user_id,)
+            "WHERE user_id = ?" + clause + " ORDER BY updated DESC",
+            (user_id, *params)
         ).fetchall()
     return [{"id": row["id"], "title": row["title"], "updated": row["updated"]} for row in rows]
 

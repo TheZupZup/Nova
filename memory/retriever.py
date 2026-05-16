@@ -1,18 +1,30 @@
 from memory.embeddings import generate_embedding, cosine_similarity
 from memory import store as _store
-from memory.store import search_memories, list_memories
+from memory.store import search_memories, list_memories, ALL_PROJECTS
 from memory.schema import Memory
 
 # Memories with a cosine score below this threshold are considered irrelevant.
 _COSINE_THRESHOLD = 0.40
 
 
-def get_relevant_memories(message: str, user_id: int, limit: int = 8, db_path: str | None = None) -> list[Memory]:
+def get_relevant_memories(
+    message: str,
+    user_id: int,
+    limit: int = 8,
+    db_path: str | None = None,
+    project_scope=ALL_PROJECTS,
+) -> list[Memory]:
     """
     Returns up to `limit` memories owned by `user_id` and relevant to `message`.
 
     Cross-user retrieval is impossible by construction — every read goes
     through the user-scoped store layer.
+
+    ``project_scope`` (see :func:`memory.store._project_scope_clause`)
+    bounds visibility: a General chat passes ``None`` (global memory
+    only), a project chat passes that project's id (global **plus** that
+    project's memory), and the default ``ALL_PROJECTS`` keeps the
+    pre-projects behaviour for any caller that does not care.
 
     Strategy:
     - If Ollama is reachable, use cosine similarity for memories that have
@@ -24,9 +36,14 @@ def get_relevant_memories(message: str, user_id: int, limit: int = 8, db_path: s
         db_path = _store.DB_PATH
     query_emb = generate_embedding(message)
     if query_emb is None:
-        return search_memories(message, user_id, limit=limit, db_path=db_path)
+        return search_memories(
+            message, user_id, limit=limit, db_path=db_path,
+            project_scope=project_scope,
+        )
 
-    all_mems = list_memories(user_id, db_path=db_path)
+    all_mems = list_memories(
+        user_id, db_path=db_path, project_scope=project_scope
+    )
 
     scored: list[tuple[float, Memory]] = []
     without_embedding: list[Memory] = []
@@ -42,7 +59,10 @@ def get_relevant_memories(message: str, user_id: int, limit: int = 8, db_path: s
 
     # Fill remaining slots with keyword matches for legacy memories (no embedding).
     if without_embedding and len(results) < limit:
-        kw = search_memories(message, user_id, limit=limit - len(results), db_path=db_path)
+        kw = search_memories(
+            message, user_id, limit=limit - len(results), db_path=db_path,
+            project_scope=project_scope,
+        )
         seen = {m.id for m in results}
         results += [m for m in kw if m.id not in seen]
 
