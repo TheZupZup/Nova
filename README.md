@@ -49,6 +49,16 @@ Shipped today:
   user-authored memories, and per-user settings. Manual commands
   (`Retiens ça:`, `Souviens-toi:`) let users save explicit facts;
   automatic extraction adds short, low-confidence facts from chat.
+- **Projects / workspaces (Phase 1).** A local-first, per-user way to
+  organise conversations and memory by project (e.g. `Nova`, `Auryn`,
+  `SilentGuard`, `Home Lab`, `Personal`). Global memory stays available
+  everywhere; project memory is visible only inside its project and
+  never leaks across projects. There is always an implicit *General*
+  bucket — existing conversations and memory stay unscoped with no
+  backfill. Project context is contextual user data injected *below*
+  the safety/identity contract and can never override it. The sidebar
+  gains a small project selector; nothing else in the UI changes. See
+  [docs/projects.md](docs/projects.md).
 - **Session continuity.** A small, deterministic "continue where we
   left off" summary surfaces recent conversation topics on return.
   Derived from data already in the sidebar, dismissable, never
@@ -725,6 +735,12 @@ feature exists.
   the explicit non-goals (no autonomous blocking, no firewall
   mutations, no background polling) are tracked in
   [docs/silentguard-integration-roadmap.md](docs/silentguard-integration-roadmap.md).
+- **Projects / workspaces follow-ups.** Phase 1 (project-scoped
+  conversations + memory) is shipped; planned follow-ups — automatic
+  global-vs-project memory classification, linked local repo path,
+  project import/export, per-project model settings, project files —
+  and their explicit non-goals are tracked in
+  [docs/projects.md](docs/projects.md).
 - **Broader test coverage and improved model-fallback UX.**
 
 ## Running locally
