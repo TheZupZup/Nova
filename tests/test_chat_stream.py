@@ -29,7 +29,7 @@ for _mod in ("ddgs", "ollama", "sgmllib", "feedparser"):
         sys.modules[_mod] = MagicMock()
 
 from core import chat as chat_module  # noqa: E402
-from core import memory as core_memory, users  # noqa: E402
+from core import memory as core_memory, ollama_client, users  # noqa: E402
 from core.chat import chat_stream  # noqa: E402
 from memory import store as natural_store  # noqa: E402
 
@@ -130,7 +130,10 @@ def stub_chat_stream_runtime(chunks, *, event_shape="dict"):
         # Non-streaming fallback (e.g. memory extractor) — return single shot.
         return {"message": {"content": "".join(chunks)}}
 
-    with patch.object(chat_module.client, "chat", side_effect=fake_chat), \
+    # OllamaProvider talks to the shared core.ollama_client.client
+    # singleton; patching its .chat drives the real chat→provider→Ollama
+    # path end-to-end (the provider owns the chunk duck-typing now).
+    with patch.object(ollama_client.client, "chat", side_effect=fake_chat), \
             patch.object(chat_module, "route", lambda _msg: "default"), \
             patch.object(chat_module, "should_search", lambda _msg: False), \
             patch.object(chat_module, "is_security_query", lambda _msg: False), \
@@ -199,7 +202,7 @@ class TestChatStreamGenerator:
             pass
         with patch.object(_ollama, "ResponseError", _FakeResponseError), \
                 patch.object(
-                    chat_module.client, "chat",
+                    ollama_client.client, "chat",
                     side_effect=_FakeResponseError("nope"),
                 ), \
                 patch.object(chat_module, "route", lambda _msg: "default"), \
@@ -478,7 +481,7 @@ class TestChatStreamEndpoint:
 
         with patch.object(_ollama, "ResponseError", _FakeResponseError), \
                 patch.object(
-                    chat_module.client, "chat",
+                    ollama_client.client, "chat",
                     side_effect=_FakeResponseError("nope"),
                 ), \
                 patch.object(chat_module, "route", lambda _msg: "default"), \

@@ -1,9 +1,11 @@
 import logging
 from typing import Iterator
-import httpx
-import ollama
 from config import NOVA_SYSTEM_PROMPT, CHAT_HISTORY_LIMIT, MODELS
-from core.ollama_client import client
+from core.model_providers import (
+    ModelProviderError,
+    ModelRequest,
+    get_provider,
+)
 from core.memory import format_memories_for_prompt, parse_and_save
 from core.identity import IDENTITY_CONTRACT
 from core.nova_contract import build_personalization_block
@@ -45,49 +47,20 @@ def _reply_is_uncertain(reply: str) -> bool:
     return any(trigger in lowered for trigger in UNCERTAINTY_TRIGGERS)
 
 
-def _iter_content_chunks(stream) -> Iterator[str]:
-    """Yield non-empty `message.content` strings from an Ollama stream.
+def _generate(model: str, messages: list[dict]) -> str:
+    """One non-streamed generation through the active model provider.
 
-    Ollama's chat-stream generator yields events shaped like
-    ``{"message": {"content": "..."}, "done": bool}`` — but the concrete
-    type depends on the installed ollama-python client. ``ollama>=0.4``
-    streams ``ChatResponse`` Pydantic models (subscriptable but **not**
-    ``dict`` instances); older releases and our tests yield plain dicts.
-    We duck-type on the ``.get`` API both shapes expose so neither one
-    is silently dropped — an ``isinstance(event, dict)`` filter here was
-    the source of empty-reply regressions in production. Some
-    intermediate events have empty content (e.g. metadata frames) and
-    the final ``done`` event also carries a synthetic empty content —
-    skipping empties keeps the wire format tidy without affecting
-    correctness.
+    Nova core no longer talks to any concrete client library: it asks the
+    provider registry for the configured backend (Ollama by default) and
+    works in terms of the backend-agnostic :class:`ModelRequest` /
+    :class:`ModelResponse`. The provider is responsible for mapping its
+    own transport failures to :class:`ModelProviderError`, which the chat
+    entrypoints translate to the existing user-facing "unreachable" reply.
     """
-    for event in stream:
-        if event is None:
-            continue
-        msg = _safe_get(event, "message") or {}
-        chunk = _safe_get(msg, "content") or ""
-        if isinstance(chunk, str) and chunk:
-            yield chunk
-
-
-def _safe_get(obj, key: str):
-    """Read ``key`` from a dict-like or Pydantic ``SubscriptableBaseModel``.
-
-    Both shapes expose ``.get`` with the same contract, but a non-dict,
-    non-Pydantic object (e.g. an unexpected string event) would raise on
-    subscript. Falling back to ``getattr`` keeps the streaming loop
-    robust without re-introducing an ``isinstance(dict)`` filter that
-    silently drops valid ``ChatResponse`` events.
-    """
-    if obj is None:
-        return None
-    getter = getattr(obj, "get", None)
-    if callable(getter):
-        try:
-            return getter(key)
-        except TypeError:
-            pass
-    return getattr(obj, key, None)
+    response = get_provider().generate(
+        ModelRequest(model=model, messages=messages)
+    )
+    return response.content
 
 
 MEMORY_EXTRACTION_PROMPT = """Analyse cette conversation et extrait UNIQUEMENT les informations personnelles importantes sur l'utilisateur.
@@ -162,13 +135,12 @@ def extract_and_save_memory(
         assistant_response=assistant_response
     )
     try:
-        response = client.chat(
-            model=MODELS["default"],
-            messages=[{"role": "user", "content": prompt}]
-        )
-    except (ollama.ResponseError, ConnectionError, httpx.HTTPError):
+        result = _generate(
+            MODELS["default"],
+            [{"role": "user", "content": prompt}],
+        ).strip()
+    except ModelProviderError:
         return
-    result = response["message"]["content"].strip()
     parse_and_save(result, user_id, project_id)
 
 
@@ -273,8 +245,7 @@ def chat(history: list[dict], user_input: str, memories: list[dict], user_id: in
         if image:
             logger.debug("Processing image request, encoded length=%d", len(image))
             messages = build_image_messages(user_input, image)
-            response = client.chat(model=MODELS["default"], messages=messages)
-            reply = response["message"]["content"]
+            reply = _generate(MODELS["default"], messages)
             if policy.memory_save_enabled:
                 extract_and_save_memory(
                     user_input or "image", reply, user_id, project_id
@@ -309,8 +280,7 @@ def chat(history: list[dict], user_input: str, memories: list[dict], user_id: in
                     personalization=personalization,
                     feedback_preferences=feedback_prefs,
                 )
-                response = client.chat(model=model, messages=messages)
-                reply = response["message"]["content"]
+                reply = _generate(model, messages)
                 return reply, model
 
             if weather_result in ("no_city", "multiple"):
@@ -330,8 +300,7 @@ def chat(history: list[dict], user_input: str, memories: list[dict], user_id: in
                     personalization=personalization,
                     feedback_preferences=feedback_prefs,
                 )
-                response = client.chat(model=model, messages=messages)
-                reply = response["message"]["content"]
+                reply = _generate(model, messages)
                 return reply, model
 
         # Web search — both the explicit `force_search` flag and the
@@ -343,8 +312,7 @@ def chat(history: list[dict], user_input: str, memories: list[dict], user_id: in
                 personalization=personalization,
                 feedback_preferences=feedback_prefs,
             )
-            response = client.chat(model=model, messages=messages)
-            reply = response["message"]["content"]
+            reply = _generate(model, messages)
             return reply, model
 
         # Chat normal — inject relevant natural memories into context
@@ -354,8 +322,7 @@ def chat(history: list[dict], user_input: str, memories: list[dict], user_id: in
             personalization=personalization,
             feedback_preferences=feedback_prefs,
         )
-        response = client.chat(model=model, messages=messages)
-        reply = response["message"]["content"]
+        reply = _generate(model, messages)
 
         # Si Nova sait pas → cherche sur le web automatiquement
         if policy.web_search_enabled and _reply_is_uncertain(reply):
@@ -366,8 +333,7 @@ def chat(history: list[dict], user_input: str, memories: list[dict], user_id: in
                     personalization=personalization,
                     feedback_preferences=feedback_prefs,
                 )
-                response = client.chat(model=model, messages=messages)
-                reply = response["message"]["content"]
+                reply = _generate(model, messages)
 
         if policy.memory_save_enabled:
             extract_and_save_memory(user_input, reply, user_id, project_id)
@@ -376,8 +342,8 @@ def chat(history: list[dict], user_input: str, memories: list[dict], user_id: in
             )
         return reply, model
 
-    except (ollama.ResponseError, ConnectionError, httpx.HTTPError) as e:
-        logger.warning("Ollama unreachable during chat: %s", e)
+    except ModelProviderError as e:
+        logger.warning("Model provider unavailable during chat: %s", e)
         return OLLAMA_UNAVAILABLE, MODELS["default"]
 
 
@@ -422,8 +388,7 @@ def chat_stream(
         if image:
             logger.debug("Processing streaming-image request, encoded length=%d", len(image))
             messages = build_image_messages(user_input, image)
-            response = client.chat(model=MODELS["default"], messages=messages)
-            reply = response["message"]["content"]
+            reply = _generate(MODELS["default"], messages)
             if policy.memory_save_enabled:
                 extract_and_save_memory(
                     user_input or "image", reply, user_id, project_id
@@ -532,38 +497,32 @@ def chat_stream(
 
         yield {"type": "done", "reply": reply, "model": model}
 
-    except (ollama.ResponseError, ConnectionError, httpx.HTTPError) as e:
-        logger.warning("Ollama unreachable during chat stream: %s", e)
+    except ModelProviderError as e:
+        logger.warning("Model provider unavailable during chat stream: %s", e)
         yield {"type": "error", "detail": OLLAMA_UNAVAILABLE}
 
 
 def _stream_and_accumulate(model: str, messages: list[dict]) -> Iterator[dict]:
-    """Stream a single Ollama chat call and re-emit each token as `delta`.
+    """Stream one generation through the provider, re-emitting each token.
 
     The generator behaves as a coroutine: ``reply = yield from
     _stream_and_accumulate(...)`` lets the caller inspect the full
-    concatenated text once the upstream stream is exhausted, while the
-    intermediate events propagate to whoever is iterating chat_stream.
+    concatenated text once the stream is exhausted, while the intermediate
+    `delta` events propagate to whoever is iterating chat_stream.
 
-    Falls back gracefully if the installed Ollama client predates the
-    streaming kwarg — the request degrades to a single-shot reply
-    surfaced as one `delta`.
+    Backend specifics — the legacy single-shot fallback for old clients
+    and the streamed-event duck-typing — live in the provider now; this
+    function only knows about :class:`ModelChunk`. A backend failure
+    surfaces as :class:`ModelProviderError`, which the ``chat_stream``
+    wrapper turns into the existing `error` event.
     """
     parts: list[str] = []
-    try:
-        stream = client.chat(model=model, messages=messages, stream=True)
-    except TypeError:
-        # Older ollama clients lacked the streaming kwarg. Fall back to a
-        # single, non-streaming call so the endpoint still works.
-        response = client.chat(model=model, messages=messages)
-        reply = response["message"]["content"]
-        if reply:
-            yield {"type": "delta", "content": reply}
-        return reply
-
-    for chunk in _iter_content_chunks(stream):
-        parts.append(chunk)
-        yield {"type": "delta", "content": chunk}
+    request = ModelRequest(model=model, messages=messages, stream=True)
+    for chunk in get_provider().stream(request):
+        if not chunk.content:
+            continue
+        parts.append(chunk.content)
+        yield {"type": "delta", "content": chunk.content}
     return "".join(parts)
 
 
