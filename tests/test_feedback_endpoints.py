@@ -28,7 +28,7 @@ for _mod in ("ddgs", "ollama", "sgmllib", "feedparser"):
         sys.modules[_mod] = MagicMock()
 
 from core import chat as chat_module  # noqa: E402
-from core import memory as core_memory, users  # noqa: E402
+from core import memory as core_memory, ollama_client, users  # noqa: E402
 from memory import store as natural_store  # noqa: E402
 
 
@@ -83,7 +83,7 @@ def _stub_chat_stream_runtime(chunks):
             return gen()
         return {"message": {"content": "".join(chunks)}}
 
-    with patch.object(chat_module.client, "chat", side_effect=fake_chat), \
+    with patch.object(ollama_client.client, "chat", side_effect=fake_chat), \
             patch.object(chat_module, "route", lambda _msg: "default"), \
             patch.object(chat_module, "should_search", lambda _msg: False), \
             patch.object(chat_module, "is_security_query", lambda _msg: False), \
@@ -267,7 +267,7 @@ class TestNonStreamingExposesMessageId:
         _make_user(db_path, "alice")
         token = _login(web_client, "alice")
         fake = MagicMock(return_value={"message": {"content": "hello"}})
-        with patch.object(chat_module.client, "chat", fake), \
+        with patch.object(ollama_client.client, "chat", fake), \
                 patch.object(chat_module, "route", lambda _msg: "default"), \
                 patch.object(
                     chat_module, "should_search", lambda _msg: False,

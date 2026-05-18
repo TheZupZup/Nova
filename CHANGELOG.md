@@ -14,6 +14,24 @@
   `SubscriptableBaseModel` (production) shapes end-to-end.
 
 ### Added
+- Model-provider abstraction (Phase: provider abstraction only): Nova
+  is no longer architecturally hardwired to Ollama. A new
+  `core/model_providers` package introduces a backend-agnostic
+  `ModelProvider` interface (`ModelRequest` / `ModelResponse` /
+  `ModelChunk` / `ProviderHealth` / `ModelProviderError`), a registry,
+  and an `OllamaProvider` that preserves the existing Ollama request,
+  streaming, fallback, and unreachable-error behaviour exactly. The
+  `chat` / `chat_stream` paths now talk to the provider interface
+  instead of calling the Ollama client directly; the Ollama-specific
+  stream duck-typing moved behind the provider. A deterministic
+  `MockProvider` replaces ad-hoc client stubs in tests. **Ollama
+  remains the default and fully supported** (`NOVA_MODEL_PROVIDER`,
+  default `ollama`); future *local* runtimes (llama.cpp, transformers,
+  a Nova-owned runtime) can register cleanly. No new runtime, no model
+  downloads, no shell/Docker/cloud/API-key, and no settings migration
+  in this phase. Nova identity / context / memory / safety stay owned
+  by Nova and always above any provider. See
+  [`docs/model-providers.md`](docs/model-providers.md).
 - Nova Projects / Workspaces (Phase 1): a local-first, per-user
   foundation for organising conversations and memory by project (e.g.
   `Nova`, `Auryn`, `SilentGuard`, `Home Lab`, `Personal`). Adds an

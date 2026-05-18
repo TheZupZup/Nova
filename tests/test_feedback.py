@@ -31,7 +31,7 @@ for _mod in ("ddgs", "ollama", "sgmllib", "feedparser"):
         sys.modules[_mod] = MagicMock()
 
 from core import chat as chat_module  # noqa: E402
-from core import memory as core_memory, users  # noqa: E402
+from core import memory as core_memory, ollama_client, users  # noqa: E402
 from core.chat import build_messages, chat  # noqa: E402
 from core.feedback import (  # noqa: E402
     REASON_MAX_LEN,
@@ -260,7 +260,9 @@ class TestPreferenceBlock:
 def _stub_chat_runtime(reply: str = "ok"):
     """Stub the network bits so chat() exercises only prompt-shaping."""
     fake_client_chat = MagicMock(return_value={"message": {"content": reply}})
-    with patch.object(chat_module.client, "chat", fake_client_chat), \
+    # OllamaProvider talks to the shared core.ollama_client.client
+    # singleton; patching its .chat exercises the real chat→provider path.
+    with patch.object(ollama_client.client, "chat", fake_client_chat), \
          patch.object(chat_module, "route", lambda _msg: "default"), \
          patch.object(chat_module, "should_search", lambda _msg: False), \
          patch.object(chat_module, "is_security_query", lambda _msg: False), \

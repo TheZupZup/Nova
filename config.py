@@ -5,6 +5,14 @@ load_dotenv()
 
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
 
+# Which model-provider backend Nova talks to. Ollama remains the default
+# so existing deployments are unaffected; the value only selects which
+# `core.model_providers` implementation `get_provider()` returns. This is
+# a non-destructive runtime switch — it never touches the settings DB and
+# never triggers a download. Future local runtimes register their own
+# name here without Nova core changing.
+MODEL_PROVIDER = os.getenv("NOVA_MODEL_PROVIDER", "ollama").strip() or "ollama"
+
 _raw_channel = os.getenv("NOVA_CHANNEL", "stable").lower()
 NOVA_CHANNEL = _raw_channel if _raw_channel in ("stable", "beta", "alpha") else "stable"
 NOVA_BRANCH = os.getenv("NOVA_BRANCH", "main")

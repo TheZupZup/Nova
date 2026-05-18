@@ -31,7 +31,12 @@ for _mod in ("ddgs", "ollama"):
         sys.modules[_mod] = MagicMock()
 
 from core import chat as chat_module  # noqa: E402
-from core import memory as core_memory, settings as core_settings, users  # noqa: E402
+from core import (  # noqa: E402
+    memory as core_memory,
+    ollama_client,
+    settings as core_settings,
+    users,
+)
 from core.chat import build_messages, chat  # noqa: E402
 from core.identity import IDENTITY_CONTRACT  # noqa: E402
 from memory import store as natural_store  # noqa: E402
@@ -69,7 +74,9 @@ def stub_chat_runtime(reply: str = "ok"):
     `call_args` (which only ever holds the *last* call).
     """
     fake_client_chat = MagicMock(return_value={"message": {"content": reply}})
-    with patch.object(chat_module.client, "chat", fake_client_chat), \
+    # OllamaProvider talks to the shared core.ollama_client.client
+    # singleton; patching its .chat exercises the real chat→provider path.
+    with patch.object(ollama_client.client, "chat", fake_client_chat), \
          patch.object(chat_module, "route", lambda _msg: "default"), \
          patch.object(chat_module, "should_search", lambda _msg: False), \
          patch.object(chat_module, "is_security_query", lambda _msg: False), \
