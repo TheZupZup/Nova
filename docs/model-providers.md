@@ -1,13 +1,17 @@
 # Nova Model Providers
 
-> **Status: shipped (Phase: provider abstraction only), local-first.**
+> **Status: shipped (Phases: provider abstraction + read-only provider
+> settings), local-first.**
 > This document describes the seam that lets Nova's model backend be
-> replaced without rewriting Nova. It lives inside the boundaries set by
+> replaced without rewriting Nova, and the admin-only surface for
+> *seeing and validating* which backend is active. It lives inside the
+> boundaries set by
 > [`docs/nova-safety-and-trust-contract.md`](nova-safety-and-trust-contract.md).
 > Nothing here grants Nova new powers, adds a new model runtime, performs
 > model downloads, runs shell, touches a Docker socket, integrates a
-> cloud provider, or migrates settings. **Ollama remains the default and
-> is fully supported.**
+> cloud provider, or migrates settings. The settings surface is
+> **read-only**: provider selection stays env-driven and **Ollama
+> remains the default and is fully supported.**
 
 ## Why Nova has model providers
 
@@ -80,6 +84,53 @@ existing tests that patch that client keep working. Nothing about the
 default deployment changes: leave `NOVA_MODEL_PROVIDER` unset and Nova
 behaves exactly as before.
 
+## Seeing & validating the active provider (admin, read-only)
+
+Phase 1 of provider *settings* adds a small admin-only surface so an
+operator can answer two questions without reading logs or env files —
+**which backend is Nova configured to use**, and **does it actually
+answer right now**. It changes nothing: provider selection stays
+env-driven (`NOVA_MODEL_PROVIDER`), Ollama stays the default, and
+nothing is written, migrated, pulled, or restarted.
+
+`core/provider_status.py` is the calm, read-only foundation, mirroring
+`core/storage_status.py`:
+
+| Function | Role |
+| --- | --- |
+| `get_provider_status()` | Configured provider, the default (always `ollama`), the resolved active backend, the selectable providers, the redacted Ollama host, and warnings. Never reaches the network; never raises — an unknown configured provider is an `error` string, not an exception. |
+| `probe_provider_health(name=None)` | A live but cheap, read-only liveness probe. Delegates to the provider's own `health()` (`client.list()` for Ollama — never a pull, never a generation) and always returns the stable `{ok, provider, detail, models}` shape, even for an unreachable or unknown backend. |
+
+Two admin-only endpoints expose it (both `require_admin`; the provider
+name and host are operator-sensitive):
+
+- `GET /admin/provider/status` — the read-only snapshot.
+- `POST /admin/provider/test-connection` — runs the liveness probe now.
+  It is `POST` so it reads as an explicit "probe now" action and is
+  never cached; it needs no confirmation because it cannot modify
+  anything (mirrors `/admin/maintenance/fetch`).
+
+The admin panel gains a **Provider** tab rendering the snapshot, the
+redacted host, the registered providers, and a **Test provider
+connection** button that surfaces health and errors clearly.
+
+Guardrails baked into this surface:
+
+- **Read-only.** No endpoint mutates the registry, writes settings,
+  triggers a download, or restarts anything. An unreachable backend or
+  an unknown configured provider is reported as data (HTTP 200 with
+  `ok=false` / `error`), never a 500 — the same calm stance as the
+  maintenance / storage endpoints.
+- **Ollama stays the default.** `DEFAULT_PROVIDER` is `"ollama"`; a
+  non-default but registered provider is reported calmly with a "not
+  the default" note, never an error.
+- **MockProvider stays test-only.** `mock` is never advertised in
+  `selectable_providers`. If Nova is *configured* to use it the status
+  still reports that truthfully, with a clear warning, so a stray test
+  setting can never hide.
+- **No secrets.** The only env-derived string surfaced is the Ollama
+  host, with any `user:pass@` userinfo redacted before display.
+
 ## Future providers
 
 New **local** runtimes can be added cleanly in later phases — for
@@ -120,3 +171,13 @@ failure mapping, clean health-failure handling, registry resolution, and
 that `chat` / `chat_stream` route through the interface. The existing
 chat / memory / project / storage suites continue to pass against the
 real `OllamaProvider` path.
+
+The read-only settings surface has its own suites:
+`tests/test_provider_status.py` pins the reporter contract (Ollama is
+the default and unset deployments warn-free; `mock` is never selectable
+but is reported truthfully with a warning if configured; an unknown
+provider is an `error`, not an exception; the host is redacted; the
+liveness probe always returns the stable shape, even when the provider
+breaks the "health never raises" contract). `tests/test_provider_endpoints.py`
+pins the wire contract (`require_admin` gating, the status / probe JSON
+shapes, and that an unreachable or unknown backend stays a calm 200).

@@ -14,6 +14,26 @@
   `SubscriptableBaseModel` (production) shapes end-to-end.
 
 ### Added
+- Model provider settings (Phase 1, read-only): a small admin-only
+  surface to *see and validate* which model backend Nova is using,
+  without adding a runtime. A new `core/provider_status.py` reports the
+  configured provider, the default (always Ollama), the resolved active
+  backend, the selectable providers, and the redacted Ollama host —
+  calmly and read-only, never raising (an unknown configured provider
+  is an `error` string, not a 500). Two admin endpoints expose it:
+  `GET /admin/provider/status` and `POST /admin/provider/test-connection`
+  (a cheap, read-only liveness probe — `client.list()` for Ollama,
+  never a pull or a generation). The admin panel gains a **Provider**
+  tab that renders the snapshot and a **Test provider connection**
+  button surfacing health/errors clearly. **Ollama stays the default**
+  and provider selection stays env-driven (`NOVA_MODEL_PROVIDER`) —
+  nothing is written, migrated, pulled, or restarted. `MockProvider`
+  stays test-only: it is never advertised as selectable, but a
+  configured `mock` is reported truthfully with a clear warning so the
+  state can never hide. No llama.cpp, no Ollama removal, no
+  memory/projects/storage changes. New suites
+  `tests/test_provider_status.py` / `tests/test_provider_endpoints.py`;
+  see [`docs/model-providers.md`](docs/model-providers.md).
 - Model-provider abstraction (Phase: provider abstraction only): Nova
   is no longer architecturally hardwired to Ollama. A new
   `core/model_providers` package introduces a backend-agnostic

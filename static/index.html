@@ -2735,6 +2735,8 @@
         }
         .admin-warning.warning { border-color: rgba(212, 160, 23, 0.3); background: rgba(212, 160, 23, 0.05); }
         .admin-warning.warning .admin-warning-level { color: #d4a017; }
+        .admin-warning.error { border-color: rgba(224, 136, 129, 0.35); background: rgba(224, 136, 129, 0.06); }
+        .admin-warning.error .admin-warning-level { color: var(--danger); }
         .admin-warning.info .admin-warning-level { color: var(--text-dim); }
         .admin-warning-level {
             font-weight: 600;
@@ -2971,6 +2973,7 @@
                 <button class="admin-tab-btn active" data-tab="users" onclick="switchAdminTab('users')">⚑ Users</button>
                 <button class="admin-tab-btn" data-tab="models" onclick="switchAdminTab('models')">⬢ Models</button>
                 <button class="admin-tab-btn" data-tab="storage" onclick="switchAdminTab('storage')">⚇ Storage</button>
+                <button class="admin-tab-btn" data-tab="provider" onclick="switchAdminTab('provider')">◆ Provider</button>
             </div>
             <button id="admin-close" onclick="closeAdmin()">✕</button>
         </div>
@@ -3110,6 +3113,45 @@
                     </div>
                     <div id="storage-restore-result"></div>
                 </div>
+            </div>
+
+            <!-- PROVIDER TAB -->
+            <div id="admin-tab-provider" class="admin-tab-pane">
+                <div class="admin-section-title" style="display:flex;align-items:center;justify-content:space-between;">
+                    <span>Model provider</span>
+                    <button class="admin-btn" onclick="loadProviderStatus()">refresh</button>
+                </div>
+                <div class="admin-warning-summary">
+                    Read-only view of which model backend Nova is configured
+                    to use. <strong>Ollama is the default and recommended
+                    local backend</strong>; the provider is selected with the
+                    <code>NOVA_MODEL_PROVIDER</code> environment variable and
+                    is never changed from this screen. Per-mode model
+                    selection lives under the <strong>Models</strong> tab.
+                </div>
+                <div id="provider-status-list">
+                    <div class="admin-empty">Loading…</div>
+                </div>
+
+                <div class="admin-section-title">Test provider connection</div>
+                <div id="provider-test-form">
+                    <div class="admin-warning-summary">
+                        Runs a cheap, read-only liveness probe against the
+                        configured backend (for Ollama: lists installed
+                        models — never pulls a model and never generates
+                        text). Use it to confirm Nova can reach the backend.
+                    </div>
+                    <div class="row" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+                        <button class="admin-btn primary" onclick="testProviderConnection()" id="provider-test-btn">
+                            Test provider connection
+                        </button>
+                        <span class="admin-warning-summary" style="padding:0;">
+                            Read-only · admin-only · never pulls or generates
+                        </span>
+                    </div>
+                    <div id="provider-test-error" style="color:var(--danger);font-size:0.82rem;min-height:0;"></div>
+                </div>
+                <div id="provider-test-result"></div>
             </div>
         </div>
     </div>
@@ -8364,6 +8406,9 @@
         } else if (tab === "storage") {
             stopAdminPullsPolling();
             loadStorageStatus();
+        } else if (tab === "provider") {
+            stopAdminPullsPolling();
+            loadProviderStatus();
         }
     }
 
@@ -9371,6 +9416,176 @@
             `</div>` +
             restartLine +
             warnings;
+    }
+
+    // ── MODEL PROVIDER (read-only status + live liveness probe) ──
+    // Mirrors the storage tab: a calm read-only snapshot, plus an
+    // explicit "test connection" action. Nothing here changes the
+    // provider — selection stays env-driven and Ollama is the default.
+
+    async function loadProviderStatus() {
+        const list = document.getElementById("provider-status-list");
+        if (!list) return;
+        list.innerHTML = '<div class="admin-empty">Loading…</div>';
+        try {
+            const res = await fetch("/admin/provider/status", {
+                headers: { "Authorization": `Bearer ${token}` }
+            });
+            if (res.status === 401) { logout(); return; }
+            if (res.status === 403) {
+                list.innerHTML = '<div class="admin-empty" style="color:var(--danger);">Access denied.</div>';
+                return;
+            }
+            if (!res.ok) {
+                list.innerHTML = '<div class="admin-empty">Failed to load provider status.</div>';
+                return;
+            }
+            renderProviderStatus(await res.json());
+        } catch (e) {
+            list.innerHTML = '<div class="admin-empty">Failed to load provider status.</div>';
+        }
+    }
+
+    function renderProviderStatus(status) {
+        const list = document.getElementById("provider-status-list");
+        if (!list) return;
+        const parts = [];
+        const configured = status.configured_provider || "ollama";
+        const stateTag = status.error
+            ? `<span class="admin-tag error">not registered</span>`
+            : (status.is_default
+                ? `<span class="admin-tag installed">default</span>`
+                : `<span class="admin-tag">non-default</span>`);
+        const activeLine = status.active_provider
+            ? `<div class="admin-progress-meta">active backend: <code>${escapeHtml(status.active_provider)}</code></div>`
+            : `<div class="admin-progress-meta">active backend: <code>unavailable</code></div>`;
+        parts.push(
+            `<div class="admin-model-row">` +
+            `<div class="admin-model-head">` +
+            `<span class="admin-model-display">configured provider</span>` +
+            `${stateTag}` +
+            `</div>` +
+            `<div class="admin-model-name">${escapeHtml(configured)}</div>` +
+            activeLine +
+            `<div class="admin-progress-meta">default: <code>${escapeHtml(status.default_provider || "ollama")}</code></div>` +
+            `</div>`
+        );
+        parts.push(
+            `<div class="admin-model-row">` +
+            `<div class="admin-model-head">` +
+            `<span class="admin-model-display">Ollama host</span>` +
+            `<span class="admin-tag">informational</span>` +
+            `</div>` +
+            `<div class="admin-model-name">${escapeHtml(status.ollama_host || "—")}</div>` +
+            `</div>`
+        );
+        const selectable = Array.isArray(status.selectable_providers) ? status.selectable_providers : [];
+        const testOnly = Array.isArray(status.test_only_providers) ? status.test_only_providers : [];
+        const selBody = selectable.length
+            ? selectable.map(p => `<code>${escapeHtml(p)}</code>`).join(" · ")
+            : "<code>none</code>";
+        let testOnlyLine = "";
+        if (testOnly.length) {
+            testOnlyLine =
+                `<div class="admin-progress-meta">test-only (never a production choice): ` +
+                testOnly.map(p => `<code>${escapeHtml(p)}</code>`).join(" · ") +
+                `</div>`;
+        }
+        parts.push(
+            `<div class="admin-model-row">` +
+            `<div class="admin-model-head">` +
+            `<span class="admin-model-display">registered providers</span>` +
+            `</div>` +
+            `<div class="admin-progress-meta">selectable: ${selBody}</div>` +
+            testOnlyLine +
+            `</div>`
+        );
+        if (status.error) {
+            parts.push(
+                `<div class="admin-warning error">` +
+                `<span class="admin-warning-level">error</span>` +
+                `<span class="admin-warning-msg">${escapeHtml(status.error)}</span>` +
+                `</div>`
+            );
+        }
+        const warnings = Array.isArray(status.warnings) ? status.warnings : [];
+        for (const w of warnings) {
+            parts.push(
+                `<div class="admin-warning warning">` +
+                `<span class="admin-warning-level">warning</span>` +
+                `<span class="admin-warning-msg">${escapeHtml(w)}</span>` +
+                `</div>`
+            );
+        }
+        list.innerHTML = parts.join("");
+    }
+
+    async function testProviderConnection() {
+        const btn = document.getElementById("provider-test-btn");
+        const errEl = document.getElementById("provider-test-error");
+        const resultEl = document.getElementById("provider-test-result");
+        if (errEl) errEl.textContent = "";
+        if (resultEl) resultEl.innerHTML = "";
+        if (!btn) return;
+        const original = btn.textContent;
+        btn.disabled = true;
+        btn.textContent = "Testing…";
+        try {
+            const res = await fetch("/admin/provider/test-connection", {
+                method: "POST",
+                headers: {
+                    "Authorization": `Bearer ${token}`,
+                    "Content-Type": "application/json",
+                },
+                body: "{}",
+            });
+            if (res.status === 401) { logout(); return; }
+            if (res.status === 403) {
+                if (errEl) errEl.textContent = "Access denied.";
+                return;
+            }
+            if (!res.ok) {
+                let detail = `Failed (${res.status})`;
+                try {
+                    const body = await res.json();
+                    if (body && body.detail) detail = body.detail;
+                } catch (_) { /* ignore */ }
+                if (errEl) errEl.textContent = detail;
+                return;
+            }
+            renderProviderHealth(await res.json());
+        } catch (e) {
+            if (errEl) errEl.textContent = "Network error while testing the provider connection.";
+        } finally {
+            btn.disabled = false;
+            btn.textContent = original;
+        }
+    }
+
+    function renderProviderHealth(body) {
+        const el = document.getElementById("provider-test-result");
+        if (!el) return;
+        const ok = body && body.ok === true;
+        const tag = ok
+            ? `<span class="admin-tag installed">reachable</span>`
+            : `<span class="admin-tag error">unreachable</span>`;
+        const models = Array.isArray(body.models) ? body.models : [];
+        const modelsLine = models.length
+            ? `<div class="admin-progress-meta">installed models: ${models.map(m => `<code>${escapeHtml(m)}</code>`).join(" · ")}</div>`
+            : `<div class="admin-progress-meta">installed models: <code>none reported</code></div>`;
+        const detailLine = body.detail
+            ? `<div class="admin-warning ${ok ? "info" : "error"}"><span class="admin-warning-level">${ok ? "info" : "error"}</span><span class="admin-warning-msg">${escapeHtml(body.detail)}</span></div>`
+            : "";
+        el.innerHTML =
+            `<div class="admin-section-title">Connection test result</div>` +
+            `<div class="admin-model-row">` +
+            `<div class="admin-model-head">` +
+            `<span class="admin-model-display">backend: ${escapeHtml(body.provider || "unknown")}</span>` +
+            tag +
+            `</div>` +
+            modelsLine +
+            `</div>` +
+            detailLine;
     }
 
     // ── UTILS ──

@@ -70,6 +70,7 @@ from core.security import lifecycle as _silentguard_lifecycle
 from core.security import SilentGuardProvider as _SilentGuardProvider
 from core import maintenance as _maintenance
 from core import storage_status as _storage_status
+from core import provider_status as _provider_status
 from core import data_export as _data_export
 from core import voice as _voice
 import sqlite3 as _sqlite3
@@ -2914,6 +2915,60 @@ def storage_restore_endpoint(
         dry_run=False,
     )
     return result.as_dict()
+
+
+# ── ADMIN: MODEL PROVIDER SETTINGS ────────────────────────────────
+# Phase 1 admin-only window onto Nova's model-provider configuration.
+# Both endpoints are wrapped with ``require_admin`` (the provider name
+# and host are operator-sensitive). The underlying module
+# (``core.provider_status``) enforces:
+#
+#   * read-only reporting — nothing here writes settings, mutates the
+#     provider registry, triggers a model download, or restarts
+#     anything. Provider selection stays env-driven
+#     (``NOVA_MODEL_PROVIDER``); Ollama remains the default.
+#   * MockProvider stays test-only — it is never advertised as a
+#     selectable production backend (only reported, with a warning, if
+#     explicitly configured).
+#   * no secrets — the Ollama host is surfaced with any ``user:pass@``
+#     userinfo redacted.
+#
+# ``test-connection`` performs a live but cheap, read-only liveness
+# probe (the provider's ``health()`` — ``client.list()`` for Ollama,
+# never a pull or a generation). It is POST so it reads as an explicit
+# "probe now" action and is never cached; it needs no confirmation
+# because it cannot modify anything (mirrors
+# ``/admin/maintenance/fetch``).
+
+
+@app.get("/admin/provider/status")
+def provider_status_endpoint(_: CurrentUser = Depends(require_admin)):
+    """Calm read-only snapshot of Nova's model-provider configuration.
+
+    Returns the configured provider, the default (always Ollama),
+    whether they match, the selectable providers (test-only backends
+    filtered out), the redacted Ollama host, and any warnings — for
+    example when the configured provider is unknown or is the
+    test-only mock. Never reaches the network.
+    """
+    return _provider_status.get_provider_status().as_dict()
+
+
+@app.post("/admin/provider/test-connection")
+def provider_test_connection_endpoint(
+    _: CurrentUser = Depends(require_admin),
+):
+    """Probe the configured provider's liveness, read-only.
+
+    Delegates to the provider's own ``health()`` (``client.list()``
+    for Ollama — never a model pull or a generation). Always returns
+    a stable ``{"ok", "provider", "detail", "models"}`` shape with
+    status 200; an unreachable backend or an unknown configured
+    provider is reported as ``ok=False`` with a short, non-sensitive
+    detail rather than a 500 — the same calm stance as the
+    maintenance / storage endpoints.
+    """
+    return _provider_status.probe_provider_health()
 
 
 @app.get("/channel")
