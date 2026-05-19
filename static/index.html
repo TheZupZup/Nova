@@ -383,6 +383,115 @@
         }
         .project-btn:hover { color: var(--text); background: rgba(255, 255, 255, 0.05); }
 
+        /* Dev Workspace (Phase 1, read-only) modal */
+        #repo-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.55);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            z-index: 31;
+            align-items: center;
+            justify-content: center;
+        }
+        #repo-overlay.open { display: flex; animation: fadeIn 220ms var(--ease); }
+        #repo-panel {
+            background: rgba(19, 21, 23, 0.92);
+            backdrop-filter: blur(24px) saturate(140%);
+            -webkit-backdrop-filter: blur(24px) saturate(140%);
+            border: 1px solid var(--border);
+            border-radius: var(--r-xl);
+            width: 92%;
+            max-width: 620px;
+            max-height: 84dvh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            box-shadow: var(--shadow-lg);
+            animation: popIn 240ms var(--ease);
+        }
+        #repo-header {
+            padding: 18px 24px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            border-bottom: 1px solid var(--border);
+        }
+        #repo-header h2 { font-size: 0.95rem; margin: 0; letter-spacing: 0.02em; }
+        #repo-close {
+            background: none; border: none; color: var(--text-dim);
+            font-size: 1rem; cursor: pointer; padding: 4px 8px; border-radius: 8px;
+        }
+        #repo-close:hover { color: var(--text); background: rgba(255,255,255,0.06); }
+        #repo-body { padding: 20px 24px; overflow-y: auto; }
+        .repo-note {
+            font-size: 0.78rem; color: var(--text-dim); line-height: 1.5;
+            margin: 0 0 16px; padding: 10px 12px;
+            background: rgba(255,255,255,0.025); border-radius: 10px;
+        }
+        .repo-field { margin-bottom: 18px; }
+        .repo-label, .repo-block-title, .repo-status-key {
+            display: block; font-size: 0.7rem; text-transform: uppercase;
+            letter-spacing: 0.06em; color: var(--text-dim); margin-bottom: 6px;
+        }
+        #repo-path-input {
+            width: 100%; padding: 9px 12px; box-sizing: border-box;
+            background: rgba(255,255,255,0.025);
+            border: 1px solid var(--border); border-radius: 10px;
+            color: var(--text); font-size: 0.82rem; outline: none;
+            font-family: var(--mono, monospace);
+        }
+        #repo-path-input:focus {
+            border-color: var(--cyan-glow); box-shadow: 0 0 0 3px var(--cyan-soft);
+        }
+        .repo-actions { display: flex; gap: 8px; margin-top: 10px; }
+        .repo-btn {
+            padding: 7px 14px; background: rgba(255,255,255,0.04);
+            border: 1px solid var(--border); border-radius: 9px;
+            color: var(--text); font-size: 0.8rem; cursor: pointer;
+            transition: background var(--t-base);
+        }
+        .repo-btn:hover { background: rgba(255,255,255,0.08); }
+        .repo-btn-primary { border-color: var(--cyan-glow); color: var(--cyan-glow); }
+        .repo-msg {
+            margin-top: 10px; font-size: 0.78rem; padding: 8px 10px;
+            border-radius: 8px; line-height: 1.45;
+        }
+        .repo-msg.ok { color: #7fe0a8; background: rgba(80,200,140,0.08); }
+        .repo-msg.err { color: #f0a0a0; background: rgba(220,90,90,0.08); }
+        .repo-status-row {
+            display: flex; align-items: center; gap: 12px;
+            padding: 8px 0; border-bottom: 1px solid var(--border);
+        }
+        .repo-status-key { margin: 0; flex: 0 0 90px; }
+        .repo-status-val { font-size: 0.84rem; color: var(--text); word-break: break-all; }
+        .repo-badge {
+            display: inline-block; padding: 2px 10px; border-radius: 999px;
+            font-size: 0.74rem; font-weight: 600;
+        }
+        .repo-badge.clean { color: #7fe0a8; background: rgba(80,200,140,0.12); }
+        .repo-badge.dirty { color: #f0c479; background: rgba(220,170,90,0.12); }
+        .repo-block { margin-top: 16px; }
+        .repo-list {
+            list-style: none; margin: 0; padding: 0;
+            font-family: var(--mono, monospace); font-size: 0.76rem;
+            color: var(--text); max-height: 220px; overflow-y: auto;
+        }
+        .repo-list li {
+            padding: 4px 0; border-bottom: 1px solid var(--border);
+            word-break: break-all;
+        }
+        .repo-list li:last-child { border-bottom: none; }
+        .repo-changed-code {
+            color: var(--cyan-glow); margin-right: 8px; font-weight: 600;
+        }
+        .repo-pre {
+            margin: 0; font-family: var(--mono, monospace); font-size: 0.74rem;
+            color: var(--text-dim); white-space: pre-wrap; word-break: break-all;
+            max-height: 220px; overflow-y: auto;
+        }
+
         .conv-group-header {
             font-size: 0.66rem;
             color: var(--text-dim);
@@ -2880,6 +2989,7 @@
                 <select id="project-select" onchange="onProjectChange()" title="Projet"></select>
                 <button id="new-project-btn" class="project-btn" type="button" onclick="createProjectPrompt()" title="Nouveau projet">+</button>
                 <button id="archive-project-btn" class="project-btn" type="button" onclick="archiveActiveProject()" title="Archiver" style="display:none;">⊟</button>
+                <button id="repo-settings-btn" class="project-btn" type="button" onclick="openRepoSettings()" title="Dépôt local du projet" style="display:none;">⎇</button>
             </div>
             <div id="conv-search-wrap">
                 <input type="text" id="conv-search" placeholder="Rechercher..." autocomplete="off" oninput="onConvSearchInput(this.value)" />
@@ -3158,6 +3268,49 @@
 </div>
 
 <!-- SETTINGS PANEL -->
+<div id="repo-overlay" onclick="handleRepoOverlayClick(event)">
+    <div id="repo-panel">
+        <div id="repo-header">
+            <h2 id="repo-title">⎇ Dev Workspace</h2>
+            <button id="repo-close" onclick="closeRepoSettings()">✕</button>
+        </div>
+        <div id="repo-body">
+            <p class="repo-note" id="repo-intro-text"></p>
+            <div class="repo-field">
+                <label class="repo-label" id="repo-path-label" for="repo-path-input">Repository path</label>
+                <input type="text" id="repo-path-input" autocomplete="off" spellcheck="false" />
+                <div class="repo-actions">
+                    <button id="repo-save-btn" class="repo-btn repo-btn-primary" type="button" onclick="saveRepoPath()">Link</button>
+                    <button id="repo-unlink-btn" class="repo-btn" type="button" onclick="unlinkRepo()" style="display:none;">Unlink</button>
+                </div>
+                <div id="repo-msg" class="repo-msg" style="display:none;"></div>
+            </div>
+            <div id="repo-status" style="display:none;">
+                <div class="repo-status-row">
+                    <span class="repo-status-key" id="repo-branch-label">Branch</span>
+                    <span class="repo-status-val" id="repo-branch-val">—</span>
+                </div>
+                <div class="repo-status-row">
+                    <span class="repo-status-key" id="repo-state-label">State</span>
+                    <span class="repo-status-val"><span id="repo-state-badge" class="repo-badge">—</span></span>
+                </div>
+                <div class="repo-block" id="repo-commits-block" style="display:none;">
+                    <div class="repo-block-title" id="repo-commits-label">Latest commits</div>
+                    <ul class="repo-list" id="repo-commits-list"></ul>
+                </div>
+                <div class="repo-block" id="repo-changed-block" style="display:none;">
+                    <div class="repo-block-title" id="repo-changed-label">Changed files</div>
+                    <ul class="repo-list" id="repo-changed-list"></ul>
+                </div>
+                <div class="repo-block" id="repo-diffstat-block" style="display:none;">
+                    <div class="repo-block-title" id="repo-diffstat-label">Diff summary</div>
+                    <pre class="repo-pre" id="repo-diffstat-pre"></pre>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
 <div id="settings-overlay" onclick="handleSettingsOverlayClick(event)">
     <div id="settings-panel">
         <div id="settings-header">
@@ -3591,6 +3744,28 @@
             project_name_prompt: "Nom du projet :",
             project_archive_confirm: "Archiver ce projet ? Ses conversations et sa mémoire sont conservées.",
             project_archive: "Archiver le projet actif",
+            repo_settings: "Dépôt local du projet",
+            repo_title: "Dépôt local — lecture seule (Phase 1)",
+            repo_intro: "Liez un dépôt Git local pour que Nova comprenne son état. Phase 1 : strictement en lecture seule — aucun commit, push, branche ou écriture de fichier.",
+            repo_path_label: "Chemin du dépôt",
+            repo_path_ph: "/chemin/absolu/vers/le/depot",
+            repo_save: "Lier",
+            repo_unlink: "Délier",
+            repo_unlink_confirm: "Délier ce dépôt ? Le dépôt lui-même n'est pas modifié.",
+            repo_none: "Aucun dépôt lié à ce projet.",
+            repo_branch: "Branche",
+            repo_state: "État",
+            repo_clean: "Propre",
+            repo_dirty: "Modifications non validées",
+            repo_commits: "Derniers commits",
+            repo_changed: "Fichiers modifiés",
+            repo_diffstat: "Résumé des modifications",
+            repo_disabled: "Le Dev Workspace n'est pas activé sur cet hôte (définissez NOVA_DEV_WORKSPACE_ROOTS).",
+            repo_invalid: "Chemin du dépôt invalide",
+            repo_git_missing: "git n'est pas disponible sur cet hôte.",
+            repo_error: "Impossible de lire l'état Git du dépôt.",
+            repo_saved: "Dépôt lié.",
+            repo_unlinked: "Dépôt délié.",
             no_match: "Aucun résultat",
             search_placeholder: "Rechercher...",
             group_today: "AUJOURD'HUI",
@@ -3785,6 +3960,28 @@
             project_name_prompt: "Project name:",
             project_archive_confirm: "Archive this project? Its conversations and memory are kept.",
             project_archive: "Archive active project",
+            repo_settings: "Project local repository",
+            repo_title: "Dev Workspace — read-only (Phase 1)",
+            repo_intro: "Link a local Git repository so Nova can understand its state. Phase 1 is strictly read-only — no commit, push, branch, or file writes.",
+            repo_path_label: "Repository path",
+            repo_path_ph: "/absolute/path/to/the/repo",
+            repo_save: "Link",
+            repo_unlink: "Unlink",
+            repo_unlink_confirm: "Unlink this repository? The repository itself is not modified.",
+            repo_none: "No repository linked to this project.",
+            repo_branch: "Branch",
+            repo_state: "State",
+            repo_clean: "Clean",
+            repo_dirty: "Uncommitted changes",
+            repo_commits: "Latest commits",
+            repo_changed: "Changed files",
+            repo_diffstat: "Diff summary",
+            repo_disabled: "Dev Workspace is not enabled on this host (set NOVA_DEV_WORKSPACE_ROOTS).",
+            repo_invalid: "Invalid repository path",
+            repo_git_missing: "git is not available on this host.",
+            repo_error: "Could not read the repository's Git status.",
+            repo_saved: "Repository linked.",
+            repo_unlinked: "Repository unlinked.",
             no_match: "No matches",
             search_placeholder: "Search...",
             group_today: "TODAY",
@@ -3984,6 +4181,7 @@
         if (newProjBtn) newProjBtn.title = t("project_new");
         const archProjBtn = document.getElementById("archive-project-btn");
         if (archProjBtn) archProjBtn.title = t("project_archive");
+        applyRepoLabels();
         renderProjectSelect();
 
         // Input
@@ -4589,10 +4787,7 @@
             try { localStorage.setItem("nova_project", ""); } catch {}
         }
         sel.value = activeProjectId;
-        const archiveBtn = document.getElementById("archive-project-btn");
-        if (archiveBtn) {
-            archiveBtn.style.display = activeProjectId === "" ? "none" : "";
-        }
+        updateProjectActionButtons();
     }
 
     async function loadProjects() {
@@ -4611,14 +4806,22 @@
         renderProjectSelect();
     }
 
+    // Archive + Dev Workspace buttons only make sense for a real
+    // project. General (activeProjectId === "") hides both so the
+    // pre-projects experience is unchanged.
+    function updateProjectActionButtons() {
+        const show = activeProjectId === "" ? "none" : "";
+        const archiveBtn = document.getElementById("archive-project-btn");
+        if (archiveBtn) archiveBtn.style.display = show;
+        const repoBtn = document.getElementById("repo-settings-btn");
+        if (repoBtn) repoBtn.style.display = show;
+    }
+
     function onProjectChange() {
         const sel = document.getElementById("project-select");
         activeProjectId = sel ? sel.value : "";
         try { localStorage.setItem("nova_project", activeProjectId); } catch {}
-        const archiveBtn = document.getElementById("archive-project-btn");
-        if (archiveBtn) {
-            archiveBtn.style.display = activeProjectId === "" ? "none" : "";
-        }
+        updateProjectActionButtons();
         // Switching workspace starts a fresh, unselected view so the
         // user does not accidentally keep typing into a thread from a
         // different project; the conversation list reloads filtered.
@@ -4670,6 +4873,219 @@
         await loadProjects();
         newConversation();
         loadConversations();
+    }
+
+    // ── DEV WORKSPACE (Phase 1, read-only) ──
+    // A small project-scoped modal: link an absolute local repo path
+    // and observe its Git state. Every dynamic value the server
+    // returns (commit subjects, file paths, the path itself) is
+    // written with textContent, never innerHTML, so a repo with HTML
+    // metacharacters in a commit message can never inject markup.
+
+    function applyRepoLabels() {
+        const set = (id, key) => {
+            const el = document.getElementById(id);
+            if (el) el.textContent = t(key);
+        };
+        set("repo-title", "repo_title");
+        set("repo-intro-text", "repo_intro");
+        set("repo-path-label", "repo_path_label");
+        set("repo-branch-label", "repo_branch");
+        set("repo-state-label", "repo_state");
+        set("repo-commits-label", "repo_commits");
+        set("repo-changed-label", "repo_changed");
+        set("repo-diffstat-label", "repo_diffstat");
+        set("repo-save-btn", "repo_save");
+        set("repo-unlink-btn", "repo_unlink");
+        const input = document.getElementById("repo-path-input");
+        if (input) input.placeholder = t("repo_path_ph");
+        const repoBtn = document.getElementById("repo-settings-btn");
+        if (repoBtn) repoBtn.title = t("repo_settings");
+    }
+
+    function openRepoSettings() {
+        if (activeProjectId === "") return;
+        applyRepoLabels();
+        _repoMsg("", null);
+        document.getElementById("repo-status").style.display = "none";
+        document.getElementById("repo-path-input").value = "";
+        document.getElementById("repo-overlay").classList.add("open");
+        closeSidebar();
+        loadRepoStatus();
+    }
+
+    function closeRepoSettings() {
+        document.getElementById("repo-overlay").classList.remove("open");
+    }
+
+    function handleRepoOverlayClick(e) {
+        if (e.target === document.getElementById("repo-overlay")) {
+            closeRepoSettings();
+        }
+    }
+
+    function _repoMsg(text, kind) {
+        const box = document.getElementById("repo-msg");
+        if (!box) return;
+        if (!text) { box.style.display = "none"; box.textContent = ""; return; }
+        box.textContent = text;
+        box.className = "repo-msg " + (kind === "ok" ? "ok" : "err");
+        box.style.display = "";
+    }
+
+    async function loadRepoStatus() {
+        if (activeProjectId === "") return;
+        let data;
+        try {
+            const res = await fetch(
+                `/projects/${encodeURIComponent(activeProjectId)}/repo/status`,
+                { headers: { "Authorization": `Bearer ${token}` } }
+            );
+            if (res.status === 401) { logout(); return; }
+            if (res.status === 404) { closeRepoSettings(); return; }
+            if (!res.ok) { _repoMsg(t("repo_error"), "err"); return; }
+            data = await res.json();
+        } catch { _repoMsg(t("repo_error"), "err"); return; }
+        renderRepoStatus(data);
+    }
+
+    function _clearList(el) { while (el.firstChild) el.removeChild(el.firstChild); }
+
+    function renderRepoStatus(data) {
+        const statusBox = document.getElementById("repo-status");
+        const unlinkBtn = document.getElementById("repo-unlink-btn");
+        const input = document.getElementById("repo-path-input");
+
+        if (!data || data.linked === false) {
+            statusBox.style.display = "none";
+            unlinkBtn.style.display = "none";
+            if (!input.value) _repoMsg(t("repo_none"), "ok");
+            return;
+        }
+
+        // Linked: show the resolved path + Unlink, then the snapshot.
+        input.value = data.repo_path || "";
+        unlinkBtn.style.display = "";
+
+        const state = data.state || "error";
+        if (state === "disabled") { _repoMsg(t("repo_disabled"), "err"); statusBox.style.display = "none"; return; }
+        if (state === "invalid_path") { _repoMsg((t("repo_invalid") + ": " + (data.detail || "")).trim(), "err"); statusBox.style.display = "none"; return; }
+        if (state === "git_unavailable") { _repoMsg(t("repo_git_missing"), "err"); statusBox.style.display = "none"; return; }
+        if (state === "error") { _repoMsg(t("repo_error"), "err"); statusBox.style.display = "none"; return; }
+
+        // state === "ready"
+        _repoMsg("", null);
+        statusBox.style.display = "";
+
+        document.getElementById("repo-branch-val").textContent =
+            data.branch || "—";
+
+        const badge = document.getElementById("repo-state-badge");
+        if (data.clean) {
+            badge.textContent = t("repo_clean");
+            badge.className = "repo-badge clean";
+        } else {
+            badge.textContent = t("repo_dirty");
+            badge.className = "repo-badge dirty";
+        }
+
+        const commits = Array.isArray(data.recent_commits) ? data.recent_commits : [];
+        const cBlock = document.getElementById("repo-commits-block");
+        const cList = document.getElementById("repo-commits-list");
+        _clearList(cList);
+        if (commits.length) {
+            commits.forEach(line => {
+                const li = document.createElement("li");
+                li.textContent = line;
+                cList.appendChild(li);
+            });
+            cBlock.style.display = "";
+        } else { cBlock.style.display = "none"; }
+
+        const changed = Array.isArray(data.changed_files) ? data.changed_files : [];
+        const fBlock = document.getElementById("repo-changed-block");
+        const fList = document.getElementById("repo-changed-list");
+        _clearList(fList);
+        if (changed.length) {
+            changed.forEach(entry => {
+                const li = document.createElement("li");
+                const code = document.createElement("span");
+                code.className = "repo-changed-code";
+                code.textContent = (entry && entry.status) || "?";
+                const p = document.createElement("span");
+                p.textContent = (entry && entry.path) || "";
+                li.appendChild(code);
+                li.appendChild(p);
+                fList.appendChild(li);
+            });
+            fBlock.style.display = "";
+        } else { fBlock.style.display = "none"; }
+
+        const diff = Array.isArray(data.diff_stat) ? data.diff_stat : [];
+        const dBlock = document.getElementById("repo-diffstat-block");
+        const dPre = document.getElementById("repo-diffstat-pre");
+        if (diff.length) {
+            dPre.textContent = diff.join("\n");
+            dBlock.style.display = "";
+        } else { dBlock.style.display = "none"; }
+    }
+
+    async function saveRepoPath() {
+        if (activeProjectId === "") return;
+        const input = document.getElementById("repo-path-input");
+        const path = input.value.trim();
+        if (!path) { _repoMsg(t("repo_invalid"), "err"); return; }
+        try {
+            const res = await fetch(
+                `/projects/${encodeURIComponent(activeProjectId)}/repo`,
+                {
+                    method: "PUT",
+                    headers: {
+                        "Content-Type": "application/json",
+                        "Authorization": `Bearer ${token}`
+                    },
+                    body: JSON.stringify({ path })
+                }
+            );
+            if (res.status === 401) { logout(); return; }
+            if (res.status === 404) { closeRepoSettings(); return; }
+            if (res.status === 400) {
+                let detail = t("repo_invalid");
+                try { const j = await res.json(); if (j && j.detail) detail = j.detail; } catch {}
+                _repoMsg(detail, "err");
+                return;
+            }
+            if (!res.ok) { _repoMsg(t("repo_error"), "err"); return; }
+        } catch { _repoMsg(t("repo_error"), "err"); return; }
+        _repoMsg(t("repo_saved"), "ok");
+        await loadProjects();
+        await loadRepoStatus();
+    }
+
+    async function unlinkRepo() {
+        if (activeProjectId === "") return;
+        if (!window.confirm(t("repo_unlink_confirm"))) return;
+        try {
+            const res = await fetch(
+                `/projects/${encodeURIComponent(activeProjectId)}/repo`,
+                {
+                    method: "PUT",
+                    headers: {
+                        "Content-Type": "application/json",
+                        "Authorization": `Bearer ${token}`
+                    },
+                    body: JSON.stringify({ path: null })
+                }
+            );
+            if (res.status === 401) { logout(); return; }
+            if (res.status === 404) { closeRepoSettings(); return; }
+            if (!res.ok) { _repoMsg(t("repo_error"), "err"); return; }
+        } catch { _repoMsg(t("repo_error"), "err"); return; }
+        document.getElementById("repo-path-input").value = "";
+        document.getElementById("repo-status").style.display = "none";
+        document.getElementById("repo-unlink-btn").style.display = "none";
+        _repoMsg(t("repo_unlinked"), "ok");
+        await loadProjects();
     }
 
     // ── CONVERSATIONS ──

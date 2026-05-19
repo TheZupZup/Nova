@@ -14,6 +14,40 @@
   `SubscriptableBaseModel` (production) shapes end-to-end.
 
 ### Added
+- Dev Workspace (Phase 1, read-only): a Nova Project can optionally
+  link a local Git checkout so Nova *understands* its state when
+  helping the user code — without modifying anything yet. A new
+  `core/dev_workspace.py` resolves operator-configured allowed roots
+  (`NOVA_DEV_WORKSPACE_ROOTS`, off by default), validates a candidate
+  path hard (absolute, no `~`/`..`/control chars, resolves through
+  symlinks to a directory containing `.git`, refuses `/`, top-level
+  dirs, and broad system paths like `/home` `/mnt` `/etc`, and must
+  resolve *inside* an allowed root — a symlink escaping the root is
+  refused), and exposes read-only Git facts via a frozen allowlist of
+  subcommands only: `status --short`, `branch --show-current`,
+  `log --oneline -n 20`, `diff --stat`, `status --porcelain` (changed
+  files). Every spawn is `shell=False`, timed out, stdin-closed, with
+  `GIT_TERMINAL_PROMPT=0`/`GIT_OPTIONAL_LOCKS=0`; the repo path is the
+  cwd, never an argv element. No commit, push, branch, fetch, clone,
+  remote, file write, sudo, GitHub/Codeberg call, or background scan
+  is reachable, and snapshots never raise or leak secrets/stderr
+  (calm `state`: `ready`/`disabled`/`invalid_path`/`git_unavailable`/
+  `error`). `core/projects.py` gains an idempotent, additive
+  `local_repo_path` column and a user-scoped `set`/`get` (invalid
+  path → `ProjectError`/400, foreign project → 404). Two read-only,
+  user-scoped endpoints: `PUT /projects/{id}/repo` (link/unlink) and
+  `GET /projects/{id}/repo/status`. The project bar gains a `⎇`
+  Dev Workspace panel (linked path, branch, clean/dirty, latest
+  commits, changed files, diff summary; all dynamic git output is
+  rendered via `textContent`, never `innerHTML`). New suite
+  `tests/test_dev_workspace.py` covers path validation, the module
+  safety contract (no `shell=True`, no privilege escalation, no
+  `os.system`, allowlist is read-only and refuses anything else), the
+  git helpers against a real throwaway repo, the projects integration,
+  and the endpoints. Later phases (patch propose → apply →
+  branch/commit → PR draft → optional push) stay behind explicit
+  confirmation and are **not** in Phase 1. See
+  [`docs/dev-workspace.md`](docs/dev-workspace.md).
 - Model provider settings (Phase 1, read-only): a small admin-only
   surface to *see and validate* which model backend Nova is using,
   without adding a runtime. A new `core/provider_status.py` reports the

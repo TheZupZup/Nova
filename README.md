@@ -59,6 +59,13 @@ Shipped today:
   the safety/identity contract and can never override it. The sidebar
   gains a small project selector; nothing else in the UI changes. See
   [docs/projects.md](docs/projects.md).
+- **Dev Workspace (read-only, Phase 1).** A project can optionally
+  link a local Git checkout so Nova *understands* its state — branch,
+  clean/dirty, recent commits, changed files — while helping you code.
+  Opt-in via `NOVA_DEV_WORKSPACE_ROOTS` and strictly read-only: no
+  commit, push, branch, fetch, file writes, sudo, or GitHub/Codeberg
+  calls. Hard path validation keeps links inside an operator-allowed
+  root. See [docs/dev-workspace.md](docs/dev-workspace.md).
 - **Session continuity.** A small, deterministic "continue where we
   left off" summary surfaces recent conversation topics on return.
   Derived from data already in the sidebar, dismissable, never
@@ -862,6 +869,7 @@ All configuration is read from `.env` at startup. Key variables:
 | `NOVA_PASSWORD` | — | Login password for the seeded admin |
 | `NOVA_SECRET_KEY` | — | JWT signing secret |
 | `NOVA_DATA_DIR` | — | Optional absolute path that holds `nova.db`, backups, and reserved subdirectories. Blank = legacy layout (DB next to the checkout). See [`docs/data-directory.md`](docs/data-directory.md), or [`docs/portable-workspace.md`](docs/portable-workspace.md) for a self-contained parent layout that works for both systemd and Docker. |
+| `NOVA_DEV_WORKSPACE_ROOTS` | — | OS-path-separator- or comma-separated absolute directories that may contain repos a Project can link (read-only Phase 1). Blank = the Dev Workspace feature is off. Never set to `/`, `/home`, or a broad system path. See [`docs/dev-workspace.md`](docs/dev-workspace.md). |
 | `OLLAMA_HOST` | `http://localhost:11434` | Ollama API base URL |
 | `NOVA_AUTO_WEB_LEARNING` | `false` | Enable background RSS/web learning |
 | `LOGIN_RATE_LIMIT_MAX` | `5` | Max login attempts per window |
