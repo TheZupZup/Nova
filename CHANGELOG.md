@@ -48,6 +48,31 @@
   branch/commit → PR draft → optional push) stay behind explicit
   confirmation and are **not** in Phase 1. See
   [`docs/dev-workspace.md`](docs/dev-workspace.md).
+- Model provider settings (Phase 2): admin-only **default-model
+  selection**. Admins can now see the models the active provider
+  actually reports and choose which one Nova uses by default, from the
+  UI, without adding a runtime or downloading anything. A new
+  `core/model_settings.py` resolves the default model — the
+  admin-selected one if safely persisted, else `config.MODELS["default"]`
+  — network-free and never raising, so the chat hot path and every
+  existing install (nothing persisted) behave exactly as before. Two
+  admin endpoints expose it: `GET /admin/provider/models` (read-only;
+  reuses the Phase-1 `health()` probe — `client.list()` for Ollama,
+  never a pull or a generation) and `POST /admin/provider/default-model`
+  (validates the chosen model against the active provider's reported
+  list *before* persisting a single host-wide `settings` row; an
+  unreachable provider, an empty/oversized string, or a not-installed
+  model is refused with a sanitised `400` and **nothing is written**).
+  **Settings → Models** gains a *Default model* card (current default,
+  installed-model picker, *Set as default*) next to the Phase-1
+  read-only provider summary. No provider name is ever accepted from
+  the client (`extra="forbid"`; the core never takes one) so provider
+  *selection* stays env-driven and **Ollama remains the default
+  provider**. `code`/`advanced` routing and the *Code*/*Deep* modes are
+  unchanged; `MockProvider` stays test-only. New suites
+  `tests/test_model_settings.py` /
+  `tests/test_provider_default_model_endpoints.py`; see
+  [`docs/model-providers.md`](docs/model-providers.md).
 - Model provider settings (Phase 1, read-only): a small admin-only
   surface to *see and validate* which model backend Nova is using,
   without adding a runtime. A new `core/provider_status.py` reports the

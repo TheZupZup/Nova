@@ -3631,6 +3631,36 @@
                         <div id="settings-provider-test-error" style="color:var(--danger);font-size:0.78rem;margin-top:6px;min-height:0;"></div>
                         <div id="settings-provider-test-result" style="margin-top:8px;"></div>
                     </div>
+
+                    <!--
+                      Default model (admin-only). Lists the models the
+                      active provider actually reports and lets an admin
+                      choose which one Nova uses by default. The chosen
+                      model is validated against the provider's list on
+                      the server before it is persisted; nothing is
+                      pulled or downloaded and the provider itself is
+                      never changed here. Hidden entirely for non-admins
+                      (the endpoints are admin-only and would 403).
+                    -->
+                    <div class="settings-row" id="settings-default-model-row" style="display:none;">
+                        <div class="settings-row-head">
+                            <div class="settings-row-label">
+                                <span class="settings-row-title" id="settings-default-model-title">Default model</span>
+                                <span class="settings-row-hint" id="settings-default-model-hint">The model Nova uses by default for chat. Validated against installed models · admin-only.</span>
+                            </div>
+                            <button class="memory-btn" id="settings-default-model-refresh-btn" onclick="loadDefaultModelCard()" style="white-space:nowrap;">Refresh</button>
+                        </div>
+                        <div id="settings-default-model-summary" style="margin-top:10px;">
+                            <div class="admin-empty">Loading…</div>
+                        </div>
+                        <div id="settings-default-model-picker" style="margin-top:10px;display:none;flex-wrap:wrap;gap:8px;align-items:center;">
+                            <select id="settings-default-model-select"
+                                style="flex:1;min-width:180px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:monospace;font-size:0.8rem;padding:6px 10px;outline:none;box-sizing:border-box;"></select>
+                            <button class="memory-btn" id="settings-default-model-set-btn" onclick="setDefaultModel()" style="white-space:nowrap;">Set as default</button>
+                        </div>
+                        <div id="settings-default-model-error" style="color:var(--danger);font-size:0.78rem;margin-top:6px;min-height:0;"></div>
+                        <div id="settings-default-model-ok" style="color:var(--text-dim);font-size:0.78rem;margin-top:6px;min-height:0;"></div>
+                    </div>
                 </section>
 
                 <!-- ADMIN (admin-only) -->
@@ -8333,11 +8363,13 @@
         document.querySelectorAll(".settings-pane").forEach(p => {
             p.classList.toggle("active", p.id === "settings-pane-" + pane);
         });
-        // The provider summary is admin-only and read-only; refresh it
-        // when the Models pane is shown (the loader self-gates and hides
-        // the row for non-admins, so this is free in the common path).
+        // The provider summary and the default-model picker are
+        // admin-only; refresh them when the Models pane is shown. Both
+        // loaders self-gate and hide their row for non-admins, so this
+        // is free in the common path.
         if (pane === "models") {
             loadModelsProviderCard().catch(() => {});
+            loadDefaultModelCard().catch(() => {});
         }
     }
 
@@ -10181,6 +10213,175 @@
             if (resEl) resEl.innerHTML = _providerHealthHtml(await res.json());
         } catch (e) {
             if (errEl) errEl.textContent = "Network error while testing the provider connection.";
+        } finally {
+            btn.disabled = false;
+            btn.textContent = original;
+        }
+    }
+
+    // ── Settings → Models: default-model picker (admin-only) ──────
+    //
+    // Lists the models the active provider actually reports and lets an
+    // admin choose Nova's default. Admin-gated on the client (the row
+    // is hidden for non-admins) and on the server (the endpoints are
+    // require_admin). The server validates the chosen model against the
+    // provider's reported list before persisting — nothing is pulled,
+    // downloaded, or generated, and the provider itself is unchanged.
+    async function loadDefaultModelCard() {
+        const row = document.getElementById("settings-default-model-row");
+        if (!row) return;
+        const isAdmin = !!(currentUser && currentUser.role === "admin");
+        if (!isAdmin) { row.style.display = "none"; return; }
+        row.style.display = "";
+        const summary = document.getElementById("settings-default-model-summary");
+        const picker = document.getElementById("settings-default-model-picker");
+        const errEl = document.getElementById("settings-default-model-error");
+        const okEl = document.getElementById("settings-default-model-ok");
+        if (errEl) errEl.textContent = "";
+        if (okEl) okEl.textContent = "";
+        if (picker) picker.style.display = "none";
+        if (summary) summary.innerHTML = '<div class="admin-empty">Loading…</div>';
+        try {
+            const res = await fetch("/admin/provider/models", {
+                headers: { "Authorization": `Bearer ${token}` }
+            });
+            if (res.status === 401) { logout(); return; }
+            if (res.status === 403) { row.style.display = "none"; return; }
+            if (!res.ok) {
+                if (summary) summary.innerHTML = '<div class="admin-empty">Failed to load models.</div>';
+                return;
+            }
+            renderDefaultModelCard(await res.json());
+        } catch (e) {
+            if (summary) summary.innerHTML = '<div class="admin-empty">Failed to load models.</div>';
+        }
+    }
+
+    function renderDefaultModelCard(data) {
+        const summary = document.getElementById("settings-default-model-summary");
+        const picker = document.getElementById("settings-default-model-picker");
+        const select = document.getElementById("settings-default-model-select");
+        const setBtn = document.getElementById("settings-default-model-set-btn");
+        if (!summary || !picker || !select) return;
+        const models = Array.isArray(data.models) ? data.models : [];
+        const current = data.default_model || "—";
+        const configDefault = data.config_default_model || "—";
+        const sourceTag = data.is_custom
+            ? `<span class="admin-tag installed">custom</span>`
+            : `<span class="admin-tag">config default</span>`;
+        const parts = [];
+        parts.push(
+            `<div class="admin-model-row">` +
+            `<div class="admin-model-head">` +
+            `<span class="admin-model-display">current default model</span>` +
+            sourceTag +
+            `</div>` +
+            `<div class="admin-model-name">${escapeHtml(current)}</div>` +
+            `<div class="admin-progress-meta">compiled-in default: <code>${escapeHtml(configDefault)}</code> · provider: <code>${escapeHtml(data.provider || "unknown")}</code></div>` +
+            `</div>`
+        );
+        if (!data.ok) {
+            // Provider unreachable: show a calm message and a sanitised
+            // detail (the provider's own short health string). The
+            // picker stays hidden — we cannot validate a choice while
+            // the provider's model list is unknown.
+            parts.push(
+                `<div class="admin-warning error">` +
+                `<span class="admin-warning-level">error</span>` +
+                `<span class="admin-warning-msg">The active model provider is unreachable, so its installed models can't be listed. The default model can't be changed until it is reachable again.</span>` +
+                `</div>`
+            );
+            if (data.detail) {
+                parts.push(
+                    `<div class="admin-progress-meta">detail: <code>${escapeHtml(data.detail)}</code></div>`
+                );
+            }
+            summary.innerHTML = parts.join("");
+            picker.style.display = "none";
+            return;
+        }
+        if (!models.length) {
+            parts.push(
+                `<div class="admin-warning info">` +
+                `<span class="admin-warning-level">info</span>` +
+                `<span class="admin-warning-msg">The provider is reachable but reports no installed models. Install a model with the provider, then refresh.</span>` +
+                `</div>`
+            );
+            summary.innerHTML = parts.join("");
+            picker.style.display = "none";
+            return;
+        }
+        summary.innerHTML = parts.join("");
+        // Populate the picker; pre-select the current default when it is
+        // one of the installed models so "Set as default" is a no-op
+        // until the admin actually changes the selection.
+        select.innerHTML = models
+            .map(m => `<option value="${escapeHtml(m)}"${m === data.default_model ? " selected" : ""}>${escapeHtml(m)}</option>`)
+            .join("");
+        if (setBtn) setBtn.disabled = false;
+        picker.style.display = "flex";
+    }
+
+    async function setDefaultModel() {
+        const select = document.getElementById("settings-default-model-select");
+        const btn = document.getElementById("settings-default-model-set-btn");
+        const errEl = document.getElementById("settings-default-model-error");
+        const okEl = document.getElementById("settings-default-model-ok");
+        if (errEl) errEl.textContent = "";
+        if (okEl) okEl.textContent = "";
+        if (!select || !btn) return;
+        const model = select.value;
+        if (!model) {
+            if (errEl) errEl.textContent = "Choose a model first.";
+            return;
+        }
+        // Host-wide change: this becomes the default chat model for
+        // every user, so require an explicit confirmation before the
+        // (validated) write. A stray click cannot change it silently.
+        if (!confirm(
+            `Set "${model}" as Nova's default model for everyone?\n\n` +
+            `This changes the default chat model host-wide. ` +
+            `Code/Deep modes and per-user overrides are unaffected. ` +
+            `It is validated against the provider's installed models ` +
+            `before saving.`
+        )) {
+            return;
+        }
+        const original = btn.textContent;
+        btn.disabled = true;
+        btn.textContent = "Saving…";
+        try {
+            const res = await fetch("/admin/provider/default-model", {
+                method: "POST",
+                headers: {
+                    "Authorization": `Bearer ${token}`,
+                    "Content-Type": "application/json",
+                },
+                body: JSON.stringify({ model }),
+            });
+            if (res.status === 401) { logout(); return; }
+            if (res.status === 403) {
+                if (errEl) errEl.textContent = "Access denied.";
+                return;
+            }
+            if (!res.ok) {
+                let detail = `Failed (${res.status})`;
+                try {
+                    const b = await res.json();
+                    if (b && b.detail) detail = b.detail;
+                } catch (_) { /* ignore */ }
+                if (errEl) errEl.textContent = detail;
+                return;
+            }
+            const body = await res.json();
+            if (okEl) {
+                okEl.textContent = `Nova's default model is now "${body.default_model}".`;
+            }
+            // Reload so the summary, the "custom" tag, and the
+            // pre-selected option reflect the persisted state.
+            loadDefaultModelCard().catch(() => {});
+        } catch (e) {
+            if (errEl) errEl.textContent = "Network error while saving the default model.";
         } finally {
             btn.disabled = false;
             btn.textContent = original;

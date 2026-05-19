@@ -71,6 +71,7 @@ from core.security import SilentGuardProvider as _SilentGuardProvider
 from core import maintenance as _maintenance
 from core import storage_status as _storage_status
 from core import provider_status as _provider_status
+from core import model_settings as _model_settings
 from core import data_export as _data_export
 from core import voice as _voice
 import sqlite3 as _sqlite3
@@ -917,6 +918,15 @@ def _resolve_forced_model(request: ChatRequest, user: CurrentUser) -> str | None
         return get_user_setting(
             user.id, "nova_model_name", NOVA_MODEL_DEFAULT_NAME
         )
+    # The explicit "chat" mode *is* Nova's default model, so it follows
+    # the admin-selected default (validated + persisted in Settings →
+    # Models) instead of the static MODE_MAP entry. `code`/`deep` keep
+    # their dedicated config models; an unknown / auto mode returns None
+    # so `core.router.route` decides (it applies the same default). With
+    # nothing persisted this resolves to `config.MODELS["default"]`, so
+    # existing behaviour is unchanged.
+    if request.mode == "chat":
+        return _model_settings.resolve_default_model()
     return MODE_MAP.get(request.mode)
 
 
@@ -3045,6 +3055,63 @@ def provider_test_connection_endpoint(
     maintenance / storage endpoints.
     """
     return _provider_status.probe_provider_health()
+
+
+# ── ADMIN: DEFAULT MODEL SELECTION (Phase 2) ──────────────────────────
+# Lets an admin see the models the active provider actually reports and
+# choose which one Nova uses by default. Both endpoints are
+# ``require_admin`` (model names and the provider state are
+# operator-sensitive). Safety, enforced in ``core.model_settings``:
+#
+#   * listing is read-only — it reuses the Phase-1 ``health()`` probe
+#     (``client.list()`` for Ollama; never a pull or a generation);
+#   * the chosen model is validated against the active provider's
+#     reported list *before* it is persisted — an unreachable provider,
+#     an empty/oversized string, or a model the provider does not list
+#     is refused and nothing is written;
+#   * no provider name is accepted from the client — the provider is
+#     always the configured one, so a stray/unknown backend can never
+#     be selected here;
+#   * the value is a single host-wide ``settings`` row, never per-user,
+#     and never reachable through the generic ``/settings`` path.
+
+
+@app.get("/admin/provider/models")
+def provider_models_endpoint(_: CurrentUser = Depends(require_admin)):
+    """Read-only: models the active provider reports + the current default.
+
+    Returns ``{ok, provider, detail, models, default_model,
+    config_default_model, is_custom}``. An unreachable provider is a
+    calm 200 with ``ok=false`` and an empty ``models`` list — never a
+    500. Nothing is written, pulled, generated, or restarted.
+    """
+    return _model_settings.list_available_models()
+
+
+class SetDefaultModelRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    model: str = Field(min_length=1, max_length=_model_settings.MAX_MODEL_NAME_LEN)
+
+
+@app.post("/admin/provider/default-model")
+def provider_set_default_model_endpoint(
+    req: SetDefaultModelRequest,
+    _: CurrentUser = Depends(require_admin),
+):
+    """Validate the chosen model against the active provider, then persist.
+
+    The model must appear in the active provider's currently-reported
+    model list; the provider is always the configured backend (no
+    provider name is accepted). On success the host-wide default is
+    updated and the new state is returned. A refusal (provider
+    unreachable, or the model is not installed on the provider) is a
+    400 with a short, sanitised message — no raw transport detail, no
+    host — and **nothing is written**.
+    """
+    try:
+        return _model_settings.set_default_model(req.model)
+    except _model_settings.DefaultModelError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 @app.get("/channel")
