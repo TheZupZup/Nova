@@ -88,17 +88,18 @@ behaves exactly as before.
 
 Phase 1 of provider *settings* adds a small admin-only surface so an
 operator can answer two questions without reading logs or env files —
-**which backend is Nova configured to use**, and **does it actually
-answer right now**. It changes nothing: provider selection stays
-env-driven (`NOVA_MODEL_PROVIDER`), Ollama stays the default, and
-nothing is written, migrated, pulled, or restarted.
+**which backend is Nova configured to use** (and which model it asks
+for), and **does it actually answer right now**. It changes nothing:
+provider selection stays env-driven (`NOVA_MODEL_PROVIDER`), Ollama
+stays the default, and nothing is written, migrated, pulled, or
+restarted.
 
 `core/provider_status.py` is the calm, read-only foundation, mirroring
 `core/storage_status.py`:
 
 | Function | Role |
 | --- | --- |
-| `get_provider_status()` | Configured provider, the default (always `ollama`), the resolved active backend, the selectable providers, the redacted Ollama host, and warnings. Never reaches the network; never raises — an unknown configured provider is an `error` string, not an exception. |
+| `get_provider_status()` | Configured provider, the default (always `ollama`), the resolved active backend, the selectable providers, the redacted Ollama host, Nova's default chat model (`config.MODELS["default"]`, host-level and non-secret), whether the backend supports streaming, and warnings. Never reaches the network; never raises — an unknown configured provider is an `error` string, not an exception, and a missing default model degrades to `""`, never a failure. |
 | `probe_provider_health(name=None)` | A live but cheap, read-only liveness probe. Delegates to the provider's own `health()` (`client.list()` for Ollama — never a pull, never a generation) and always returns the stable `{ok, provider, detail, models}` shape, even for an unreachable or unknown backend. |
 
 Two admin-only endpoints expose it (both `require_admin`; the provider
@@ -110,9 +111,24 @@ name and host are operator-sensitive):
   never cached; it needs no confirmation because it cannot modify
   anything (mirrors `/admin/maintenance/fetch`).
 
-The admin panel gains a **Provider** tab rendering the snapshot, the
-redacted host, the registered providers, and a **Test provider
-connection** button that surfaces health and errors clearly.
+Two places render this, both admin-only on the client *and* the server
+(the row/tab is hidden for non-admins and the endpoints are
+`require_admin`):
+
+- **Settings → Models** shows a calm summary an admin sees where they
+  already look for model settings: the active provider and its state
+  (default / non-default / not-registered), the current/default model,
+  whether streaming is supported, the redacted Ollama host, and a
+  **Test connection** button with a clear success/failure message. To
+  check provider health, open **Settings → Models** and click **Test
+  connection** — it runs the cheap, read-only liveness probe (for
+  Ollama: lists installed models; never a pull, never a generation).
+- **Admin → Provider** keeps the deeper view: the same snapshot plus
+  the registered/selectable providers, the test-only backends, every
+  warning, and its own **Test provider connection** button.
+
+Both reuse the same `/admin/provider/*` endpoints, so the success and
+failure language is identical wherever an admin runs the probe.
 
 Guardrails baked into this surface:
 

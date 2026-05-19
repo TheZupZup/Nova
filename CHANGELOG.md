@@ -34,6 +34,23 @@
   memory/projects/storage changes. New suites
   `tests/test_provider_status.py` / `tests/test_provider_endpoints.py`;
   see [`docs/model-providers.md`](docs/model-providers.md).
+- Model provider in Settings → Models (Phase 1 UI, read-only,
+  admin-only): the active model provider is now visible and testable
+  where users actually look for model settings, not just in the deep
+  Admin → Provider tab. The status snapshot now also reports Nova's
+  default chat model (`config.MODELS["default"]` — host-level,
+  non-secret; a missing default degrades to `""`, never an error) and
+  whether the resolved backend supports streaming. A new admin-only
+  card in **Settings → Models** shows the active provider and its
+  state, the current/default model, the streaming flag, the redacted
+  Ollama host, and a **Test connection** button with a clear
+  success/failure message; the row is hidden entirely for non-admins
+  and the endpoints stay `require_admin`. Reuses the existing
+  `/admin/provider/status` and `/admin/provider/test-connection`
+  endpoints — nothing new is written, pulled, restarted, or
+  generated, Ollama stays the default, and `MockProvider` stays
+  test-only. No new runtime, no model downloads, no cloud provider,
+  no API keys; chat/memory/projects/storage behaviour is unchanged.
 - Model-provider abstraction (Phase: provider abstraction only): Nova
   is no longer architecturally hardwired to Ollama. A new
   `core/model_providers` package introduces a backend-agnostic

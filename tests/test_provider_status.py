@@ -125,6 +125,55 @@ class TestStatusDefault:
         assert parsed["default_provider"] == "ollama"
         assert isinstance(parsed["selectable_providers"], list)
         assert isinstance(parsed["warnings"], list)
+        assert isinstance(parsed["current_model"], str)
+        assert isinstance(parsed["supports_streaming"], bool)
+
+
+# ── current_model / supports_streaming ──────────────────────────────
+
+
+class TestStatusModelAndStreaming:
+    """The Phase-1 settings UI surfaces the default model and whether
+    the backend can stream. Both are read-only, host-level, non-secret
+    facts derived without touching the network."""
+
+    def test_current_model_is_the_configured_default(self, monkeypatch):
+        monkeypatch.setattr("config.MODEL_PROVIDER", "ollama")
+        monkeypatch.setattr(
+            "config.MODELS", {"default": "test-model-x", "router": "r"},
+        )
+        status = ps.get_provider_status()
+        assert status.current_model == "test-model-x"
+
+    def test_missing_default_model_is_empty_not_an_error(self, monkeypatch):
+        # An absent "default" key must degrade to "" calmly — a model
+        # name is informational, never a reason to fail the status read.
+        monkeypatch.setattr("config.MODEL_PROVIDER", "ollama")
+        monkeypatch.setattr("config.MODELS", {"router": "r"})
+        status = ps.get_provider_status()
+        assert status.current_model == ""
+        assert status.error == ""
+
+    def test_resolvable_provider_reports_streaming_true(self, monkeypatch):
+        # Ollama (the default) resolves without network I/O and
+        # implements ``stream`` by contract.
+        monkeypatch.setattr("config.MODEL_PROVIDER", "ollama")
+        status = ps.get_provider_status()
+        assert status.active_provider == "ollama"
+        assert status.supports_streaming is True
+
+    def test_unknown_provider_does_not_claim_streaming(self, monkeypatch):
+        monkeypatch.setattr("config.MODEL_PROVIDER", "does-not-exist")
+        status = ps.get_provider_status()
+        assert status.active_provider is None
+        assert status.supports_streaming is False
+
+    def test_mock_override_supports_streaming(self):
+        from core.model_providers import set_override
+
+        set_override(MockProvider(healthy=True))
+        status = ps.get_provider_status()
+        assert status.supports_streaming is True
 
 
 # ── get_provider_status: test-only mock configured ──────────────────
