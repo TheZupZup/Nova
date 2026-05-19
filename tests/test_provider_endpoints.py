@@ -179,6 +179,10 @@ class TestStatusEndpoint:
         assert "ollama" in body["selectable_providers"]
         assert isinstance(body["warnings"], list)
         assert body["error"] == ""
+        # Phase-1 settings UI fields: default chat model + streaming.
+        assert isinstance(body["current_model"], str)
+        assert isinstance(body["supports_streaming"], bool)
+        assert body["supports_streaming"] is True
 
     def test_status_unknown_provider_is_calm_200(
         self, web_client, admin_token, monkeypatch,

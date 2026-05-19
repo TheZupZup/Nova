@@ -2947,8 +2947,9 @@ def provider_status_endpoint(_: CurrentUser = Depends(require_admin)):
 
     Returns the configured provider, the default (always Ollama),
     whether they match, the selectable providers (test-only backends
-    filtered out), the redacted Ollama host, and any warnings — for
-    example when the configured provider is unknown or is the
+    filtered out), the redacted Ollama host, Nova's default chat
+    model, whether the backend supports streaming, and any warnings —
+    for example when the configured provider is unknown or is the
     test-only mock. Never reaches the network.
     """
     return _provider_status.get_provider_status().as_dict()

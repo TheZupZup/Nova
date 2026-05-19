@@ -116,6 +116,14 @@ class ProviderStatus:
       for transparency so the UI can label them clearly.
     * ``ollama_host`` — the configured Ollama host with any userinfo
       redacted (informational; Ollama is the default backend).
+    * ``current_model`` — Nova's default chat model (``config.MODELS
+      ["default"]``); the model the backend is asked for unless a
+      per-mode/route override applies. Host-level config, never a
+      secret. ``""`` if it cannot be read.
+    * ``supports_streaming`` — whether the resolved provider exposes a
+      streaming generation path. Every provider implements ``stream``
+      by contract, so this is ``True`` for any resolvable backend and
+      ``False`` only when the configured provider cannot be resolved.
     * ``error`` — a short message when the configured provider is not
       registered, else ``""``.
     * ``warnings`` — human-readable messages the UI renders verbatim.
@@ -128,6 +136,8 @@ class ProviderStatus:
     selectable_providers: tuple[str, ...]
     test_only_providers: tuple[str, ...]
     ollama_host: str
+    current_model: str = ""
+    supports_streaming: bool = False
     error: str = ""
     warnings: tuple[str, ...] = field(default_factory=tuple)
 
@@ -140,6 +150,8 @@ class ProviderStatus:
             "selectable_providers": list(self.selectable_providers),
             "test_only_providers": list(self.test_only_providers),
             "ollama_host": self.ollama_host,
+            "current_model": self.current_model,
+            "supports_streaming": self.supports_streaming,
             "error": self.error,
             "warnings": list(self.warnings),
         }
@@ -161,7 +173,7 @@ def get_provider_status() -> ProviderStatus:
     dependency and tests can monkeypatch ``config.MODEL_PROVIDER`` /
     the registry before the first call.
     """
-    from config import MODEL_PROVIDER, OLLAMA_HOST
+    from config import MODEL_PROVIDER, MODELS, OLLAMA_HOST
     from core.model_providers import (
         ModelProviderError,
         available_providers,
@@ -174,6 +186,16 @@ def get_provider_status() -> ProviderStatus:
     )
     is_default = configured == DEFAULT_PROVIDER
 
+    # Nova's default chat model. Host-level config (never per-user, never
+    # a secret); surfaced so the UI can show "what the backend is asked
+    # for" without the operator grepping config. Best-effort: a missing
+    # / oddly-shaped MODELS must not turn this read-only call into a 500.
+    try:
+        current_model = str((MODELS or {}).get("default", "") or "")
+    except Exception as exc:  # pragma: no cover - config is stable
+        logger.warning("provider status: default model lookup failed: %s", exc)
+        current_model = ""
+
     try:
         names = list(available_providers())
     except Exception as exc:  # pragma: no cover - registry is in-memory
@@ -185,8 +207,15 @@ def get_provider_status() -> ProviderStatus:
 
     error = ""
     active: Optional[str] = None
+    supports_streaming = False
     try:
-        active = get_provider().name
+        provider = get_provider()
+        active = provider.name
+        # Every ModelProvider implements ``stream`` by contract, so a
+        # resolvable backend always supports streaming. We duck-type
+        # rather than assume so a hypothetical non-conforming provider
+        # is reported honestly instead of optimistically.
+        supports_streaming = callable(getattr(provider, "stream", None))
     except ModelProviderError as exc:
         error = str(exc) or f"unknown model provider {configured!r}"
     except Exception as exc:  # never raise into the caller
@@ -223,6 +252,8 @@ def get_provider_status() -> ProviderStatus:
         selectable_providers=selectable,
         test_only_providers=test_only,
         ollama_host=_redact_userinfo((OLLAMA_HOST or "").strip()),
+        current_model=current_model,
+        supports_streaming=supports_streaming,
         error=error,
         warnings=tuple(warnings),
     )
