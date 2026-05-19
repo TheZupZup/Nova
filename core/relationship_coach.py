@@ -63,30 +63,32 @@ _COACH_TRIGGERS: tuple[str, ...] = (
     "my husband", "my spouse", "my fiancé", "my fiancee", "my fiancée",
     "my relationship", "our relationship", "my marriage",
     "in my couple", "with my partner",
-    # English — situation phrasing
+    # English — situation phrasing. Every entry carries a relationship
+    # anchor ("relationship", "my partner") or names the user as half
+    # of the pair ("we …"). Anchor-less phrases like "she got upset",
+    # "respond to her", or "text him back" were intentionally removed:
+    # they match coworker / client / family conflicts just as well and
+    # would break the conservative-detection contract above.
     "we had a fight", "we had an argument", "we argued",
-    "got into a fight", "got into an argument",
     "relationship advice", "relationship tension", "relationship problem",
-    "how do i respond to her", "how do i respond to him",
-    "how should i reply to her", "how should i reply to him",
     "how do i tell my partner", "how to talk to my partner",
-    "should i text her back", "should i text him back",
-    "she got upset", "he got upset", "she's upset with me",
-    "he's upset with me", "they got upset with me",
     # French — partner / relationship anchors
     "ma copine", "mon copain", "ma compagne", "mon compagnon",
     "ma femme", "mon mari", "mon époux", "mon épouse",
     "ma relation", "notre relation", "mon couple", "dans mon couple",
     "ma partenaire", "mon ou ma partenaire",
-    # French — situation phrasing
+    # French — situation phrasing (same rule: anchored, or names the
+    # user as half of the pair via "on s'est …"). Generic third-person
+    # phrases ("elle est fâchée contre moi", "il m'en veut", "une
+    # dispute avec") were removed for the same reason as the English
+    # ones.
     "on s'est disputé", "on s'est disputés", "on s'est disputée",
-    "on s'est engueulé", "une dispute avec", "tension dans mon couple",
+    "on s'est engueulé", "tension dans mon couple",
     "tension dans ma relation", "conseil relationnel",
     "comment répondre à ma copine", "comment répondre à mon copain",
     "comment répondre à ma compagne", "comment répondre à mon compagnon",
-    "comment lui répondre sans", "comment parler à mon ou ma partenaire",
-    "comment dire à mon ou ma partenaire", "elle est fâchée contre moi",
-    "il est fâché contre moi", "elle m'en veut", "il m'en veut",
+    "comment parler à mon ou ma partenaire",
+    "comment dire à mon ou ma partenaire",
 )
 
 

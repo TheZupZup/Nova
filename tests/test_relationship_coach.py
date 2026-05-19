@@ -72,6 +72,21 @@ class TestDetection:
             "how should i reply to this email from a client?"
         )
 
+    def test_does_not_trip_on_non_romantic_conflicts(self):
+        # Anchor-less phrases were removed: coworker / client / family
+        # conflicts must not be silently reframed as relationship
+        # coaching (Codex review P2).
+        assert not is_relationship_coach_query(
+            "my client got upset with me about the invoice"
+        )
+        assert not is_relationship_coach_query(
+            "my coworker got upset, how do i respond to her?"
+        )
+        assert not is_relationship_coach_query("should i text him back?")
+        assert not is_relationship_coach_query(
+            "mon collègue m'en veut après une dispute avec lui au bureau"
+        )
+
     def test_non_string_is_false(self):
         assert is_relationship_coach_query(None) is False
         assert is_relationship_coach_query(123) is False
@@ -232,3 +247,26 @@ class TestAutosaveGuard:
 
     def test_none_message_is_safe(self):
         assert _autosave_allowed(ADMIN_POLICY, None) is True
+
+    def test_blocks_when_assistant_reply_is_sensitive(self):
+        # Codex review P1: the LLM autosave path mines BOTH the user
+        # message and the assistant reply, so a neutral follow-up whose
+        # reply restates relationship context must still be blocked.
+        assert _autosave_allowed(
+            ADMIN_POLICY,
+            "ok thanks, what should i focus on at work today?",
+            "Earlier you mentioned your girlfriend was upset; setting "
+            "that aside, for work you could...",
+        ) is False
+
+    def test_allows_when_both_user_and_reply_are_neutral(self):
+        assert _autosave_allowed(
+            ADMIN_POLICY,
+            "I use neovim",
+            "Great — neovim is a solid choice for that workflow.",
+        ) is True
+
+    def test_reply_arg_is_optional(self):
+        # Backward-compatible default: callers that pass only the user
+        # message still work and only gate on it.
+        assert _autosave_allowed(ADMIN_POLICY, "I use Fedora") is True

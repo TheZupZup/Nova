@@ -150,18 +150,31 @@ def extract_and_save_memory(
     parse_and_save(result, user_id, project_id)
 
 
-def _autosave_allowed(policy: Policy, user_message: str | None) -> bool:
+def _autosave_allowed(
+    policy: Policy,
+    user_message: str | None,
+    assistant_reply: str | None = None,
+) -> bool:
     """Whether this turn may be auto-mined for memory.
 
-    Automatic extraction is skipped when the user message carries
-    sensitive relationship detail: Nova must never silently persist who
-    the user is dating, fighting with, or breaking up with. The user can
-    still save such a fact deliberately — the manual memory command runs
-    in the web preflight, well before this path, so it is unaffected.
+    Automatic extraction is skipped when *either* the user message or
+    the assistant reply carries sensitive relationship detail: Nova must
+    never silently persist who the user is dating, fighting with, or
+    breaking up with. The reply is checked too because the LLM autosave
+    path (``extract_and_save_memory``) builds its extraction prompt from
+    *both* the user text and the assistant answer — gating on the user
+    message alone would leak relationship context that the assistant
+    restated on an otherwise-neutral follow-up turn.
+
+    The user can still save such a fact deliberately — the manual memory
+    command runs in the web preflight, well before this path, so it is
+    unaffected.
     """
     if not policy.memory_save_enabled:
         return False
-    return not is_sensitive_relationship_content(user_message or "")
+    if is_sensitive_relationship_content(user_message or ""):
+        return False
+    return not is_sensitive_relationship_content(assistant_reply or "")
 
 
 def build_messages(
@@ -275,7 +288,7 @@ def chat(history: list[dict], user_input: str, memories: list[dict], user_id: in
             messages = build_image_messages(user_input, image)
             default_model = resolve_default_model()
             reply = _generate(default_model, messages)
-            if _autosave_allowed(policy, user_input):
+            if _autosave_allowed(policy, user_input, reply):
                 extract_and_save_memory(
                     user_input or "image", reply, user_id, project_id
                 )
@@ -364,7 +377,7 @@ def chat(history: list[dict], user_input: str, memories: list[dict], user_id: in
                 )
                 reply = _generate(model, messages)
 
-        if _autosave_allowed(policy, user_input):
+        if _autosave_allowed(policy, user_input, reply):
             extract_and_save_memory(user_input, reply, user_id, project_id)
             _extract_and_save_natural_memories(
                 user_input, user_id, project_id
@@ -419,7 +432,7 @@ def chat_stream(
             messages = build_image_messages(user_input, image)
             default_model = resolve_default_model()
             reply = _generate(default_model, messages)
-            if _autosave_allowed(policy, user_input):
+            if _autosave_allowed(policy, user_input, reply):
                 extract_and_save_memory(
                     user_input or "image", reply, user_id, project_id
                 )
@@ -519,7 +532,7 @@ def chat_stream(
                 )
                 reply = yield from _stream_and_accumulate(model, messages)
 
-        if _autosave_allowed(policy, user_input):
+        if _autosave_allowed(policy, user_input, reply):
             extract_and_save_memory(user_input, reply, user_id, project_id)
             _extract_and_save_natural_memories(
                 user_input, user_id, project_id
