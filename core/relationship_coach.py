@@ -65,13 +65,14 @@ _COACH_TRIGGERS: tuple[str, ...] = (
     "my husband", "my spouse", "my fiance", "my fiancé", "my fiancée",
     "my relationship", "our relationship", "my marriage",
     "in my couple", "with my partner",
-    # English — situation phrasing. Every entry carries a relationship
-    # anchor ("relationship", "my partner") or names the user as half
-    # of the pair ("we …"). Anchor-less phrases like "she got upset",
-    # "respond to her", or "text him back" were intentionally removed:
-    # they match coworker / client / family conflicts just as well and
-    # would break the conservative-detection contract above.
-    "we had a fight", "we had an argument", "we argued",
+    # English — situation phrasing. Every entry names a relationship
+    # explicitly ("relationship", "my partner"). Bare conflict phrases
+    # ("we argued", "we had a fight/argument") and anchor-less phrases
+    # ("she got upset", "respond to her", "text him back") were removed:
+    # a work team is also a "we", so they match coworker / project /
+    # family disputes and would break the conservative-detection
+    # contract above. A relationship argument still triggers via its
+    # partner anchor ("my girlfriend and I had a fight").
     "relationship advice", "relationship tension", "relationship problem",
     "how do i tell my partner", "how to talk to my partner",
     # French — partner / relationship anchors
@@ -79,13 +80,12 @@ _COACH_TRIGGERS: tuple[str, ...] = (
     "ma femme", "mon mari", "mon époux", "mon épouse",
     "ma relation", "notre relation", "mon couple", "dans mon couple",
     "ma partenaire", "mon ou ma partenaire",
-    # French — situation phrasing (same rule: anchored, or names the
-    # user as half of the pair via "on s'est …"). Generic third-person
-    # phrases ("elle est fâchée contre moi", "il m'en veut", "une
-    # dispute avec") were removed for the same reason as the English
-    # ones.
-    "on s'est disputé", "on s'est disputés", "on s'est disputée",
-    "on s'est engueulé", "tension dans mon couple",
+    # French — situation phrasing (same rule: every entry names a
+    # relationship). Bare conflict phrases ("on s'est disputé/engueulé"
+    # — "we argued", a work "on" too) and generic third-person ones
+    # ("elle est fâchée contre moi", "il m'en veut", "une dispute
+    # avec") were removed for the same reason as the English ones.
+    "tension dans mon couple",
     "tension dans ma relation", "conseil relationnel",
     "comment répondre à ma copine", "comment répondre à mon copain",
     "comment répondre à ma compagne", "comment répondre à mon compagnon",
@@ -126,8 +126,12 @@ _SENSITIVE_RELATIONSHIP_PATTERNS: tuple[str, ...] = (
     "fiance", "fiancé", "fiancée",
     "marriage", "married", "divorce", "breakup", "broke up", "break up",
     "cheated on", "cheating on", "infidelity", "in love with",
+    # NB: bare conflict phrases ("we argued", "we had a fight/argument")
+    # are deliberately NOT here — they are common in work / project
+    # contexts, so matching them would make the gate over-block
+    # legitimate non-relationship memory. A relationship argument is
+    # still caught via a partner noun ("my wife and I had a fight").
     "my relationship", "our relationship", "my marriage", "my couple",
-    "we argued", "we had a fight", "we had an argument",
     "we slept together", "relationship problem", "relationship tension",
     # French
     "copine", "copain", "compagne", "compagnon", "petite amie",

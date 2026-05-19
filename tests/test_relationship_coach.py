@@ -92,6 +92,27 @@ class TestDetection:
             "mon collègue m'en veut après une dispute avec lui au bureau"
         )
 
+    def test_bare_conflict_phrases_do_not_trigger(self):
+        # Codex review P2 (round 5): "we argued" / "we had a fight" are
+        # common in work/project contexts and must not reframe a normal
+        # support request as relationship coaching.
+        assert not is_relationship_coach_query(
+            "we argued about the database schema at standup"
+        )
+        assert not is_relationship_coach_query(
+            "the team and i had a fight over priorities"
+        )
+        assert not is_relationship_coach_query(
+            "on s'est disputé au boulot avec un collègue"
+        )
+
+    def test_relationship_argument_still_triggers_via_anchor(self):
+        # Removing the bare phrases must not regress the core use case:
+        # a relationship argument still triggers through its anchor.
+        assert is_relationship_coach_query(
+            "my girlfriend and i had a fight, how do i respond?"
+        )
+
     def test_non_string_is_false(self):
         assert is_relationship_coach_query(None) is False
         assert is_relationship_coach_query(123) is False
@@ -168,6 +189,20 @@ class TestSensitiveContentGate:
             "une femme a posé une question",
         ):
             assert not is_sensitive_relationship_content(text), text
+
+    def test_bare_conflict_phrases_are_not_sensitive(self):
+        # Codex review P1 (round 5): generic dispute phrases must not
+        # make the gate over-block legitimate non-relationship memory.
+        assert not is_sensitive_relationship_content(
+            "we argued about the API design and chose REST"
+        )
+        assert not is_sensitive_relationship_content(
+            "we had a fight over the deployment window"
+        )
+        # …but a relationship argument is still caught via the anchor.
+        assert is_sensitive_relationship_content(
+            "my wife and I had a fight about money"
+        )
 
     def test_ignores_non_relationship_text(self):
         assert not is_sensitive_relationship_content(
@@ -286,6 +321,14 @@ class TestMemoryPolicyHardening:
             _mem(kind="project", content="User has a business partner named Sam.")
         ) is True
 
+    def test_allows_work_dispute_memory(self):
+        # Codex review P1 (round 5): a generic work argument is a valid
+        # durable memory and must not be rejected by the gate.
+        assert is_memory_allowed(
+            _mem(kind="project",
+                 content="Team argued about the API and chose REST.")
+        ) is True
+
 
 class TestChatWiring:
     def test_block_injected_for_coach_query(self):
@@ -390,4 +433,13 @@ class TestAutosaveGuard:
             ADMIN_POLICY,
             "who should I loop in?",
             "Loop in your business partner and the design lead.",
+        ) is True
+
+    def test_allows_autosave_for_work_argument_turn(self):
+        # Codex review P1 (round 5): a work dispute must not suppress
+        # auto-memory for the whole turn.
+        assert _autosave_allowed(
+            ADMIN_POLICY,
+            "we argued about the API design today",
+            "Sounds like REST won; I'll note the decision.",
         ) is True
