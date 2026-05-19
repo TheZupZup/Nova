@@ -60,7 +60,7 @@ from __future__ import annotations
 _COACH_TRIGGERS: tuple[str, ...] = (
     # English — partner / relationship anchors
     "my partner", "my girlfriend", "my boyfriend", "my wife",
-    "my husband", "my spouse", "my fiancé", "my fiancee", "my fiancée",
+    "my husband", "my spouse", "my fiance", "my fiancé", "my fiancée",
     "my relationship", "our relationship", "my marriage",
     "in my couple", "with my partner",
     # English — situation phrasing. Every entry carries a relationship
@@ -119,7 +119,9 @@ _SENSITIVE_RELATIONSHIP_PATTERNS: tuple[str, ...] = (
     # second person, or the third-person form the memory extractor
     # produces ("User's wife…", "your husband…", "his girlfriend…").
     "girlfriend", "boyfriend", "wife", "husband", "spouse",
-    "fiancé", "fiancee", "fiancée",
+    # "fiance" (ASCII) is listed first and subsumes "fiancee"/"fiances";
+    # the accented forms stay for users who type the diacritic.
+    "fiance", "fiancé", "fiancée",
     "marriage", "married", "divorce", "breakup", "broke up", "break up",
     "cheated on", "cheating on", "infidelity", "in love with",
     # English — genuinely ambiguous on their own ("partner" could be a

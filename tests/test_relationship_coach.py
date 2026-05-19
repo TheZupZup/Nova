@@ -61,6 +61,11 @@ class TestDetection:
     def test_is_case_insensitive(self):
         assert is_relationship_coach_query("MY PARTNER said something hurtful")
 
+    def test_detects_ascii_fiance_spelling(self):
+        assert is_relationship_coach_query(
+            "my fiance said something hurtful, how do i respond?"
+        )
+
     def test_ignores_generic_message(self):
         assert not is_relationship_coach_query("what's the weather tomorrow?")
         assert not is_relationship_coach_query("écris-moi une fonction python")
@@ -114,6 +119,13 @@ class TestSensitiveContentGate:
         )
         assert is_sensitive_relationship_content("User's wife is a teacher.")
         assert is_sensitive_relationship_content("his girlfriend called")
+
+    def test_flags_ascii_fiance_spelling(self):
+        # Codex review P1 (round 3): the common unaccented "fiance"
+        # spelling must be caught, not only "fiancé"/"fiancée".
+        assert is_sensitive_relationship_content("my fiance and I argued")
+        assert is_sensitive_relationship_content("User's fiancee is a vet.")
+        assert is_sensitive_relationship_content("ma fiancée est partie")
 
     def test_ignores_non_relationship_text(self):
         assert not is_sensitive_relationship_content(
