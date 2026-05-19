@@ -110,6 +110,23 @@ Shipped today:
   extraction for those turns, and a fact is stored only when the user
   asks explicitly via the manual memory command. See
   [docs/relationship-situation-coach.md](docs/relationship-situation-coach.md).
+- **Companion Mode (foundation, opt-in, local).** A deterministic
+  "calm presence" layer for emotionally heavy moments. It is **not** an
+  "AI girlfriend" system and is built so it cannot become one. Two
+  parts: an **opt-in** per-user toggle (Personalization → *Companion
+  mode*, off by default) that appends a fixed prompt block — warm and
+  emotionally attuned, but it never simulates feelings, attachment, or
+  consciousness, never manipulates or guilt-trips, never fosters
+  dependency or isolation, and actively encourages real-world
+  connection; and an **always-on** acute-distress safety net that, on
+  clear distress wording, gently points the user toward a trusted
+  person, a professional, or their local emergency services / a
+  helpline (never an invented phone number), regardless of the toggle.
+  Both blocks (no LLM, no network) sit *below* the identity/safety
+  contract and never override it. Emotional state is **never**
+  auto-saved — two independent gates suppress it, and a fact is stored
+  only via the explicit manual memory command. See
+  [docs/companion-mode.md](docs/companion-mode.md).
 - **Edit and delete sent messages.** Every chat message can be edited
   (user messages) or deleted (user and assistant messages) from the
   chat UI. Deleting a user message can optionally remove the paired
@@ -161,6 +178,7 @@ core/
   nova_contract.py    Nova identity + personalization prompt blocks
   feedback.py         Local response feedback (thumbs up/down) → preference block
   relationship_coach.py  Non-clinical situation-coach prompt block (local)
+  companion.py        Opt-in calm-presence + acute-distress grounding blocks (local)
   identity.py         Identity contract constant
   auth.py             JWT creation and verification
   github_oauth.py     Optional GitHub OAuth gate (alpha channel)

@@ -1,5 +1,6 @@
 import re
 
+from core.companion import is_sensitive_emotional_content
 from core.relationship_coach import is_sensitive_relationship_content
 from memory.schema import Memory
 
@@ -41,6 +42,14 @@ def is_memory_allowed(memory: Memory) -> bool:
     # which bypasses this policy on purpose. Single source of truth
     # lives in ``core.relationship_coach``.
     if is_sensitive_relationship_content(combined):
+        return False
+
+    # Sensitive emotional / mental-state detail is never auto-persisted
+    # either. Companion-mode conversations are private by design; the
+    # user can still save something deliberately via the manual memory
+    # command, which bypasses this policy on purpose. Single source of
+    # truth lives in ``core.companion``.
+    if is_sensitive_emotional_content(combined):
         return False
 
     for pattern in _SENSITIVE_PATTERNS:

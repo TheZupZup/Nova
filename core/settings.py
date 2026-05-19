@@ -59,6 +59,9 @@ USER_SETTING_KEYS: frozenset[str] = frozenset({
     "silentguard_enabled",
     "nexanote_enabled",
     "nexanote_write_enabled",
+    # Companion Mode: an opt-in calm-presence tone. Off by default and
+    # per-user, so an unconfigured account behaves exactly as before.
+    "companion_mode_enabled",
     # Personalization preferences. Per-user so one account's tone choices
     # never leak onto another's chat.
     *PERSONALIZATION_KEYS,
