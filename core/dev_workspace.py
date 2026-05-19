@@ -52,18 +52,30 @@ This is the single module in ``core`` allowed to import ``subprocess``
 for dev-workspace git reads. The web layer must call only the public
 functions here and keep them user-scoped.
 
+Phase 2 — **patch proposal mode** — is also implemented here (see the
+"Patch proposal" section near the bottom). It is a *pure* transform: it
+turns a structured, model-produced change description into a validated,
+review-only :class:`PatchProposal` (plan, likely files, a unified-diff
+preview, suggested tests, a risk checklist). It performs **no** git
+calls, **no** file writes, and **no** subprocess work — it never
+applies, stages, commits, pushes, or branches anything. Every proposed
+path is validated to be repo-relative, traversal-free, non-secret, and
+contained inside the linked repo. Applying a reviewed patch is a
+deliberately separate, later phase.
+
 See ``docs/dev-workspace.md`` for the operator walkthrough, the
 explicit non-goals, and the Phase 2-6 roadmap.
 """
 
 from __future__ import annotations
 
+import difflib
 import logging
 import os
 import shutil
 import subprocess
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Optional, Sequence
 
 logger = logging.getLogger(__name__)
@@ -581,4 +593,503 @@ def read_status(
         changed_files=changed_files,
         recent_commits=recent_commits,
         detail="" if clean else "Working tree has uncommitted changes.",
+    )
+
+
+# ════════════════════════════════════════════════════════════════════
+# Patch proposal mode (Phase 2)
+# ════════════════════════════════════════════════════════════════════
+#
+# Phase 2 lets Nova *propose* code changes for a linked repo. The model
+# describes the change (a plan, the files it would touch with
+# before/after content, suggested tests, risks); this module turns that
+# into a calm, validated, **review-only** :class:`PatchProposal`:
+#
+#   * It is a pure transform — no git, no subprocess, no file writes,
+#     no network. Nothing is applied, staged, committed, pushed, or
+#     branched. The on-disk repo is never touched (``resolve()`` only
+#     reads path metadata, exactly as Phase 1 already does).
+#   * Every proposed path is validated to be **repo-relative**
+#     (absolute paths refused), free of ``..`` traversal, not a
+#     secret/private file (``.env``, ``*.db``/``nova.db``, SSH keys,
+#     tokens, credentials, logs, backups, exports, ``.git`` internals,
+#     …), and contained inside the validated linked repo.
+#   * The diff is produced locally with :mod:`difflib` from the
+#     model-supplied before/after text — Nova does not read the working
+#     tree to build it, so a proposal cannot leak file contents the
+#     model was not already given. Verifying a patch against disk is a
+#     deliberately separate, later (apply) phase.
+#   * Every field is capped so a runaway model reply cannot balloon the
+#     payload, and the result restates that nothing was applied.
+
+
+class PatchProposalError(ValueError):
+    """Raised when a model-produced patch proposal fails validation.
+
+    The web layer maps this to a 400 with the short, safe message so the
+    user learns *why* the proposal was refused instead of getting a 500.
+    Never carries secrets, stack traces, or raw model output.
+    """
+
+
+# Caps. A patch proposal is model-produced text; every list and blob is
+# bounded so a runaway reply cannot wedge a request or bloat the JSON.
+_MAX_PROPOSAL_SUMMARY_CHARS = 300
+_MAX_PROPOSAL_PLAN_STEPS = 40
+_MAX_PROPOSAL_FILES = 50
+_MAX_PROPOSAL_FILE_DIFF_LINES = 400
+_MAX_PROPOSAL_DIFF_LINES = 800
+_MAX_PROPOSAL_TESTS = 40
+_MAX_PROPOSAL_RISKS = 40
+_MAX_PROPOSAL_CONTENT_CHARS = 200_000
+
+_PATCH_ACTIONS = frozenset({"modify", "add", "delete"})
+
+# Path *segments* (any directory component, or a final component) that a
+# proposal may never target: VCS / key / credential stores and the
+# private Nova runtime directories (data, db sidecars, backups, exports,
+# memory packs, logs). Matched case-insensitively.
+_SECRET_SEGMENTS = frozenset(
+    {
+        ".git",
+        ".ssh",
+        ".gnupg",
+        ".aws",
+        ".azure",
+        ".kube",
+        ".docker",
+        "data",
+        "novadata",
+        "novaportable",
+        "backups",
+        "exports",
+        "memory-packs",
+        "logs",
+        "__pycache__",
+        ".venv",
+        "node_modules",
+    }
+)
+
+# Exact (case-insensitive) basenames that are always secret/private.
+_SECRET_BASENAMES = frozenset(
+    {
+        ".env",
+        "nova.env",
+        "nova.db",
+        "nexus.db",
+        ".netrc",
+        ".pgpass",
+        ".htpasswd",
+        ".npmrc",
+        ".pypirc",
+        ".dockercfg",
+        "id_rsa",
+        "id_dsa",
+        "id_ecdsa",
+        "id_ed25519",
+        "credentials",
+        "credentials.json",
+        "secrets",
+        "secrets.json",
+        "secrets.yaml",
+        "secrets.yml",
+        "token",
+        "tokens",
+    }
+)
+
+# Basename suffixes that mark data / key / log / backup material. Source
+# code (``.py``/``.md``/``.sql``/…) is intentionally *not* here so a
+# normal code change is never blocked; only sensitive blobs are.
+_SECRET_SUFFIXES = (
+    ".db",
+    ".sqlite",
+    ".sqlite3",
+    ".pem",
+    ".key",
+    ".pfx",
+    ".p12",
+    ".keystore",
+    ".jks",
+    ".log",
+    ".backup",
+    ".bak",
+    ".save",
+)
+
+# Documented, secret-free ``.env`` companions an operator may legitimately
+# want a proposal to touch (samples committed to the repo).
+_ENV_SAMPLE_SUFFIXES = (".example", ".sample", ".template", ".dist")
+
+# Fixed, frontend-safe reminder attached to every proposal so the review
+# UI (and the model, when this is echoed back) cannot lose the contract.
+_PROPOSAL_SAFETY_NOTES = (
+    "This is a proposal only — Nova has not modified any file.",
+    "Nothing was written to disk, staged, committed, pushed, or branched.",
+    "No command was run; the working tree is unchanged.",
+    "Review it, then apply it yourself. A later phase will add an "
+    "explicit, per-patch approval step before anything is written.",
+)
+
+
+def _is_secret_path(rel_posix: str) -> bool:
+    """True when a repo-relative path targets a protected/secret file.
+
+    Conservative on purpose: a false *positive* only refuses one
+    proposed edit (the user can still edit that file by hand); a false
+    *negative* could surface a secret. Source code is never matched.
+    """
+    parts = PurePosixPath(rel_posix).parts
+    if not parts:
+        return True
+    for seg in parts:
+        if seg.lower() in _SECRET_SEGMENTS:
+            return True
+    base = parts[-1].lower()
+    if base in _SECRET_BASENAMES:
+        return True
+    # ``.env`` and ``.env.<env>`` are secret; ``.env.example`` and the
+    # other documented sample suffixes are explicitly allowed.
+    if base == ".env" or base.startswith(".env."):
+        if not any(base.endswith(s) for s in _ENV_SAMPLE_SUFFIXES):
+            return True
+    if any(base.endswith(suff) for suff in _SECRET_SUFFIXES):
+        return True
+    return False
+
+
+def validate_proposed_path(repo_root: Path, raw: object) -> str:
+    """Validate one model-proposed, repo-relative file path.
+
+    Enforces, in order: present → string → non-empty (trimmed) →
+    length-capped → no NUL/newline → no ``~`` → ``/``-separated (no
+    ``\\``) → **repo-relative, not absolute** → no ``..`` traversal →
+    collapses to a real target → not a secret/private file → resolves
+    **inside** ``repo_root``. A leading ``./`` (and other ``.``/empty
+    segments) is normalised away; a path that is *only* ``.`` has no
+    target and is refused. Returns the normalised POSIX repo-relative
+    path on success; raises
+    :class:`PatchProposalError` (short, safe message) on the first
+    failure. ``repo_root`` must already be the resolved absolute repo
+    path from :func:`validate_repo_path`.
+    """
+    if raw is None or isinstance(raw, bool):
+        raise PatchProposalError("proposed file path is required")
+    if not isinstance(raw, str):
+        raise PatchProposalError("proposed file path must be a string")
+    text = raw.strip()
+    if not text:
+        raise PatchProposalError("proposed file path cannot be empty")
+    if len(text) > _MAX_RAW_PATH_CHARS:
+        raise PatchProposalError("proposed file path is too long")
+    if "\x00" in text or "\n" in text or "\r" in text:
+        raise PatchProposalError(
+            "proposed file path contains invalid characters"
+        )
+    if "~" in text:
+        raise PatchProposalError(
+            "proposed file path must be repo-relative (no '~')"
+        )
+    if "\\" in text:
+        raise PatchProposalError(
+            "proposed file path must use '/' separators"
+        )
+
+    candidate = PurePosixPath(text)
+    if candidate.is_absolute():
+        raise PatchProposalError(
+            "proposed file path must be repo-relative, not absolute"
+        )
+    parts = candidate.parts
+    if any(p == ".." for p in parts):
+        raise PatchProposalError(
+            "proposed file path must not contain '..'"
+        )
+    # ``PurePosixPath`` normalises away ``.`` and empty segments, so a
+    # path that is *only* ``.`` (or otherwise collapses to nothing) has
+    # no real target.
+    if not parts:
+        raise PatchProposalError(
+            "proposed file path is not a normalised relative path"
+        )
+
+    rel = candidate.as_posix()
+    if _is_secret_path(rel):
+        raise PatchProposalError(
+            "proposed file path targets a protected or secret file"
+        )
+
+    # Defence in depth: even though ``..``/absolute are already refused,
+    # resolve the join so a symlinked directory *inside* the repo that
+    # points outside it cannot smuggle an out-of-tree write target into
+    # a later apply phase. ``resolve()`` only reads path metadata.
+    try:
+        joined = (repo_root / rel).resolve()
+    except (OSError, RuntimeError, ValueError):
+        raise PatchProposalError(
+            "proposed file path could not be resolved"
+        )
+    try:
+        inside = joined == repo_root or joined.is_relative_to(repo_root)
+    except ValueError:
+        inside = False
+    if not inside:
+        raise PatchProposalError(
+            "proposed file path resolves outside the linked repository"
+        )
+    return rel
+
+
+@dataclass(frozen=True)
+class ProposedFileChange:
+    """One reviewed-only change to a single repo-relative file.
+
+    ``diff`` is a unified diff built locally from the model-supplied
+    before/after text — it is *not* applied anywhere. ``added`` /
+    ``removed`` count the changed body lines (diff headers excluded).
+    """
+
+    path: str
+    action: str
+    diff: str = ""
+    added: int = 0
+    removed: int = 0
+
+    def as_dict(self) -> dict:
+        return {
+            "path": self.path,
+            "action": self.action,
+            "diff": self.diff,
+            "added": self.added,
+            "removed": self.removed,
+        }
+
+
+@dataclass(frozen=True)
+class PatchProposal:
+    """Calm, frontend-safe, **review-only** patch proposal.
+
+    Holds the implementation plan, the files Nova would change (with a
+    capped unified-diff preview each), suggested tests, and a risk
+    checklist. Nothing here has been applied; ``as_dict`` always reports
+    ``review_only`` / ``applied`` and the standing safety notes so the
+    contract travels with the data.
+    """
+
+    repo_path: str
+    summary: str = ""
+    plan: tuple[str, ...] = field(default_factory=tuple)
+    files: tuple[ProposedFileChange, ...] = field(default_factory=tuple)
+    suggested_tests: tuple[str, ...] = field(default_factory=tuple)
+    risks: tuple[str, ...] = field(default_factory=tuple)
+    diff_preview: str = ""
+
+    def as_dict(self) -> dict:
+        return {
+            "review_only": True,
+            "applied": False,
+            "repo_path": self.repo_path,
+            "summary": self.summary,
+            "plan": list(self.plan),
+            "files": [f.as_dict() for f in self.files],
+            "suggested_tests": list(self.suggested_tests),
+            "risks": list(self.risks),
+            "diff_preview": self.diff_preview,
+            "safety": list(_PROPOSAL_SAFETY_NOTES),
+        }
+
+
+def _string_list(value: object, cap: int) -> tuple[str, ...]:
+    """Coerce model output into a capped tuple of short, clean strings.
+
+    ``None`` → ``()``; a bare string → a one-item list. Blank entries
+    are dropped and each survivor is length-clipped. Any non-string item
+    is a hard error so a malformed proposal fails loudly, not silently.
+    """
+    if value is None:
+        return ()
+    if isinstance(value, str):
+        value = [value]
+    if not isinstance(value, (list, tuple)):
+        raise PatchProposalError("expected a list of strings")
+    out: list[str] = []
+    for item in value:
+        if not isinstance(item, str):
+            raise PatchProposalError("list items must be strings")
+        cleaned = item.strip()
+        if not cleaned:
+            continue
+        out.append(_truncate(cleaned))
+        if len(out) >= cap:
+            break
+    return tuple(out)
+
+
+def _build_file_diff(
+    path: str, action: str, old: str, new: str
+) -> tuple[str, int, int]:
+    """Local unified diff + (added, removed) body-line counts.
+
+    Pure :mod:`difflib`; never reads the working tree. The per-file diff
+    is line-capped so one giant file cannot dominate the preview.
+    """
+    old_lines = old.splitlines()
+    new_lines = new.splitlines()
+    if action == "add":
+        fromfile, tofile = "/dev/null", f"b/{path}"
+    elif action == "delete":
+        fromfile, tofile = f"a/{path}", "/dev/null"
+    else:
+        fromfile, tofile = f"a/{path}", f"b/{path}"
+    raw = list(
+        difflib.unified_diff(
+            old_lines, new_lines,
+            fromfile=fromfile, tofile=tofile, lineterm="",
+        )
+    )
+    added = removed = 0
+    for line in raw:
+        if line.startswith("+") and not line.startswith("+++"):
+            added += 1
+        elif line.startswith("-") and not line.startswith("---"):
+            removed += 1
+    if len(raw) > _MAX_PROPOSAL_FILE_DIFF_LINES:
+        raw = raw[:_MAX_PROPOSAL_FILE_DIFF_LINES]
+        raw.append("… (file diff truncated for preview)")
+    return "\n".join(raw), added, removed
+
+
+def build_patch_proposal(
+    repo_path: str | os.PathLike[str],
+    proposal: object,
+    *,
+    roots: Optional[Sequence[Path]] = None,
+) -> PatchProposal:
+    """Turn model output into a validated, review-only patch proposal.
+
+    ``repo_path`` is the project's linked checkout; it is re-validated
+    here with :func:`validate_repo_path` (same hard rules as Phase 1) so
+    a proposal can only ever be scoped to a real, allowed linked repo.
+    ``proposal`` is the model's structured description::
+
+        {
+          "summary": "<one line>",
+          "plan": ["step", ...],
+          "changes": [
+            {"path": "core/foo.py", "action": "modify",
+             "old_content": "...", "new_content": "..."},
+            ...
+          ],
+          "tests": ["pytest ...", ...],
+          "risks": ["touches auth", ...],
+        }
+
+    Every change's path is validated by :func:`validate_proposed_path`
+    (repo-relative, no traversal, non-secret, inside the repo) and the
+    diff is computed locally. **Nothing is applied**; this never writes,
+    spawns a process, or touches git. Raises :class:`PatchProposalError`
+    (short, safe message) on any validation failure.
+    """
+    try:
+        resolved = validate_repo_path(repo_path, roots=roots)
+    except RepoPathError as exc:
+        raise PatchProposalError(
+            f"linked repository is not usable: {exc}"
+        ) from exc
+
+    if not isinstance(proposal, dict):
+        raise PatchProposalError("patch proposal must be an object")
+
+    summary_raw = proposal.get("summary") or ""
+    if not isinstance(summary_raw, str):
+        raise PatchProposalError("summary must be a string")
+    # Collapse whitespace so the summary stays a single safe line.
+    summary = " ".join(summary_raw.split())[:_MAX_PROPOSAL_SUMMARY_CHARS]
+
+    plan = _string_list(proposal.get("plan"), _MAX_PROPOSAL_PLAN_STEPS)
+    tests = _string_list(proposal.get("tests"), _MAX_PROPOSAL_TESTS)
+    risks = _string_list(proposal.get("risks"), _MAX_PROPOSAL_RISKS)
+
+    raw_changes = proposal.get("changes")
+    if not isinstance(raw_changes, (list, tuple)) or not raw_changes:
+        raise PatchProposalError(
+            "patch proposal must include at least one file change"
+        )
+
+    files: list[ProposedFileChange] = []
+    seen: set[str] = set()
+    for change in raw_changes:
+        if not isinstance(change, dict):
+            raise PatchProposalError("each change must be an object")
+        action = change.get("action") or "modify"
+        if not isinstance(action, str) or action not in _PATCH_ACTIONS:
+            raise PatchProposalError(
+                "change action must be one of: modify, add, delete"
+            )
+        rel = validate_proposed_path(resolved, change.get("path"))
+        if rel in seen:
+            raise PatchProposalError(f"duplicate change for path: {rel}")
+        seen.add(rel)
+
+        old = change.get("old_content")
+        new = change.get("new_content")
+        old = "" if (old is None or action == "add") else old
+        new = "" if (new is None or action == "delete") else new
+        if not isinstance(old, str) or not isinstance(new, str):
+            raise PatchProposalError("file content must be a string")
+        if (
+            len(old) > _MAX_PROPOSAL_CONTENT_CHARS
+            or len(new) > _MAX_PROPOSAL_CONTENT_CHARS
+        ):
+            raise PatchProposalError(
+                "proposed file content is too large to preview"
+            )
+        if action == "modify" and old == new:
+            raise PatchProposalError(
+                f"modify change for {rel} has no difference"
+            )
+        if action == "add" and not new:
+            raise PatchProposalError(
+                f"add change for {rel} has empty content"
+            )
+        if action == "delete" and not old:
+            raise PatchProposalError(
+                f"delete change for {rel} has no original content"
+            )
+
+        diff, added, removed = _build_file_diff(rel, action, old, new)
+        files.append(
+            ProposedFileChange(
+                path=rel, action=action,
+                diff=diff, added=added, removed=removed,
+            )
+        )
+        if len(files) >= _MAX_PROPOSAL_FILES:
+            break
+
+    # Combined, capped preview across all files.
+    preview_parts: list[str] = []
+    preview_lines = 0
+    for f in files:
+        if not f.diff:
+            continue
+        block = f.diff.splitlines()
+        if preview_lines + len(block) > _MAX_PROPOSAL_DIFF_LINES:
+            room = _MAX_PROPOSAL_DIFF_LINES - preview_lines
+            if room > 0:
+                preview_parts.append("\n".join(block[:room]))
+            preview_parts.append("… (combined preview truncated)")
+            break
+        preview_parts.append(f.diff)
+        preview_lines += len(block)
+
+    return PatchProposal(
+        repo_path=str(resolved),
+        summary=summary,
+        plan=plan,
+        files=tuple(files),
+        suggested_tests=tests,
+        risks=risks,
+        diff_preview="\n".join(preview_parts),
     )

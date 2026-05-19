@@ -1,5 +1,6 @@
 """
-Tests for the Dev Workspace foundation — Phase 1 (read-only).
+Tests for the Dev Workspace — Phase 1 (read-only) + Phase 2 (patch
+proposal mode, review-only).
 
 Covers:
   * allowed-root resolution from ``NOVA_DEV_WORKSPACE_ROOTS``
@@ -12,10 +13,16 @@ Covers:
   * the ``RepoStatus`` snapshot states
   * the projects ``local_repo_path`` migration + user-scoped setter
   * the read-only HTTP endpoints (link / unlink / status)
+  * Phase 2: proposed-path validation (repo-relative only, no
+    absolute / ``..`` / secret paths, contained in the repo),
+    ``build_patch_proposal`` from safe model output, the review-only
+    invariants (no file writes, no subprocess), and the
+    ``POST .../repo/patch-proposal`` endpoint
 
 These tests never modify a repo: the only repository written to is a
 disposable one created under ``tmp_path`` purely so the read helpers
-have something real to observe.
+have something real to observe. The Phase 2 tests additionally assert
+that building a proposal leaves the repo tree byte-for-byte unchanged.
 """
 
 from __future__ import annotations
@@ -589,3 +596,523 @@ class TestRepoEndpoints:
         assert status["branch"] in ("main", "master")
         assert status["clean"] is True
         assert status["recent_commits"]
+
+
+# ════════════════════════════════════════════════════════════════════
+# Phase 2 — patch proposal mode (review-only)
+# ════════════════════════════════════════════════════════════════════
+
+
+def _tree_snapshot(root: Path) -> dict[str, bytes]:
+    """Byte-for-byte map of every file under ``root`` (for tamper checks)."""
+    snap: dict[str, bytes] = {}
+    for p in sorted(root.rglob("*")):
+        if p.is_file():
+            snap[str(p.relative_to(root))] = p.read_bytes()
+    return snap
+
+
+class TestValidateProposedPath:
+    def _root(self, real_repo):
+        repo, _ = real_repo
+        return repo.resolve()
+
+    @pytest.mark.parametrize("bad", [None, True, False, 123, b"x", ["a"]])
+    def test_non_string_rejected(self, real_repo, bad):
+        with pytest.raises(dw.PatchProposalError):
+            dw.validate_proposed_path(self._root(real_repo), bad)
+
+    @pytest.mark.parametrize("bad", ["", "   ", "\t"])
+    def test_empty_rejected(self, real_repo, bad):
+        with pytest.raises(dw.PatchProposalError):
+            dw.validate_proposed_path(self._root(real_repo), bad)
+
+    @pytest.mark.parametrize(
+        "bad", ["/etc/passwd", "/srv/code/x.py", "/home/me/repo/a.py"]
+    )
+    def test_absolute_rejected(self, real_repo, bad):
+        with pytest.raises(dw.PatchProposalError, match="absolute"):
+            dw.validate_proposed_path(self._root(real_repo), bad)
+
+    @pytest.mark.parametrize(
+        "bad", ["../escape.py", "a/../../b.py", "src/../../etc/x"]
+    )
+    def test_traversal_rejected(self, real_repo, bad):
+        with pytest.raises(dw.PatchProposalError, match="'\\.\\.'"):
+            dw.validate_proposed_path(self._root(real_repo), bad)
+
+    def test_backslash_rejected(self, real_repo):
+        with pytest.raises(dw.PatchProposalError, match="'/'"):
+            dw.validate_proposed_path(
+                self._root(real_repo), "src\\win\\path.py"
+            )
+
+    def test_tilde_rejected(self, real_repo):
+        with pytest.raises(dw.PatchProposalError, match="~"):
+            dw.validate_proposed_path(self._root(real_repo), "~/secret")
+
+    @pytest.mark.parametrize(
+        "bad", ["a\x00b.py", "a\nb.py", "a\rb.py"]
+    )
+    def test_control_chars_rejected(self, real_repo, bad):
+        with pytest.raises(dw.PatchProposalError):
+            dw.validate_proposed_path(self._root(real_repo), bad)
+
+    def test_too_long_rejected(self, real_repo):
+        with pytest.raises(dw.PatchProposalError):
+            dw.validate_proposed_path(
+                self._root(real_repo), "a/" * 3000 + "x.py"
+            )
+
+    @pytest.mark.parametrize(
+        "bad",
+        [
+            ".env",
+            "config/.env",
+            "nova.db",
+            "var/nexus.db",
+            "data/x.json",
+            "backups/dump.tar",
+            "exports/pack.zip",
+            "logs/app.log",
+            "memory-packs/p.json",
+            "deploy/app.bak",
+            "store.sqlite3",
+            "db/snap.db",
+            "keys/server.pem",
+            "tls/server.key",
+            "id_rsa",
+            ".ssh/id_ed25519",
+            ".git/config",
+            "src/__pycache__/m.pyc",
+            ".aws/credentials",
+            "secrets.yaml",
+            "deploy/token",
+        ],
+    )
+    def test_secret_or_private_paths_rejected(self, real_repo, bad):
+        with pytest.raises(
+            dw.PatchProposalError, match="protected or secret"
+        ):
+            dw.validate_proposed_path(self._root(real_repo), bad)
+
+    @pytest.mark.parametrize(
+        "ok",
+        [
+            "core/dev_workspace.py",
+            "docs/dev-workspace.md",
+            "tests/test_dev_workspace.py",
+            ".env.example",
+            "config/.env.sample",
+            "docs/schema.sql",
+            "deep/nested/dir/module.py",
+        ],
+    )
+    def test_safe_source_paths_allowed(self, real_repo, ok):
+        assert dw.validate_proposed_path(self._root(real_repo), ok) == ok
+
+    def test_leading_dot_segment_is_normalised(self, real_repo):
+        # ``./a.py`` collapses to the safe ``a.py``; a path that is only
+        # ``.`` has no target and is refused.
+        assert (
+            dw.validate_proposed_path(self._root(real_repo), "./a.py")
+            == "a.py"
+        )
+        with pytest.raises(dw.PatchProposalError, match="normalised"):
+            dw.validate_proposed_path(self._root(real_repo), ".")
+
+    def test_symlink_escape_rejected(self, real_repo, tmp_path):
+        """A symlinked dir inside the repo pointing outside must not
+        let a proposed path resolve out of the linked tree."""
+        repo, _ = real_repo
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        link = repo / "sneaky"
+        try:
+            link.symlink_to(outside, target_is_directory=True)
+        except (OSError, NotImplementedError):
+            pytest.skip("symlinks unavailable on this platform")
+        with pytest.raises(dw.PatchProposalError, match="outside"):
+            dw.validate_proposed_path(
+                repo.resolve(), "sneaky/escaped.py"
+            )
+
+
+def _safe_proposal() -> dict:
+    return {
+        "summary": "Add a greeting helper\nwith   messy   spacing",
+        "plan": ["Add greet()", "Cover it with a test", "  "],
+        "changes": [
+            {
+                "path": "core/greet.py",
+                "action": "add",
+                "new_content": "def greet(n):\n    return f'hi {n}'\n",
+            },
+            {
+                "path": "README.md",
+                "action": "modify",
+                "old_content": "hello\n",
+                "new_content": "hello\nworld\n",
+            },
+        ],
+        "tests": ["pytest tests/test_greet.py -q"],
+        "risks": ["New public helper — keep the surface small."],
+    }
+
+
+@_needs_git
+class TestBuildPatchProposal:
+    def test_happy_path_from_safe_model_output(self, real_repo):
+        repo, root = real_repo
+        before = _tree_snapshot(repo)
+        prop = dw.build_patch_proposal(
+            str(repo), _safe_proposal(), roots=[root]
+        )
+        d = prop.as_dict()
+
+        # Review-only invariants travel with the payload.
+        assert d["review_only"] is True
+        assert d["applied"] is False
+        assert d["safety"] and all(isinstance(s, str) for s in d["safety"])
+        assert d["repo_path"] == str(repo.resolve())
+
+        # Summary whitespace is collapsed to one safe line.
+        assert d["summary"] == "Add a greeting helper with messy spacing"
+        # Blank plan entry dropped.
+        assert d["plan"] == ["Add greet()", "Cover it with a test"]
+        assert d["suggested_tests"] == ["pytest tests/test_greet.py -q"]
+        assert d["risks"]
+
+        files = {f["path"]: f for f in d["files"]}
+        assert set(files) == {"core/greet.py", "README.md"}
+        assert files["core/greet.py"]["action"] == "add"
+        assert files["core/greet.py"]["added"] >= 1
+        assert files["core/greet.py"]["removed"] == 0
+        assert files["README.md"]["added"] == 1
+        assert "+world" in files["README.md"]["diff"]
+        assert d["diff_preview"]
+        assert "b/core/greet.py" in d["diff_preview"]
+
+        # Nothing on disk changed.
+        assert _tree_snapshot(repo) == before
+
+    def test_invalid_repo_path_raises(self, tmp_path):
+        with pytest.raises(
+            dw.PatchProposalError, match="not usable"
+        ):
+            dw.build_patch_proposal(
+                str(tmp_path / "missing"),
+                _safe_proposal(),
+                roots=[tmp_path],
+            )
+
+    def test_proposal_must_be_object(self, real_repo):
+        repo, root = real_repo
+        with pytest.raises(dw.PatchProposalError, match="object"):
+            dw.build_patch_proposal(str(repo), ["nope"], roots=[root])
+
+    def test_requires_at_least_one_change(self, real_repo):
+        repo, root = real_repo
+        with pytest.raises(dw.PatchProposalError, match="at least one"):
+            dw.build_patch_proposal(
+                str(repo), {"changes": []}, roots=[root]
+            )
+
+    def test_bad_action_rejected(self, real_repo):
+        repo, root = real_repo
+        bad = {
+            "changes": [
+                {"path": "a.py", "action": "push", "new_content": "x"}
+            ]
+        }
+        with pytest.raises(dw.PatchProposalError, match="action"):
+            dw.build_patch_proposal(str(repo), bad, roots=[root])
+
+    def test_secret_path_in_change_rejected(self, real_repo):
+        repo, root = real_repo
+        bad = {
+            "changes": [
+                {
+                    "path": ".env",
+                    "action": "modify",
+                    "old_content": "A=1\n",
+                    "new_content": "A=2\n",
+                }
+            ]
+        }
+        with pytest.raises(
+            dw.PatchProposalError, match="protected or secret"
+        ):
+            dw.build_patch_proposal(str(repo), bad, roots=[root])
+
+    def test_absolute_path_in_change_rejected(self, real_repo):
+        repo, root = real_repo
+        bad = {
+            "changes": [
+                {"path": "/etc/hosts", "new_content": "x", "action": "add"}
+            ]
+        }
+        with pytest.raises(dw.PatchProposalError, match="absolute"):
+            dw.build_patch_proposal(str(repo), bad, roots=[root])
+
+    def test_duplicate_path_rejected(self, real_repo):
+        repo, root = real_repo
+        bad = {
+            "changes": [
+                {"path": "a.py", "action": "add", "new_content": "1\n"},
+                {"path": "a.py", "action": "add", "new_content": "2\n"},
+            ]
+        }
+        with pytest.raises(dw.PatchProposalError, match="duplicate"):
+            dw.build_patch_proposal(str(repo), bad, roots=[root])
+
+    def test_modify_without_difference_rejected(self, real_repo):
+        repo, root = real_repo
+        bad = {
+            "changes": [
+                {
+                    "path": "a.py",
+                    "action": "modify",
+                    "old_content": "same\n",
+                    "new_content": "same\n",
+                }
+            ]
+        }
+        with pytest.raises(dw.PatchProposalError, match="no difference"):
+            dw.build_patch_proposal(str(repo), bad, roots=[root])
+
+    def test_empty_add_rejected(self, real_repo):
+        repo, root = real_repo
+        bad = {
+            "changes": [
+                {"path": "a.py", "action": "add", "new_content": ""}
+            ]
+        }
+        with pytest.raises(dw.PatchProposalError, match="empty content"):
+            dw.build_patch_proposal(str(repo), bad, roots=[root])
+
+    def test_oversized_content_rejected(self, real_repo):
+        repo, root = real_repo
+        huge = "x\n" * (dw._MAX_PROPOSAL_CONTENT_CHARS // 2 + 10)
+        bad = {
+            "changes": [
+                {"path": "a.py", "action": "add", "new_content": huge}
+            ]
+        }
+        with pytest.raises(dw.PatchProposalError, match="too large"):
+            dw.build_patch_proposal(str(repo), bad, roots=[root])
+
+    def test_delete_change_diff(self, real_repo):
+        repo, root = real_repo
+        prop = dw.build_patch_proposal(
+            str(repo),
+            {
+                "changes": [
+                    {
+                        "path": "old.py",
+                        "action": "delete",
+                        "old_content": "gone\n",
+                    }
+                ]
+            },
+            roots=[root],
+        )
+        f = prop.files[0]
+        assert f.action == "delete"
+        assert f.removed == 1 and f.added == 0
+        assert "/dev/null" in f.diff
+
+    def test_non_string_list_item_rejected(self, real_repo):
+        repo, root = real_repo
+        bad = {
+            "plan": ["ok", 5],
+            "changes": [
+                {"path": "a.py", "action": "add", "new_content": "x\n"}
+            ],
+        }
+        with pytest.raises(dw.PatchProposalError, match="must be strings"):
+            dw.build_patch_proposal(str(repo), bad, roots=[root])
+
+    def test_files_capped(self, real_repo):
+        repo, root = real_repo
+        changes = [
+            {"path": f"f{i}.py", "action": "add", "new_content": f"{i}\n"}
+            for i in range(dw._MAX_PROPOSAL_FILES + 25)
+        ]
+        prop = dw.build_patch_proposal(
+            str(repo), {"changes": changes}, roots=[root]
+        )
+        assert len(prop.files) == dw._MAX_PROPOSAL_FILES
+
+    def test_file_diff_truncated(self, real_repo):
+        repo, root = real_repo
+        new = "".join(f"line {i}\n" for i in range(2000))
+        prop = dw.build_patch_proposal(
+            str(repo),
+            {
+                "changes": [
+                    {"path": "big.py", "action": "add", "new_content": new}
+                ]
+            },
+            roots=[root],
+        )
+        assert "truncated" in prop.files[0].diff
+
+    def test_does_not_spawn_subprocess(self, real_repo, monkeypatch):
+        """Phase 2 is a pure transform — building a proposal must never
+        shell out (no git, no command)."""
+        repo, root = real_repo
+
+        def _boom(*a, **k):  # pragma: no cover - must never run
+            raise AssertionError("build_patch_proposal spawned a process")
+
+        monkeypatch.setattr(dw.subprocess, "run", _boom)
+        monkeypatch.setattr(dw.subprocess, "Popen", _boom)
+        prop = dw.build_patch_proposal(
+            str(repo), _safe_proposal(), roots=[root]
+        )
+        assert prop.files
+
+    def test_repo_tree_unchanged(self, real_repo):
+        """Building a proposal touches nothing on disk."""
+        repo, root = real_repo
+        before = _tree_snapshot(repo)
+        dw.build_patch_proposal(str(repo), _safe_proposal(), roots=[root])
+        dw.build_patch_proposal(
+            str(repo),
+            {
+                "changes": [
+                    {
+                        "path": "README.md",
+                        "action": "delete",
+                        "old_content": "hello\n",
+                    }
+                ]
+            },
+            roots=[root],
+        )
+        assert _tree_snapshot(repo) == before
+
+
+class TestPatchProposalEndpoint:
+    def test_unlinked_project_is_400(self, db_path, web_client):
+        _make_user(db_path, "alice")
+        tok = _login(web_client, "alice")
+        pid = web_client.post(
+            "/projects", json={"name": "Nova"}, headers=_h(tok)
+        ).json()["id"]
+        resp = web_client.post(
+            f"/projects/{pid}/repo/patch-proposal",
+            json={
+                "changes": [
+                    {"path": "a.py", "action": "add", "new_content": "x\n"}
+                ]
+            },
+            headers=_h(tok),
+        )
+        assert resp.status_code == 400
+        assert "detail" in resp.json()
+
+    def test_foreign_project_is_404(self, db_path, web_client):
+        _make_user(db_path, "alice")
+        _make_user(db_path, "bob")
+        a = _login(web_client, "alice")
+        b = _login(web_client, "bob")
+        pid = web_client.post(
+            "/projects", json={"name": "Priv"}, headers=_h(a)
+        ).json()["id"]
+        resp = web_client.post(
+            f"/projects/{pid}/repo/patch-proposal",
+            json={
+                "changes": [
+                    {"path": "a.py", "action": "add", "new_content": "x\n"}
+                ]
+            },
+            headers=_h(b),
+        )
+        assert resp.status_code == 404
+
+    @_needs_git
+    def test_full_link_then_patch_proposal(
+        self, db_path, web_client, real_repo, monkeypatch
+    ):
+        repo, root = real_repo
+        monkeypatch.setenv(dw.ENV_ROOTS, str(root))
+        _make_user(db_path, "alice")
+        tok = _login(web_client, "alice")
+        pid = web_client.post(
+            "/projects", json={"name": "Nova"}, headers=_h(tok)
+        ).json()["id"]
+        assert web_client.put(
+            f"/projects/{pid}/repo",
+            json={"path": str(repo)},
+            headers=_h(tok),
+        ).status_code == 200
+
+        before = _tree_snapshot(repo)
+        resp = web_client.post(
+            f"/projects/{pid}/repo/patch-proposal",
+            json=_safe_proposal(),
+            headers=_h(tok),
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["review_only"] is True
+        assert body["applied"] is False
+        assert {f["path"] for f in body["files"]} == {
+            "core/greet.py",
+            "README.md",
+        }
+        assert body["diff_preview"]
+        # The endpoint is read-only w.r.t. the repository.
+        assert _tree_snapshot(repo) == before
+
+    @_needs_git
+    def test_secret_path_via_endpoint_is_400(
+        self, db_path, web_client, real_repo, monkeypatch
+    ):
+        repo, root = real_repo
+        monkeypatch.setenv(dw.ENV_ROOTS, str(root))
+        _make_user(db_path, "alice")
+        tok = _login(web_client, "alice")
+        pid = web_client.post(
+            "/projects", json={"name": "Nova"}, headers=_h(tok)
+        ).json()["id"]
+        web_client.put(
+            f"/projects/{pid}/repo",
+            json={"path": str(repo)},
+            headers=_h(tok),
+        )
+        resp = web_client.post(
+            f"/projects/{pid}/repo/patch-proposal",
+            json={
+                "changes": [
+                    {
+                        "path": "../../etc/cron.d/x",
+                        "action": "add",
+                        "new_content": "* * * * * root id\n",
+                    }
+                ]
+            },
+            headers=_h(tok),
+        )
+        assert resp.status_code == 400
+        assert "detail" in resp.json()
+
+    def test_extra_fields_forbidden(self, db_path, web_client):
+        _make_user(db_path, "alice")
+        tok = _login(web_client, "alice")
+        pid = web_client.post(
+            "/projects", json={"name": "Nova"}, headers=_h(tok)
+        ).json()["id"]
+        resp = web_client.post(
+            f"/projects/{pid}/repo/patch-proposal",
+            json={
+                "changes": [
+                    {"path": "a.py", "action": "add", "new_content": "x\n"}
+                ],
+                "apply": True,
+            },
+            headers=_h(tok),
+        )
+        assert resp.status_code == 422

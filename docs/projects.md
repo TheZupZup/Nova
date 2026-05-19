@@ -175,9 +175,10 @@ and export/restore behaviour is unchanged.
 - Scoping the `forget …` commands and the memory audit view to the
   active project.
 - ~~Linked local repository path per project.~~ **Shipped** as the
-  read-only Dev Workspace foundation — see
-  [`dev-workspace.md`](dev-workspace.md). It is opt-in, strictly
-  read-only, and cannot commit / push / branch / write files.
+  Dev Workspace — see [`dev-workspace.md`](dev-workspace.md). Phase 1
+  is read-only Git context; Phase 2 adds review-only patch *proposals*
+  (plan, diff preview, tests, risks). Both are opt-in and cannot apply
+  a patch, commit, push, branch, or write files.
 - Project import / export.
 - Project-specific model settings.
 - Project files / attachments.

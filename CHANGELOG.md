@@ -14,6 +14,32 @@
   `SubscriptableBaseModel` (production) shapes end-to-end.
 
 ### Added
+- Dev Workspace Phase 2 — patch proposal mode (review-only): a linked
+  project can now ask Nova to *propose* a code change without any of it
+  being applied. `core/dev_workspace.build_patch_proposal` turns a
+  structured, model-produced description into a calm, validated
+  `PatchProposal` (summary, implementation plan, the repo-relative
+  files it would touch, a per-file + combined unified-diff preview
+  built locally with `difflib`, suggested tests, and a risk checklist).
+  It is a *pure transform*: it re-validates the linked repo with the
+  same hard rules as Phase 1 and then validates every proposed path
+  (`validate_proposed_path`) — repo-relative only (absolute / `~` /
+  `\` / `..` traversal refused), never a secret/private file (`.env` /
+  `*.env`, `nova.db` / `*.db` / `*.sqlite*`, SSH/key material, tokens,
+  credentials, logs, backups, exports, memory-packs, `.git`, …; the
+  documented `.env.example`/`.sample`/`.template`/`.dist` samples stay
+  allowed), and contained inside the repo (a symlinked subdir pointing
+  out is refused) — while spawning **no** process, touching **no** git,
+  writing **no** file, and making **no** network call. Every field is
+  capped and the result restates `review_only: true` / `applied:
+  false` with a fixed safety note. Reachable per linked project at
+  `POST /projects/{id}/repo/patch-proposal` (no linked repo or any
+  invalid path/proposal → `400`; foreign project → `404`; extra body
+  field → `422`). New regression tests cover safe-output proposals,
+  every rejection path, the caps, and the no-write / no-subprocess
+  invariants; `docs/dev-workspace.md` now documents Phase 1 + Phase 2,
+  the cumulative safety model, and the Phase 3-6 roadmap. Nothing in
+  Phase 2 grants Nova power to modify files, commit, push, or branch.
 - Relationship Situation Coach (foundation, local-first): a new
   `core/relationship_coach.py` adds a non-clinical "situation coach"
   that helps the user respond calmly and respectfully to an
