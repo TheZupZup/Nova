@@ -1,0 +1,445 @@
+"""
+Tests for the Relationship Situation Coach foundation:
+
+  - topic detection (bilingual, conservative, non-string safe)
+  - sensitive-content gate used to suppress automatic memory
+  - the deterministic prompt block (method, styles, safety, privacy)
+  - memory.policy refuses to auto-persist relationship detail
+  - core.chat wiring: block injected only on a coach query, always
+    below IDENTITY_CONTRACT, and the auto-save guard
+
+Heavy / optional deps that ``core.chat`` pulls in transitively are
+stubbed by ``tests/conftest.py`` when the real wheel is absent, so the
+chat-wiring tests collect cleanly on a minimal host.
+"""
+
+import sys
+from unittest.mock import MagicMock
+
+# Match the defensive stubbing used by test_identity.py so importing
+# core.chat never fails for a missing optional dep.
+for _mod in ("ddgs", "ollama", "sgmllib", "feedparser"):
+    if _mod not in sys.modules:
+        sys.modules[_mod] = MagicMock()
+
+from core.relationship_coach import (  # noqa: E402
+    RELATIONSHIP_COACH_BLOCK,
+    build_relationship_coach_block,
+    is_relationship_coach_query,
+    is_sensitive_relationship_content,
+)
+from core.chat import build_messages, _autosave_allowed  # noqa: E402
+from core.identity import IDENTITY_CONTRACT  # noqa: E402
+from core.policies import ADMIN_POLICY, DEFAULT_RESTRICTED_POLICY  # noqa: E402
+from memory.policy import is_memory_allowed  # noqa: E402
+from memory.schema import Memory  # noqa: E402
+
+
+def _mem(**kwargs) -> Memory:
+    defaults = dict(kind="general", topic="test", content="test content",
+                    confidence=0.9)
+    defaults.update(kwargs)
+    return Memory(**defaults)
+
+
+class TestDetection:
+    def test_detects_french_partner_situation(self):
+        assert is_relationship_coach_query(
+            "On s'est disputé hier soir, comment répondre à ma copine "
+            "sans être accusateur ?"
+        )
+
+    def test_detects_english_partner_situation(self):
+        assert is_relationship_coach_query(
+            "my girlfriend got upset with me — how do i respond to her?"
+        )
+
+    def test_detects_relationship_advice_phrase(self):
+        assert is_relationship_coach_query("I need some relationship advice")
+        assert is_relationship_coach_query("j'ai besoin d'un conseil relationnel")
+
+    def test_is_case_insensitive(self):
+        assert is_relationship_coach_query("MY PARTNER said something hurtful")
+
+    def test_detects_ascii_fiance_spelling(self):
+        assert is_relationship_coach_query(
+            "my fiance said something hurtful, how do i respond?"
+        )
+
+    def test_ignores_generic_message(self):
+        assert not is_relationship_coach_query("what's the weather tomorrow?")
+        assert not is_relationship_coach_query("écris-moi une fonction python")
+
+    def test_does_not_trip_on_unrelated_reply_question(self):
+        # "reply" / "respond" alone must not flip Nova into coach mode —
+        # otherwise every email/support question would pay the cost.
+        assert not is_relationship_coach_query(
+            "how should i reply to this email from a client?"
+        )
+
+    def test_does_not_trip_on_non_romantic_conflicts(self):
+        # Anchor-less phrases were removed: coworker / client / family
+        # conflicts must not be silently reframed as relationship
+        # coaching (Codex review P2).
+        assert not is_relationship_coach_query(
+            "my client got upset with me about the invoice"
+        )
+        assert not is_relationship_coach_query(
+            "my coworker got upset, how do i respond to her?"
+        )
+        assert not is_relationship_coach_query("should i text him back?")
+        assert not is_relationship_coach_query(
+            "mon collègue m'en veut après une dispute avec lui au bureau"
+        )
+
+    def test_bare_conflict_phrases_do_not_trigger(self):
+        # Codex review P2 (round 5): "we argued" / "we had a fight" are
+        # common in work/project contexts and must not reframe a normal
+        # support request as relationship coaching.
+        assert not is_relationship_coach_query(
+            "we argued about the database schema at standup"
+        )
+        assert not is_relationship_coach_query(
+            "the team and i had a fight over priorities"
+        )
+        assert not is_relationship_coach_query(
+            "on s'est disputé au boulot avec un collègue"
+        )
+
+    def test_relationship_argument_still_triggers_via_anchor(self):
+        # Removing the bare phrases must not regress the core use case:
+        # a relationship argument still triggers through its anchor.
+        assert is_relationship_coach_query(
+            "my girlfriend and i had a fight, how do i respond?"
+        )
+
+    def test_non_string_is_false(self):
+        assert is_relationship_coach_query(None) is False
+        assert is_relationship_coach_query(123) is False
+        assert is_relationship_coach_query(["my partner"]) is False
+
+
+class TestSensitiveContentGate:
+    def test_flags_english_relationship_detail(self):
+        assert is_sensitive_relationship_content("my ex cheated on me")
+        assert is_sensitive_relationship_content("we broke up last week")
+        assert is_sensitive_relationship_content("my wife and I had a fight")
+
+    def test_flags_french_relationship_detail(self):
+        assert is_sensitive_relationship_content("mon copain m'a trompé")
+        assert is_sensitive_relationship_content(
+            "on a rompu, c'est une rupture difficile"
+        )
+
+    def test_flags_spouse_terms_across_pronouns(self):
+        # Codex review P1 (round 2): spouse nouns must match in any
+        # phrasing, not only the first-person "my wife" form, or the
+        # third-person assistant/extractor phrasing leaks past the gate.
+        assert is_sensitive_relationship_content(
+            "Earlier you mentioned your husband was upset"
+        )
+        assert is_sensitive_relationship_content("User's wife is a teacher.")
+        assert is_sensitive_relationship_content("his girlfriend called")
+
+    def test_flags_ascii_fiance_spelling(self):
+        # Codex review P1 (round 3): the common unaccented "fiance"
+        # spelling must be caught, not only "fiancé"/"fiancée".
+        assert is_sensitive_relationship_content("my fiance and I argued")
+        assert is_sensitive_relationship_content("User's fiancee is a vet.")
+        assert is_sensitive_relationship_content("ma fiancée est partie")
+
+    def test_flags_partner_and_ex_across_pronouns(self):
+        # Codex review P1 (round 4): the determiner-anchored regex must
+        # catch "partner"/"ex" owned by ANY person, not only "my".
+        for text in (
+            "my partner and I argued",
+            "Earlier you mentioned your partner was upset",
+            "his partner called twice",
+            "her ex keeps texting",
+            "their partner moved out",
+            "User's partner is a vet.",
+            "the user's ex came back",
+            "talk to your ex-partner first",
+        ):
+            assert is_sensitive_relationship_content(text), text
+
+    def test_flags_french_spouse_partner_across_pronouns(self):
+        # Codex review P1 (round 4): "ton mari"/"votre mari"/"son mari"
+        # and the extractor's "la femme de l'utilisateur" must match.
+        for text in (
+            "tu as parlé de ton mari hier",
+            "votre mari vous a dit ça",
+            "son mari travaille de nuit",
+            "sa femme est partie",
+            "la femme de l'utilisateur est médecin",
+            "le partenaire de l'utilisateur a déménagé",
+        ):
+            assert is_sensitive_relationship_content(text), text
+
+    def test_determiner_gate_avoids_false_positives(self):
+        # Bare / non-possessed ambiguous nouns must NOT trip the gate,
+        # or legitimate memory (work, names) would be silently dropped.
+        for text in (
+            "I met a business partner at the conference",
+            "the partner track at the law firm",
+            "your example was very clear",
+            "what are the next steps",
+            "we sailed past a marina",
+            "there was a woman named Marie at the talk",
+            "une femme a posé une question",
+        ):
+            assert not is_sensitive_relationship_content(text), text
+
+    def test_bare_conflict_phrases_are_not_sensitive(self):
+        # Codex review P1 (round 5): generic dispute phrases must not
+        # make the gate over-block legitimate non-relationship memory.
+        assert not is_sensitive_relationship_content(
+            "we argued about the API design and chose REST"
+        )
+        assert not is_sensitive_relationship_content(
+            "we had a fight over the deployment window"
+        )
+        # …but a relationship argument is still caught via the anchor.
+        assert is_sensitive_relationship_content(
+            "my wife and I had a fight about money"
+        )
+
+    def test_ignores_non_relationship_text(self):
+        assert not is_sensitive_relationship_content(
+            "User prefers Fedora KDE and neovim"
+        )
+        assert not is_sensitive_relationship_content("the server has 32GB RAM")
+
+    def test_non_string_is_false(self):
+        assert is_sensitive_relationship_content(None) is False
+        assert is_sensitive_relationship_content(42) is False
+
+
+class TestCoachBlock:
+    def test_block_is_non_empty(self):
+        assert RELATIONSHIP_COACH_BLOCK.strip()
+
+    def test_builder_returns_constant(self):
+        assert build_relationship_coach_block() == RELATIONSHIP_COACH_BLOCK
+
+    def test_builder_is_deterministic(self):
+        assert build_relationship_coach_block() == build_relationship_coach_block()
+
+    def test_no_unfilled_placeholders(self):
+        import re
+        assert not re.search(r"\{[^}]+\}", RELATIONSHIP_COACH_BLOCK)
+
+    def test_declares_non_clinical_and_not_a_therapist(self):
+        lower = RELATIONSHIP_COACH_BLOCK.lower()
+        assert "non clinique" in lower
+        assert "thérapeute" in lower
+
+    def test_states_it_is_subordinate_to_the_contract(self):
+        # The header must make clear the block sits below identity /
+        # safety rules so a coaching request can't dilute the contract.
+        lower = RELATIONSHIP_COACH_BLOCK.lower()
+        assert "subordonné" in lower
+        assert "sécurité" in lower
+
+    def test_covers_the_six_method_steps(self):
+        lower = RELATIONSHIP_COACH_BLOCK.lower()
+        assert "résume" in lower                       # summarize
+        assert "interprétation" in lower               # interpretations
+        assert "ne lis pas dans les pensées" in lower  # no mind-reading
+        assert "réponse calme" in lower                # calm response
+        assert "accusatrice" in lower                  # avoid accusatory
+        assert "besoin" in lower                       # avoid needy wording
+        assert "limites saines" in lower               # healthy boundaries
+        assert ("attendre" in lower
+                and "maintenant" in lower)             # speak now or wait
+
+    def test_offers_the_three_response_styles(self):
+        lower = RELATIONSHIP_COACH_BLOCK.lower()
+        assert "doux" in lower
+        assert "neutre" in lower
+        assert "direct mais respectueux" in lower
+
+    def test_states_all_safety_rules(self):
+        lower = RELATIONSHIP_COACH_BLOCK.lower()
+        assert "aucune manipulation" in lower
+        assert "aucune coercition" in lower
+        assert "aucun gaslighting" in lower
+        assert "aucun conseil de vengeance" in lower
+        assert "aucun diagnostic du partenaire" in lower
+        assert "consentement" in lower
+        assert "communication calme" in lower
+
+    def test_states_local_private_and_no_autosave(self):
+        lower = RELATIONSHIP_COACH_BLOCK.lower()
+        assert "locale et privée" in lower
+        assert "n'enregistre jamais" in lower or "ne mémorise" in lower
+        # Only the explicit manual command may persist a relationship fact.
+        assert "retiens ça" in lower or "souviens-toi" in lower
+        assert "explicitement" in lower
+
+
+class TestMemoryPolicyHardening:
+    def test_allows_normal_preference(self):
+        m = _mem(kind="preference", topic="editor",
+                 content="User prefers neovim.")
+        assert is_memory_allowed(m) is True
+
+    def test_rejects_partner_detail(self):
+        m = _mem(content="User's girlfriend works as a nurse.")
+        assert is_memory_allowed(m) is False
+
+    def test_rejects_french_relationship_detail(self):
+        m = _mem(content="L'utilisateur s'est disputé avec ma copine.")
+        assert is_memory_allowed(m) is False
+
+    def test_still_rejects_legacy_ex_drama(self):
+        # Pre-existing transient rule must keep working.
+        m = _mem(content="User's ex cheated on them.")
+        assert is_memory_allowed(m) is False
+
+    def test_rejects_third_person_spouse_memory(self):
+        # Codex review P1 (round 2): an extracted "User's wife …"
+        # memory must not slip into the durable store.
+        assert is_memory_allowed(_mem(content="User's wife is a nurse.")) is False
+        assert is_memory_allowed(
+            _mem(content="User's husband works nights.")
+        ) is False
+
+    def test_rejects_third_person_partner_memory(self):
+        # Codex review P1 (round 4): determiner-anchored "partner"/FR
+        # spouse must also be rejected from the durable store.
+        assert is_memory_allowed(
+            _mem(content="User's partner is a teacher.")
+        ) is False
+        assert is_memory_allowed(
+            _mem(content="La femme de l'utilisateur est avocate.")
+        ) is False
+
+    def test_allows_business_partner_memory(self):
+        # The determiner gate must not over-block legitimate facts.
+        assert is_memory_allowed(
+            _mem(kind="project", content="User has a business partner named Sam.")
+        ) is True
+
+    def test_allows_work_dispute_memory(self):
+        # Codex review P1 (round 5): a generic work argument is a valid
+        # durable memory and must not be rejected by the gate.
+        assert is_memory_allowed(
+            _mem(kind="project",
+                 content="Team argued about the API and chose REST.")
+        ) is True
+
+
+class TestChatWiring:
+    def test_block_injected_for_coach_query(self):
+        msgs = build_messages(
+            [], "on s'est disputé avec ma copine, comment lui répondre",
+            [], None, None, None,
+        )
+        assert RELATIONSHIP_COACH_BLOCK in msgs[0]["content"]
+
+    def test_block_absent_for_neutral_query(self):
+        msgs = build_messages([], "quelle heure est-il ?", [], None, None, None)
+        assert RELATIONSHIP_COACH_BLOCK not in msgs[0]["content"]
+
+    def test_identity_contract_still_first(self):
+        # The coach block must never displace the identity/safety
+        # contract from the front of the system prompt.
+        msgs = build_messages(
+            [], "my husband and I had a fight, how do i respond to him",
+            [], None, None, None,
+        )
+        assert msgs[0]["content"].startswith(IDENTITY_CONTRACT)
+        assert msgs[0]["content"].index(IDENTITY_CONTRACT) < msgs[0][
+            "content"
+        ].index(RELATIONSHIP_COACH_BLOCK)
+
+    def test_block_also_applies_in_search_context(self):
+        # Injection is keyed off the user message, not the branch, so a
+        # coach query still gets the framing even on the search path.
+        msgs = build_messages(
+            [], "relationship advice please", [], "résultats…", "search", None,
+        )
+        assert RELATIONSHIP_COACH_BLOCK in msgs[0]["content"]
+
+
+class TestAutosaveGuard:
+    def test_blocks_autosave_for_sensitive_relationship_turn(self):
+        assert _autosave_allowed(ADMIN_POLICY, "my ex cheated on me") is False
+
+    def test_allows_autosave_for_neutral_turn(self):
+        assert _autosave_allowed(ADMIN_POLICY, "I use neovim and Fedora") is True
+
+    def test_respects_policy_memory_disabled(self):
+        # A restricted policy with memory saving off must stay off even
+        # for a perfectly neutral message.
+        assert DEFAULT_RESTRICTED_POLICY.memory_save_enabled is False
+        assert _autosave_allowed(DEFAULT_RESTRICTED_POLICY, "I use neovim") is False
+
+    def test_none_message_is_safe(self):
+        assert _autosave_allowed(ADMIN_POLICY, None) is True
+
+    def test_blocks_when_assistant_reply_is_sensitive(self):
+        # Codex review P1: the LLM autosave path mines BOTH the user
+        # message and the assistant reply, so a neutral follow-up whose
+        # reply restates relationship context must still be blocked.
+        assert _autosave_allowed(
+            ADMIN_POLICY,
+            "ok thanks, what should i focus on at work today?",
+            "Earlier you mentioned your girlfriend was upset; setting "
+            "that aside, for work you could...",
+        ) is False
+
+    def test_allows_when_both_user_and_reply_are_neutral(self):
+        assert _autosave_allowed(
+            ADMIN_POLICY,
+            "I use neovim",
+            "Great — neovim is a solid choice for that workflow.",
+        ) is True
+
+    def test_reply_arg_is_optional(self):
+        # Backward-compatible default: callers that pass only the user
+        # message still work and only gate on it.
+        assert _autosave_allowed(ADMIN_POLICY, "I use Fedora") is True
+
+    def test_blocks_when_reply_mentions_spouse_in_second_person(self):
+        # Codex review P1 (round 2): "your husband" in the assistant
+        # reply must block autosave even on a neutral user turn.
+        assert _autosave_allowed(
+            ADMIN_POLICY,
+            "ok, what should i prioritise at work?",
+            "Earlier you mentioned your husband; setting that aside, "
+            "at work you could...",
+        ) is False
+
+    def test_blocks_when_reply_mentions_partner_or_fr_spouse(self):
+        # Codex review P1 (round 4): "your partner" / "votre mari" in
+        # the reply must block autosave on a neutral user turn too.
+        assert _autosave_allowed(
+            ADMIN_POLICY,
+            "thanks, anything else for the sprint?",
+            "Earlier you mentioned your partner was unhappy; for the "
+            "sprint though...",
+        ) is False
+        assert _autosave_allowed(
+            ADMIN_POLICY,
+            "merci, et pour le projet ?",
+            "Vous aviez parlé de votre mari ; pour le projet, vous "
+            "pourriez...",
+        ) is False
+
+    def test_allows_business_partner_in_reply(self):
+        assert _autosave_allowed(
+            ADMIN_POLICY,
+            "who should I loop in?",
+            "Loop in your business partner and the design lead.",
+        ) is True
+
+    def test_allows_autosave_for_work_argument_turn(self):
+        # Codex review P1 (round 5): a work dispute must not suppress
+        # auto-memory for the whole turn.
+        assert _autosave_allowed(
+            ADMIN_POLICY,
+            "we argued about the API design today",
+            "Sounds like REST won; I'll note the decision.",
+        ) is True

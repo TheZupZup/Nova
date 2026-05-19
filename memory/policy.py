@@ -1,4 +1,6 @@
 import re
+
+from core.relationship_coach import is_sensitive_relationship_content
 from memory.schema import Memory
 
 # Credentials, tokens, financial details, and personal identifiers
@@ -33,6 +35,13 @@ def is_memory_allowed(memory: Memory) -> bool:
     Rejects credentials, sensitive identity info, and transient emotions.
     """
     combined = f"{memory.topic} {memory.content}".lower()
+
+    # Sensitive relationship detail is never auto-persisted. The user
+    # can still save it deliberately via the manual memory command,
+    # which bypasses this policy on purpose. Single source of truth
+    # lives in ``core.relationship_coach``.
+    if is_sensitive_relationship_content(combined):
+        return False
 
     for pattern in _SENSITIVE_PATTERNS:
         if re.search(pattern, combined, re.IGNORECASE):
