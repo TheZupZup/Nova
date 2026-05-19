@@ -23,7 +23,15 @@ rules; it only stores rows and answers ownership questions.
 Scope is intentionally narrow (Phase 1):
   * create / list / get / rename+describe / archive
   * everything is scoped to ``user_id`` exactly like conversations
-  * no deletes, no autonomous actions, no repo/file/cloud behaviour
+  * no deletes, no autonomous actions, no file/cloud behaviour
+
+Dev Workspace link (Phase 1, read-only): a project may *optionally*
+carry a ``local_repo_path``. Storing it only records a validated,
+resolved absolute path — it grants Nova no power to modify the repo.
+The path is validated by ``core.dev_workspace`` (must exist, contain
+``.git``, and resolve inside an operator-configured allowed root); all
+git access through that module is strictly read-only. Clearing the
+link is always allowed and never touches the repository.
 """
 
 from __future__ import annotations
@@ -53,6 +61,12 @@ _PROJECTS_USER_INDEX_SQL = (
     "CREATE INDEX IF NOT EXISTS idx_projects_user_id ON projects(user_id)"
 )
 
+# Phase 1 Dev Workspace: an optional, nullable column holding the
+# validated absolute path of a linked local Git checkout. Added via an
+# idempotent ALTER so existing installs gain it with no backfill — a
+# project with no link keeps ``NULL`` and behaves exactly as before.
+_PROJECTS_REPO_COLUMN = "local_repo_path"
+
 
 class ProjectError(ValueError):
     """Raised for invalid project input (empty/oversized name, etc.).
@@ -66,6 +80,13 @@ def _now_iso() -> str:
     return datetime.now().isoformat()
 
 
+def _project_columns(conn: sqlite3.Connection) -> set[str]:
+    return {
+        row[1]
+        for row in conn.execute("PRAGMA table_info(projects)").fetchall()
+    }
+
+
 def migrate(db_path: str) -> None:
     """Create the ``projects`` table + index if missing. Idempotent.
 
@@ -73,10 +94,19 @@ def migrate(db_path: str) -> None:
     existing row. Requires the ``users`` table to exist (the chat data
     layer runs this after ``users.migrate()``), but does not depend on
     it having rows — an empty install simply has no projects yet.
+
+    The ``local_repo_path`` column (Phase 1 Dev Workspace) is added by
+    an idempotent ALTER guarded on ``PRAGMA table_info`` so re-running
+    the migration on an install that already has the column is a no-op
+    and never raises.
     """
     with sqlite3.connect(db_path) as conn:
         conn.execute(_PROJECTS_TABLE_SQL)
         conn.execute(_PROJECTS_USER_INDEX_SQL)
+        if _PROJECTS_REPO_COLUMN not in _project_columns(conn):
+            conn.execute(
+                f"ALTER TABLE projects ADD COLUMN {_PROJECTS_REPO_COLUMN} TEXT"
+            )
 
 
 def _validate_name(name: str) -> str:
@@ -107,6 +137,15 @@ def _validate_description(description: Optional[str]) -> str:
 
 
 def _row_to_dict(row: sqlite3.Row) -> dict:
+    # ``local_repo_path`` is read defensively: every read path runs
+    # through ``initialize_db`` which applies the migration, but a
+    # missing column must never turn a project list into a 500.
+    keys = row.keys()
+    repo_path = (
+        row[_PROJECTS_REPO_COLUMN]
+        if _PROJECTS_REPO_COLUMN in keys
+        else None
+    )
     return {
         "id": row["id"],
         "name": row["name"],
@@ -115,6 +154,8 @@ def _row_to_dict(row: sqlite3.Row) -> dict:
         "updated_at": row["updated_at"],
         "archived_at": row["archived_at"],
         "archived": row["archived_at"] is not None,
+        "local_repo_path": repo_path or None,
+        "has_local_repo": bool(repo_path),
     }
 
 
@@ -323,3 +364,77 @@ def unarchive_project(
             (_now_iso(), project_id, user_id),
         )
     return get_project(project_id, user_id, db_path=resolved)
+
+
+# ── Dev Workspace link (Phase 1, read-only) ─────────────────────────
+#
+# Storing a ``local_repo_path`` only records *where* a linked checkout
+# is. It confers no write power: every git access goes through
+# ``core.dev_workspace``, which is allowlisted to read-only
+# subcommands. The path is validated there before it is persisted, so
+# the DB can never hold a path outside the operator's configured
+# workspace roots.
+
+
+def get_local_repo_path(
+    project_id: int, user_id: int, db_path: str | None = None
+) -> Optional[str]:
+    """Return the linked repo path for a project the caller owns.
+
+    ``None`` when the project does not exist, is not owned by the
+    caller, or simply has no repo linked — the web layer maps the
+    "not owned" case to 404 so existence is not leaked.
+    """
+    project = get_project(project_id, user_id, db_path=db_path)
+    if project is None:
+        return None
+    return project.get("local_repo_path")
+
+
+def set_local_repo_path(
+    project_id: int,
+    user_id: int,
+    path: Optional[str],
+    db_path: str | None = None,
+) -> Optional[dict]:
+    """Link / unlink a local Git checkout to a project the caller owns.
+
+    ``path`` of ``None`` or an empty/whitespace string *unlinks* the
+    repo (always safe, never touches the filesystem). A non-empty
+    ``path`` is validated by :func:`core.dev_workspace.validate_repo_path`
+    — it must exist, contain ``.git``, and resolve inside an
+    operator-configured allowed root — and the *resolved* absolute
+    path is what gets stored.
+
+    Returns the updated project, or ``None`` if it does not exist /
+    belongs to another user (the web layer maps that to 404). Raises
+    :class:`ProjectError` with a short, safe message when a non-empty
+    path fails validation so the web layer can return 400.
+    """
+    from core.memory import DB_PATH
+
+    resolved_db = db_path or DB_PATH
+    existing = get_project(project_id, user_id, db_path=resolved_db)
+    if existing is None:
+        return None
+
+    if path is None or not str(path).strip():
+        stored: Optional[str] = None
+    else:
+        # Imported lazily so the projects data layer has no hard
+        # dependency on the dev-workspace module (import-cycle safe,
+        # and projects keeps working if the feature is unused).
+        from core import dev_workspace
+
+        try:
+            stored = str(dev_workspace.validate_repo_path(path))
+        except dev_workspace.RepoPathError as exc:
+            raise ProjectError(str(exc)) from exc
+
+    with sqlite3.connect(resolved_db) as conn:
+        conn.execute(
+            "UPDATE projects SET local_repo_path = ?, updated_at = ? "
+            "WHERE id = ? AND user_id = ?",
+            (stored, _now_iso(), project_id, user_id),
+        )
+    return get_project(project_id, user_id, db_path=resolved_db)

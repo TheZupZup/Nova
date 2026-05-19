@@ -174,7 +174,10 @@ and export/restore behaviour is unchanged.
   preference stated inside a project is recognised as global).
 - Scoping the `forget …` commands and the memory audit view to the
   active project.
-- Linked local repository path per project.
+- ~~Linked local repository path per project.~~ **Shipped** as the
+  read-only Dev Workspace foundation — see
+  [`dev-workspace.md`](dev-workspace.md). It is opt-in, strictly
+  read-only, and cannot commit / push / branch / write files.
 - Project import / export.
 - Project-specific model settings.
 - Project files / attachments.

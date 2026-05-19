@@ -305,6 +305,21 @@ class ProjectUpdateRequest(BaseModel):
     description: str | None = None
 
 
+class RepoLinkRequest(BaseModel):
+    """Body for ``PUT /projects/{id}/repo`` (Phase 1 Dev Workspace).
+
+    ``path`` is the absolute path of a local Git checkout to link.
+    ``None`` or an empty string *unlinks* the repo (always safe — it
+    only clears the stored string and never touches the filesystem).
+    A non-empty path is validated server-side by
+    ``core.dev_workspace`` before it is stored; an invalid path yields
+    a 400 with a short, safe reason.
+    """
+    model_config = {"extra": "forbid"}
+
+    path: str | None = None
+
+
 class MemoryUpdateRequest(BaseModel):
     category: str
     content: str
@@ -615,6 +630,66 @@ def unarchive_project_endpoint(
     if restored is None:
         raise HTTPException(status_code=404, detail="Projet introuvable.")
     return restored
+
+
+# ── DEV WORKSPACE (Phase 1, read-only) ──
+#
+# A project may optionally link a local Git checkout. These two
+# endpoints are user-scoped exactly like the rest of the project
+# surface (foreign / unknown id → 404, existence not leaked) and are
+# strictly read-only with respect to the repository: PUT only stores /
+# clears a validated path string, and GET only *observes* git state
+# via the allowlisted read-only helpers in ``core.dev_workspace``.
+# Nothing here can commit, push, branch, fetch, or write files; see
+# ``docs/dev-workspace.md``.
+
+@app.put("/projects/{project_id}/repo")
+def set_project_repo_endpoint(
+    project_id: int,
+    request: RepoLinkRequest,
+    user: CurrentUser = Depends(get_current_user),
+):
+    """Link or unlink a local Git checkout for a project.
+
+    A ``null`` / empty ``path`` unlinks (always allowed). A non-empty
+    path is validated server-side; an invalid path is a 400 with a
+    short reason, a foreign / unknown project id is a 404.
+    """
+    try:
+        updated = _projects.set_local_repo_path(
+            project_id, user.id, request.path
+        )
+    except _projects.ProjectError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Projet introuvable.")
+    return updated
+
+
+@app.get("/projects/{project_id}/repo/status")
+def get_project_repo_status_endpoint(
+    project_id: int,
+    user: CurrentUser = Depends(get_current_user),
+):
+    """Return the read-only Git snapshot of a project's linked repo.
+
+    ``{"linked": false}`` when the project has no repo linked. When a
+    repo is linked the stored path is re-validated (defence in depth)
+    and a calm :class:`core.dev_workspace.RepoStatus` snapshot is
+    returned — never raising, never modifying the repository. A
+    foreign / unknown project id is a 404 so existence is not leaked.
+    """
+    project = _projects.get_project(project_id, user.id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Projet introuvable.")
+    repo_path = project.get("local_repo_path")
+    if not repo_path:
+        return {"linked": False}
+    from core import dev_workspace
+
+    snapshot = dev_workspace.read_status(repo_path).as_dict()
+    snapshot["linked"] = True
+    return snapshot
 
 
 @app.get("/conversations/{conversation_id}/messages")
