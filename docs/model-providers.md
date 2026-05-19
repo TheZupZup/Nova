@@ -1,17 +1,20 @@
 # Nova Model Providers
 
 > **Status: shipped (Phases: provider abstraction + read-only provider
-> settings), local-first.**
+> settings + admin default-model selection), local-first.**
 > This document describes the seam that lets Nova's model backend be
-> replaced without rewriting Nova, and the admin-only surface for
-> *seeing and validating* which backend is active. It lives inside the
-> boundaries set by
+> replaced without rewriting Nova, the admin-only surface for *seeing
+> and validating* which backend is active, and the admin-only,
+> *validated* choice of which model that backend is asked for by
+> default. It lives inside the boundaries set by
 > [`docs/nova-safety-and-trust-contract.md`](nova-safety-and-trust-contract.md).
 > Nothing here grants Nova new powers, adds a new model runtime, performs
 > model downloads, runs shell, touches a Docker socket, integrates a
-> cloud provider, or migrates settings. The settings surface is
-> **read-only**: provider selection stays env-driven and **Ollama
-> remains the default and is fully supported.**
+> cloud provider, or migrates settings. **Provider _selection_ stays
+> read-only and env-driven** (`NOVA_MODEL_PROVIDER`); the only thing an
+> admin can write is the default *model*, and only after it is validated
+> against the active provider's own list. **Ollama remains the default
+> provider and is fully supported.**
 
 ## Why Nova has model providers
 
@@ -147,6 +150,88 @@ Guardrails baked into this surface:
 - **No secrets.** The only env-derived string surfaced is the Ollama
   host, with any `user:pass@` userinfo redacted before display.
 
+## Choosing Nova's default model (admin, validated)
+
+Phase 1 made the active provider *visible*. Phase 2 lets an admin pick
+**which model that provider is asked for by default** — from the models
+the provider actually reports, validated before anything is persisted.
+It still adds no runtime, pulls nothing, and never changes which
+*provider* is used.
+
+### How Nova chooses the default model
+
+There are two layers, and Phase 2 only changes the second:
+
+1. **Per-request routing is unchanged.** A free-chat message is still
+   classified by `core.router.route` into `simple` / `normal` / `code`
+   / `advanced`; `code` and `advanced` keep their dedicated
+   `config.MODELS` entries, and an explicit *Code* / *Deep* UI mode
+   still forces those exact models. None of that is configurable here.
+2. **The _default_ model is now resolvable, not hard-coded.** Wherever
+   Nova previously read `config.MODELS["default"]` as "the general chat
+   model" — `simple`/`normal` routing and the router fallback, the
+   explicit *Chat* mode, the vision/image path, background memory
+   extraction, and the model label on the unreachable-provider reply —
+   it now calls `core.model_settings.resolve_default_model()`.
+
+`resolve_default_model()` returns the **admin-selected model if one has
+been safely persisted, otherwise `config.MODELS["default"]`**. It reads
+a single host-wide row from the `settings` table, performs **no network
+I/O**, and never raises — so the chat hot path is exactly as fast and
+offline-safe as before, and **every existing install (no row set)
+behaves identically to before this phase.** `core.router.MODEL_MAP` and
+`MODEL_MAP`-equivalent constants stay pinned to `config.MODELS` (the
+compiled-in contract is unchanged); the admin choice is an *overlay*
+applied at call time, not a rewrite of routing.
+
+The selection is **host-wide and admin-owned**, the same scope as
+`config.MODELS` — it is deliberately *not* the per-user `nova_model_name`
+preference, which is a separate, untouched feature.
+
+### The admin surface
+
+`core/model_settings.py` is the foundation; two admin-only endpoints
+(both `require_admin`) expose it:
+
+| Endpoint | Role |
+| --- | --- |
+| `GET /admin/provider/models` | Read-only. Reuses the Phase-1 `health()` probe (`client.list()` for Ollama — never a pull or a generation) and returns `{ok, provider, detail, models, default_model, config_default_model, is_custom}`. An unreachable provider is a calm `ok=false` with an empty list, never a 500. |
+| `POST /admin/provider/default-model` | Validates the chosen model against the active provider's reported list, then persists it. Body is `{ "model": "<name>" }` only (`extra="forbid"`). Returns the new state on success; a refusal is a sanitised `400`. |
+
+**Settings → Models** gains a *Default model* card next to the existing
+read-only provider summary: it shows the current default (tagged
+*custom* or *config default*), lists the installed models, and offers a
+**Set as default** action. Because the choice is host-wide, the action
+goes through an explicit `confirm()` first (the same stray-click guard
+the maintenance pull/restart buttons use) before the validated write.
+It is hidden for non-admins on the client and the endpoints are
+admin-only on the server.
+
+### Guardrails
+
+- **Validated, never arbitrary.** A model is persisted only if the
+  *active* provider currently lists it. An empty / over-long string, a
+  model the provider does not report, or an unreachable provider is
+  refused and **nothing is written**.
+- **The active provider only.** No provider name is ever accepted from
+  the client (`extra="forbid"`, and the core never takes one) — the
+  provider is always the configured backend, so a stray / test-only /
+  unknown backend can never be selected through this surface. Provider
+  selection stays env-driven.
+- **No secrets.** The unreachable-provider refusal is a fixed,
+  non-sensitive message — it never echoes a raw transport error or the
+  configured host (the Phase-1 status surface already shows a redacted
+  host; the *write* path says nothing about why the backend is down).
+  The candidate string is not reflected back either.
+- **Read path stays safe.** `resolve_default_model()` does no network
+  I/O and swallows every error to the config default, so a bad DB can
+  never wedge chat. If a persisted model is later removed from the
+  provider, chat degrades through the existing "provider unreachable /
+  error" handling exactly as an unknown model always has — no new
+  failure mode, no auto-repull.
+- **No downloads, no new runtime.** Listing is read-only; nothing here
+  pulls, imports, or runs a model. `MockProvider` stays test-only.
+
 ## Future providers
 
 New **local** runtimes can be added cleanly in later phases — for
@@ -156,6 +241,15 @@ runtime (`NovaModelProvider`). Each only implements `generate()`,
 `stream()`, and `health()` and registers a name. **This phase adds none
 of them**, performs no model downloads, and adds no cloud providers and
 no API keys — those are explicitly out of scope.
+
+The default-model surface needs **no per-provider code** to support a
+future backend: model listing flows through the same `health()` the
+provider already implements (`ProviderHealth.models`), so a new
+provider's installed models appear in `GET /admin/provider/models` —
+and become validly selectable defaults — automatically once it returns
+them from its own read-only probe. A provider that cannot enumerate
+models simply returns an empty list; the surface degrades to the calm
+"no models reported" state instead of offering an unvalidated choice.
 
 ## Nova identity is above provider identity
 
@@ -197,3 +291,21 @@ liveness probe always returns the stable shape, even when the provider
 breaks the "health never raises" contract). `tests/test_provider_endpoints.py`
 pins the wire contract (`require_admin` gating, the status / probe JSON
 shapes, and that an unreachable or unknown backend stays a calm 200).
+
+The Phase-2 default-model selection adds two more suites.
+`tests/test_model_settings.py` pins the core: `resolve_default_model()`
+falls back to `config.MODELS["default"]` when unset and is network-free
+even when the provider explodes; `set_default_model()` only persists a
+model the active provider lists, refuses empty / oversized / not-listed
+/ unreachable with **nothing written**, and the unreachable refusal
+leaks neither host nor transport detail nor the candidate string; the
+key is host-wide (not a user setting) and unreachable through the
+generic `/settings` allowlist. `tests/test_provider_default_model_endpoints.py`
+pins the wire contract (`require_admin` gating on both endpoints,
+listing stays a calm 200 when the backend is down, a not-installed
+model is a `400`, an empty / extra-field body is a schema `422`, an
+unreachable provider is a sanitised `400`, and a successful set really
+persists). The existing chat / streaming / routing / model-access /
+registry / pull suites continue to pass unchanged — with nothing
+persisted, every default-model lookup returns the same
+`config.MODELS["default"]` as before.
