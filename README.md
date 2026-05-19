@@ -93,6 +93,23 @@ Shipped today:
   override the identity contract or the Nova Safety and Trust Contract.
   See [docs/nova-safety-and-trust-contract.md](docs/nova-safety-and-trust-contract.md)
   for the boundaries this layer sits inside.
+- **Relationship Situation Coach (foundation, local).** A non-clinical
+  "situation coach" that helps the user answer an emotionally sensitive
+  relationship message calmly and respectfully. When the user describes
+  a relationship situation, a small deterministic prompt block (no LLM,
+  no network) is appended *below* the identity/safety contract — it
+  never overrides it. It offers a light method (summarise what
+  happened; surface a few *possible* readings without mind-reading;
+  pick a calm response; avoid accusatory or needy wording; keep
+  healthy boundaries; decide whether to speak now or wait) and three
+  response styles (soft / neutral / direct but respectful). Hard
+  safety rules: no manipulation, coercion, gaslighting, revenge
+  advice, or diagnosing the partner; always toward calm communication
+  and consent. It is local and private: sensitive relationship details
+  are **never** auto-saved — Nova suppresses automatic memory
+  extraction for those turns, and a fact is stored only when the user
+  asks explicitly via the manual memory command. See
+  [docs/relationship-situation-coach.md](docs/relationship-situation-coach.md).
 - **Edit and delete sent messages.** Every chat message can be edited
   (user messages) or deleted (user and assistant messages) from the
   chat UI. Deleting a user message can optionally remove the paired
@@ -143,6 +160,7 @@ core/
   memory_importer.py  Local-only Markdown memory pack importer
   nova_contract.py    Nova identity + personalization prompt blocks
   feedback.py         Local response feedback (thumbs up/down) → preference block
+  relationship_coach.py  Non-clinical situation-coach prompt block (local)
   identity.py         Identity contract constant
   auth.py             JWT creation and verification
   github_oauth.py     Optional GitHub OAuth gate (alpha channel)

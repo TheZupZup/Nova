@@ -14,6 +14,36 @@
   `SubscriptableBaseModel` (production) shapes end-to-end.
 
 ### Added
+- Relationship Situation Coach (foundation, local-first): a new
+  `core/relationship_coach.py` adds a non-clinical "situation coach"
+  that helps the user respond calmly and respectfully to an
+  emotionally sensitive relationship message. A conservative,
+  bilingual (FR/EN) topic detector (`is_relationship_coach_query`,
+  multi-word relationship phrases only — "reply"/"elle" alone never
+  trips it) gates a fixed, deterministic French prompt block
+  (`build_relationship_coach_block`, no LLM, no I/O, never raises)
+  that `core/chat.py` appends in `build_messages` *after*
+  `IDENTITY_CONTRACT` and the safety/security blocks, so it can never
+  override identity or safety rules. The block frames Nova as a
+  non-clinical coach (not a therapist, no partner diagnosis), gives a
+  light method (summarise; surface possible readings without
+  mind-reading; choose a calm response; avoid accusatory/needy
+  wording; keep healthy boundaries; speak now or wait), offers three
+  styles (soft / neutral / direct but respectful), and states hard
+  safety rules (no manipulation, coercion, gaslighting, revenge
+  advice, or diagnosing the partner; always toward calm communication
+  and consent). Privacy: sensitive relationship detail is never
+  auto-persisted — a shared `is_sensitive_relationship_content` gate
+  makes `core/chat.py` skip automatic memory extraction for those
+  turns (new `_autosave_allowed` helper) and `memory/policy.py` reject
+  such content from the durable natural-memory store; the explicit
+  manual memory command ("Retiens ça:" / "Souviens-toi:"), handled in
+  the web preflight, is the only path that stores a relationship fact
+  and is intentionally unaffected. Documented in
+  `docs/relationship-situation-coach.md`; covered by
+  `tests/test_relationship_coach.py` (detection, sensitive-content
+  gate, block content, memory-policy hardening, chat wiring,
+  auto-save guard).
 - Dev Workspace (Phase 1, read-only): a Nova Project can optionally
   link a local Git checkout so Nova *understands* its state when
   helping the user code — without modifying anything yet. A new

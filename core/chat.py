@@ -12,6 +12,11 @@ from core.identity import IDENTITY_CONTRACT
 from core.nova_contract import build_personalization_block
 from core.feedback import build_feedback_preferences_block
 from core.policies import ADMIN_POLICY, Policy
+from core.relationship_coach import (
+    build_relationship_coach_block,
+    is_relationship_coach_query,
+    is_sensitive_relationship_content,
+)
 from core.settings import get_personalization
 from core.router import route
 from core.search import web_search, should_search
@@ -145,6 +150,20 @@ def extract_and_save_memory(
     parse_and_save(result, user_id, project_id)
 
 
+def _autosave_allowed(policy: Policy, user_message: str | None) -> bool:
+    """Whether this turn may be auto-mined for memory.
+
+    Automatic extraction is skipped when the user message carries
+    sensitive relationship detail: Nova must never silently persist who
+    the user is dating, fighting with, or breaking up with. The user can
+    still save such a fact deliberately — the manual memory command runs
+    in the web preflight, well before this path, so it is unaffected.
+    """
+    if not policy.memory_save_enabled:
+        return False
+    return not is_sensitive_relationship_content(user_message or "")
+
+
 def build_messages(
     history: list[dict],
     user_input: str,
@@ -203,6 +222,14 @@ def build_messages(
     if sec_block:
         parts.append(sec_block)
 
+    # Relationship Situation Coach — a deterministic, local tone block
+    # appended only when the user message is clearly about a sensitive
+    # relationship situation. It sits last, well below IDENTITY_CONTRACT
+    # and the safety blocks, so it can never override identity or safety
+    # rules; it only shapes how Nova answers this one topic.
+    if is_relationship_coach_query(user_input):
+        parts.append(build_relationship_coach_block())
+
     messages = [{"role": "system", "content": "\n\n".join(parts)}]
     messages += history[-CHAT_HISTORY_LIMIT:]
     messages.append({"role": "user", "content": user_input})
@@ -248,7 +275,7 @@ def chat(history: list[dict], user_input: str, memories: list[dict], user_id: in
             messages = build_image_messages(user_input, image)
             default_model = resolve_default_model()
             reply = _generate(default_model, messages)
-            if policy.memory_save_enabled:
+            if _autosave_allowed(policy, user_input):
                 extract_and_save_memory(
                     user_input or "image", reply, user_id, project_id
                 )
@@ -337,7 +364,7 @@ def chat(history: list[dict], user_input: str, memories: list[dict], user_id: in
                 )
                 reply = _generate(model, messages)
 
-        if policy.memory_save_enabled:
+        if _autosave_allowed(policy, user_input):
             extract_and_save_memory(user_input, reply, user_id, project_id)
             _extract_and_save_natural_memories(
                 user_input, user_id, project_id
@@ -392,7 +419,7 @@ def chat_stream(
             messages = build_image_messages(user_input, image)
             default_model = resolve_default_model()
             reply = _generate(default_model, messages)
-            if policy.memory_save_enabled:
+            if _autosave_allowed(policy, user_input):
                 extract_and_save_memory(
                     user_input or "image", reply, user_id, project_id
                 )
@@ -492,7 +519,7 @@ def chat_stream(
                 )
                 reply = yield from _stream_and_accumulate(model, messages)
 
-        if policy.memory_save_enabled:
+        if _autosave_allowed(policy, user_input):
             extract_and_save_memory(user_input, reply, user_id, project_id)
             _extract_and_save_natural_memories(
                 user_input, user_id, project_id
