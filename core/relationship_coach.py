@@ -115,14 +115,17 @@ def is_relationship_coach_query(user_input: str) -> bool:
 # it so the durable natural-memory store enforces the same rule.
 _SENSITIVE_RELATIONSHIP_PATTERNS: tuple[str, ...] = (
     # English — standalone nouns that are almost never anything but a
-    # romantic relationship. Caught in any phrasing, including the
-    # third-person form the memory extractor produces ("User's wife…").
-    "girlfriend", "boyfriend", "spouse", "fiancé", "fiancee", "fiancée",
+    # romantic relationship. Caught in *any* phrasing — first person,
+    # second person, or the third-person form the memory extractor
+    # produces ("User's wife…", "your husband…", "his girlfriend…").
+    "girlfriend", "boyfriend", "wife", "husband", "spouse",
+    "fiancé", "fiancee", "fiancée",
     "marriage", "married", "divorce", "breakup", "broke up", "break up",
     "cheated on", "cheating on", "infidelity", "in love with",
-    # English — ambiguous on their own ("wife"≈relationship but "partner"
-    # could be a business partner), kept multi-word for precision.
-    "my partner", "my wife", "my husband", "my ex", "my relationship",
+    # English — genuinely ambiguous on their own ("partner" could be a
+    # business partner, "ex" a substring of "example"), kept multi-word
+    # for precision.
+    "my partner", "my ex", "my relationship",
     "our relationship", "my marriage", "my couple", "we argued",
     "we had a fight", "we had an argument", "we slept together",
     "relationship problem", "relationship tension",

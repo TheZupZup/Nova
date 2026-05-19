@@ -105,6 +105,16 @@ class TestSensitiveContentGate:
             "on a rompu, c'est une rupture difficile"
         )
 
+    def test_flags_spouse_terms_across_pronouns(self):
+        # Codex review P1 (round 2): spouse nouns must match in any
+        # phrasing, not only the first-person "my wife" form, or the
+        # third-person assistant/extractor phrasing leaks past the gate.
+        assert is_sensitive_relationship_content(
+            "Earlier you mentioned your husband was upset"
+        )
+        assert is_sensitive_relationship_content("User's wife is a teacher.")
+        assert is_sensitive_relationship_content("his girlfriend called")
+
     def test_ignores_non_relationship_text(self):
         assert not is_sensitive_relationship_content(
             "User prefers Fedora KDE and neovim"
@@ -198,6 +208,14 @@ class TestMemoryPolicyHardening:
         m = _mem(content="User's ex cheated on them.")
         assert is_memory_allowed(m) is False
 
+    def test_rejects_third_person_spouse_memory(self):
+        # Codex review P1 (round 2): an extracted "User's wife …"
+        # memory must not slip into the durable store.
+        assert is_memory_allowed(_mem(content="User's wife is a nurse.")) is False
+        assert is_memory_allowed(
+            _mem(content="User's husband works nights.")
+        ) is False
+
 
 class TestChatWiring:
     def test_block_injected_for_coach_query(self):
@@ -270,3 +288,13 @@ class TestAutosaveGuard:
         # Backward-compatible default: callers that pass only the user
         # message still work and only gate on it.
         assert _autosave_allowed(ADMIN_POLICY, "I use Fedora") is True
+
+    def test_blocks_when_reply_mentions_spouse_in_second_person(self):
+        # Codex review P1 (round 2): "your husband" in the assistant
+        # reply must block autosave even on a neutral user turn.
+        assert _autosave_allowed(
+            ADMIN_POLICY,
+            "ok, what should i prioritise at work?",
+            "Earlier you mentioned your husband; setting that aside, "
+            "at work you could...",
+        ) is False
