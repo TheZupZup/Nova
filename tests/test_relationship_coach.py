@@ -127,6 +127,48 @@ class TestSensitiveContentGate:
         assert is_sensitive_relationship_content("User's fiancee is a vet.")
         assert is_sensitive_relationship_content("ma fiancée est partie")
 
+    def test_flags_partner_and_ex_across_pronouns(self):
+        # Codex review P1 (round 4): the determiner-anchored regex must
+        # catch "partner"/"ex" owned by ANY person, not only "my".
+        for text in (
+            "my partner and I argued",
+            "Earlier you mentioned your partner was upset",
+            "his partner called twice",
+            "her ex keeps texting",
+            "their partner moved out",
+            "User's partner is a vet.",
+            "the user's ex came back",
+            "talk to your ex-partner first",
+        ):
+            assert is_sensitive_relationship_content(text), text
+
+    def test_flags_french_spouse_partner_across_pronouns(self):
+        # Codex review P1 (round 4): "ton mari"/"votre mari"/"son mari"
+        # and the extractor's "la femme de l'utilisateur" must match.
+        for text in (
+            "tu as parlé de ton mari hier",
+            "votre mari vous a dit ça",
+            "son mari travaille de nuit",
+            "sa femme est partie",
+            "la femme de l'utilisateur est médecin",
+            "le partenaire de l'utilisateur a déménagé",
+        ):
+            assert is_sensitive_relationship_content(text), text
+
+    def test_determiner_gate_avoids_false_positives(self):
+        # Bare / non-possessed ambiguous nouns must NOT trip the gate,
+        # or legitimate memory (work, names) would be silently dropped.
+        for text in (
+            "I met a business partner at the conference",
+            "the partner track at the law firm",
+            "your example was very clear",
+            "what are the next steps",
+            "we sailed past a marina",
+            "there was a woman named Marie at the talk",
+            "une femme a posé une question",
+        ):
+            assert not is_sensitive_relationship_content(text), text
+
     def test_ignores_non_relationship_text(self):
         assert not is_sensitive_relationship_content(
             "User prefers Fedora KDE and neovim"
@@ -228,6 +270,22 @@ class TestMemoryPolicyHardening:
             _mem(content="User's husband works nights.")
         ) is False
 
+    def test_rejects_third_person_partner_memory(self):
+        # Codex review P1 (round 4): determiner-anchored "partner"/FR
+        # spouse must also be rejected from the durable store.
+        assert is_memory_allowed(
+            _mem(content="User's partner is a teacher.")
+        ) is False
+        assert is_memory_allowed(
+            _mem(content="La femme de l'utilisateur est avocate.")
+        ) is False
+
+    def test_allows_business_partner_memory(self):
+        # The determiner gate must not over-block legitimate facts.
+        assert is_memory_allowed(
+            _mem(kind="project", content="User has a business partner named Sam.")
+        ) is True
+
 
 class TestChatWiring:
     def test_block_injected_for_coach_query(self):
@@ -310,3 +368,26 @@ class TestAutosaveGuard:
             "Earlier you mentioned your husband; setting that aside, "
             "at work you could...",
         ) is False
+
+    def test_blocks_when_reply_mentions_partner_or_fr_spouse(self):
+        # Codex review P1 (round 4): "your partner" / "votre mari" in
+        # the reply must block autosave on a neutral user turn too.
+        assert _autosave_allowed(
+            ADMIN_POLICY,
+            "thanks, anything else for the sprint?",
+            "Earlier you mentioned your partner was unhappy; for the "
+            "sprint though...",
+        ) is False
+        assert _autosave_allowed(
+            ADMIN_POLICY,
+            "merci, et pour le projet ?",
+            "Vous aviez parlé de votre mari ; pour le projet, vous "
+            "pourriez...",
+        ) is False
+
+    def test_allows_business_partner_in_reply(self):
+        assert _autosave_allowed(
+            ADMIN_POLICY,
+            "who should I loop in?",
+            "Loop in your business partner and the design lead.",
+        ) is True

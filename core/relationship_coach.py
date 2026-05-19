@@ -51,6 +51,8 @@ Boundaries enforced here (commitments, not aspirations):
 
 from __future__ import annotations
 
+import re
+
 # ── Topic detection ──────────────────────────────────────────────────────────
 # Multi-word, relationship-specific phrases (EN + FR — Nova is
 # bilingual). Kept deliberately narrow: a single ambiguous word like
@@ -113,35 +115,49 @@ def is_relationship_coach_query(user_input: str) -> bool:
 # "Retiens ça:" / "Souviens-toi:"). This is the single source of truth
 # for "do not auto-save relationship details"; ``memory.policy`` imports
 # it so the durable natural-memory store enforces the same rule.
+# Unambiguous substrings: nouns / phrases that are almost never
+# anything but a romantic relationship, so they are safe to match in
+# *any* phrasing — first / second / third person, including the
+# extractor's "User's wife…" form. "fiance" (ASCII) is listed before
+# the accented forms and subsumes "fiancee"/"fiances".
 _SENSITIVE_RELATIONSHIP_PATTERNS: tuple[str, ...] = (
-    # English — standalone nouns that are almost never anything but a
-    # romantic relationship. Caught in *any* phrasing — first person,
-    # second person, or the third-person form the memory extractor
-    # produces ("User's wife…", "your husband…", "his girlfriend…").
+    # English
     "girlfriend", "boyfriend", "wife", "husband", "spouse",
-    # "fiance" (ASCII) is listed first and subsumes "fiancee"/"fiances";
-    # the accented forms stay for users who type the diacritic.
     "fiance", "fiancé", "fiancée",
     "marriage", "married", "divorce", "breakup", "broke up", "break up",
     "cheated on", "cheating on", "infidelity", "in love with",
-    # English — genuinely ambiguous on their own ("partner" could be a
-    # business partner, "ex" a substring of "example"), kept multi-word
-    # for precision.
-    "my partner", "my ex", "my relationship",
-    "our relationship", "my marriage", "my couple", "we argued",
-    "we had a fight", "we had an argument", "we slept together",
-    "relationship problem", "relationship tension",
-    # French — standalone unambiguous relationship nouns.
+    "my relationship", "our relationship", "my marriage", "my couple",
+    "we argued", "we had a fight", "we had an argument",
+    "we slept together", "relationship problem", "relationship tension",
+    # French
     "copine", "copain", "compagne", "compagnon", "petite amie",
     "petit ami", "époux", "épouse", "conjoint", "conjointe",
     "rupture", "infidèle", "infidélité", "amoureux de", "amoureuse de",
-    # French — kept multi-word ("femme"≈"woman", "mari" safer but
-    # paired for symmetry).
-    "ma femme", "mon mari", "mon ex", "mon ou ma partenaire",
-    "ma partenaire", "ma relation", "notre relation", "mon couple",
-    "on a rompu", "il m'a trompé", "elle m'a trompé", "on a couché",
+    "ma relation", "notre relation", "mon couple", "on a rompu",
+    "il m'a trompé", "elle m'a trompé", "on a couché",
     "dispute de couple", "tension dans mon couple",
     "tension dans ma relation",
+)
+
+# A few nouns are too ambiguous to match bare: "partner" (a *business*
+# partner), "ex" (substring of "example"/"next"), French "mari"
+# (substring of "marin"/"marinade") and "femme" ("a woman"). Requiring
+# a possessive / pronoun determiner right before the noun keeps them
+# precise while still catching every grammatical person — first
+# ("my partner"), second ("your partner", "ton mari") and third, the
+# form an assistant reply or the memory extractor restates context in
+# ("his partner", "User's partner", "son mari", "votre femme", or
+# "la femme de l'utilisateur"). \b…\b boundaries stop "your example",
+# "next", and "marina" from matching. Enumerating determiners — rather
+# than one more first-person string per round — is what actually closes
+# the cross-pronoun privacy hole.
+_AMBIGUOUS_RELATIONSHIP_RE = re.compile(
+    r"\b(?:"
+    r"my|your|his|her|their|our|its|user'?s|users|"
+    r"mon|ma|mes|ton|ta|tes|son|sa|ses|votre|vos|notre|nos|leur|leurs"
+    r")\s+(?:ex[-\s]?)?(?:partner|partenaire|mari|femme|ex)\b"
+    r"|\b(?:partner|partenaire|mari|femme)\s+de\s+l['’]utilisateur\b",
+    re.IGNORECASE,
 )
 
 
@@ -154,12 +170,21 @@ def is_sensitive_relationship_content(text: str) -> bool:
     saves (the manual memory command) are handled elsewhere and are
     intentionally **not** affected by this gate.
 
+    Matching is two-tier: a fast substring pass over the unambiguous
+    vocabulary, then a determiner-anchored regex for the handful of
+    nouns ("partner", "ex", "mari", "femme") that are only sensitive
+    when owned by someone. The regex is pronoun-agnostic on purpose so
+    a reply that restates context in the second or third person is
+    still blocked.
+
     Non-strings coerce to ``False``.
     """
     if not isinstance(text, str):
         return False
     lowered = text.lower()
-    return any(p in lowered for p in _SENSITIVE_RELATIONSHIP_PATTERNS)
+    if any(p in lowered for p in _SENSITIVE_RELATIONSHIP_PATTERNS):
+        return True
+    return _AMBIGUOUS_RELATIONSHIP_RE.search(lowered) is not None
 
 
 # ── The deterministic prompt block ───────────────────────────────────────────
