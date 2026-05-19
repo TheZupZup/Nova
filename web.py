@@ -320,6 +320,38 @@ class RepoLinkRequest(BaseModel):
     path: str | None = None
 
 
+class PatchProposalChange(BaseModel):
+    """One proposed file change inside a ``POST .../repo/patch-proposal``.
+
+    ``path`` is repo-relative (absolute / ``..`` / secret paths are
+    refused server-side by ``core.dev_workspace``). ``old_content`` /
+    ``new_content`` are the model's before/after text; the diff is
+    computed locally and **never applied**.
+    """
+    model_config = {"extra": "forbid"}
+
+    path: str
+    action: str | None = "modify"
+    old_content: str | None = None
+    new_content: str | None = None
+
+
+class PatchProposalRequest(BaseModel):
+    """Body for ``POST /projects/{id}/repo/patch-proposal`` (Phase 2).
+
+    A structured, model-produced change description. The endpoint turns
+    it into a calm, validated, **review-only** patch preview — it never
+    writes files, commits, pushes, branches, or runs a command.
+    """
+    model_config = {"extra": "forbid"}
+
+    summary: str | None = None
+    plan: list[str] | None = None
+    changes: list[PatchProposalChange]
+    tests: list[str] | None = None
+    risks: list[str] | None = None
+
+
 class MemoryUpdateRequest(BaseModel):
     category: str
     content: str
@@ -690,6 +722,44 @@ def get_project_repo_status_endpoint(
     snapshot = dev_workspace.read_status(repo_path).as_dict()
     snapshot["linked"] = True
     return snapshot
+
+
+@app.post("/projects/{project_id}/repo/patch-proposal")
+def create_project_repo_patch_proposal_endpoint(
+    project_id: int,
+    request: PatchProposalRequest,
+    user: CurrentUser = Depends(get_current_user),
+):
+    """Build a **review-only** patch proposal for a linked repo (Phase 2).
+
+    Turns the model's structured change description into a validated,
+    calm :class:`core.dev_workspace.PatchProposal` (plan, likely files,
+    a unified-diff preview, suggested tests, risk checklist). This is a
+    pure transform: it never writes files, stages, commits, pushes,
+    branches, or runs a command — the repo is not touched.
+
+    A foreign / unknown project id is a 404 (existence not leaked); a
+    project with no linked repo, or any proposal/path that fails
+    validation, is a 400 with a short, safe reason.
+    """
+    project = _projects.get_project(project_id, user.id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Projet introuvable.")
+    repo_path = project.get("local_repo_path")
+    if not repo_path:
+        raise HTTPException(
+            status_code=400,
+            detail="Aucun dépôt local n'est lié à ce projet.",
+        )
+    from core import dev_workspace
+
+    try:
+        proposal = dev_workspace.build_patch_proposal(
+            repo_path, request.model_dump()
+        )
+    except dev_workspace.PatchProposalError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return proposal.as_dict()
 
 
 @app.get("/conversations/{conversation_id}/messages")

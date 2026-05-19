@@ -1,12 +1,16 @@
-# Dev Workspace — read-only local Git context (Phase 1)
+# Dev Workspace — read-only Git context (Phase 1) + patch proposal mode (Phase 2)
 
-> **Status: shipped (Phase 1), opt-in, strictly read-only.** A Nova
-> Project can optionally link to a local Git checkout so Nova
-> understands the repository's state (branch, clean/dirty, recent
-> commits, changed files) when helping you code. Phase 1 **observes
-> only** — it can never commit, push, branch, fetch, write files, or
-> run an arbitrary command. The feature is off until an operator
-> configures an allowed workspace root.
+> **Status: shipped (Phase 1 + Phase 2), opt-in, never modifies your
+> repo.** A Nova Project can optionally link to a local Git checkout so
+> Nova understands the repository's state (branch, clean/dirty, recent
+> commits, changed files) when helping you code. **Phase 1** observes
+> only. **Phase 2** lets Nova *propose* code changes as a reviewable
+> patch — an implementation plan, the files it would touch, a
+> unified-diff preview, suggested tests, and a risk checklist — that is
+> **displayed for review only and never applied**. Neither phase can
+> commit, push, branch, fetch, write files, or run an arbitrary
+> command. The feature is off until an operator configures an allowed
+> workspace root.
 
 This document describes the safety boundaries the feature commits to
 and the setup required before anything happens. It sits inside the
@@ -39,18 +43,45 @@ foundation the later phases build on.
   button next to the project selector): linked path, current branch,
   clean/dirty badge, latest commits, changed files, diff summary.
 
-## What Phase 1 deliberately does NOT do
+## What Phase 2 does (patch proposal mode)
 
+Phase 2 lets Nova help you *plan and propose* a code change for a
+linked project — but it still **cannot modify your files**. Given a
+structured change description from the model, the
+`core.dev_workspace.build_patch_proposal` helper returns a calm,
+validated, **review-only** object containing:
+
+- a short **summary** and an **implementation plan**,
+- the **files likely to change** (repo-relative paths),
+- a **unified-diff preview** per file plus a combined preview,
+- **suggested tests**, and
+- a **risk checklist**.
+
+The diff is computed locally with Python's `difflib` from the
+before/after text the model supplies; Nova does not read your working
+tree to build it, so a proposal cannot surface file contents the model
+was not already given. The result always carries `review_only: true`,
+`applied: false`, and a fixed safety note restating that nothing was
+written. You review it and apply it yourself — an explicit,
+per-patch *apply* step is a deliberately separate, later phase.
+
+It is reachable per linked project at
+`POST /projects/{id}/repo/patch-proposal`.
+
+## What Phase 1 and Phase 2 deliberately do NOT do
+
+- No applying a patch, no file writes anywhere in the repository.
 - No commit, push, branch creation, merge, rebase, reset, or stash.
-- No file writes anywhere in the repository.
 - No `git fetch` / `pull` / `clone` / `remote` — **no network calls**
   and no background scans of the filesystem.
-- No arbitrary command execution and no shell interpretation.
+- No arbitrary command execution and no shell interpretation. Phase 2
+  is a *pure transform* — it spawns no process and touches no git.
 - No `sudo` / `pkexec` / `doas` / `su` / `runuser`.
 - No GitHub / Codeberg API calls.
-- No secrets read, stored, or surfaced.
-- No autonomous actions of any kind — every read is triggered by you
-  opening the panel.
+- No secrets read, stored, or surfaced; a proposal can never target a
+  secret/private file (see the safety boundaries below).
+- No autonomous actions of any kind — every read and every proposal is
+  triggered by you.
 
 ## Safety boundaries (enforced in code)
 
@@ -86,16 +117,37 @@ These are enforced in `core/dev_workspace.py` and covered by
    environment variables, raw stderr, or stack traces — only short,
    fixed, frontend-safe summaries (`state` is one of `ready`,
    `disabled`, `invalid_path`, `git_unavailable`, `error`).
-6. **User-scoped.** The link and its status are per-project and
-   per-user exactly like the rest of the project surface; a foreign /
-   unknown project id returns `404` (never `403`) so existence is not
-   leaked across accounts.
+6. **User-scoped.** The link, its status, and any patch proposal are
+   per-project and per-user exactly like the rest of the project
+   surface; a foreign / unknown project id returns `404` (never `403`)
+   so existence is not leaked across accounts.
+7. **Patch proposals are a pure, review-only transform (Phase 2).**
+   `build_patch_proposal` re-validates the linked repo with the same
+   hard rules as Phase 1, then for every proposed change:
+   - the path must be **repo-relative** — an absolute path, a `~`, a
+     `\` separator, a NUL/newline, or any `..` traversal is refused;
+   - the path may not target a **secret/private file**: `.env` /
+     `*.env` (documented `.env.example`/`.sample`/`.template`/`.dist`
+     samples are allowed), `nova.db` / `*.db` / `*.sqlite*`, key
+     material (`*.pem`, `*.key`, `*.pfx`, `*.p12`, SSH keys,
+     `.ssh` / `.gnupg` / `.aws` / `.kube` / `.docker`), credentials /
+     tokens, logs, `*.bak` / `*.backup` / `*.save`, and the private
+     Nova runtime dirs (`data`, `backups`, `exports`, `memory-packs`,
+     `logs`, `.git`, `__pycache__`, `.venv`, `node_modules`);
+   - the path must still resolve **inside** the linked repo (a
+     symlinked subdir pointing outside it is refused);
+   - the diff is built locally with `difflib` from the model-supplied
+     before/after text — **no git, no subprocess, no file I/O, no
+     network**; nothing is applied, staged, committed, pushed, or
+     branched, and every field is capped. The result restates
+     `review_only: true` / `applied: false`.
 
-The linked path is **contextual data only** — storing it confers no
-write power. It is surfaced to the model the same way other project
-context is: strictly *below* the identity / safety contract in the
-system prompt, where it cannot override safety, identity, auth, or
-admin rules.
+The linked path **and any patch proposal** are **contextual data
+only** — they confer no write power. They are surfaced to the model
+the same way other project context is: strictly *below* the identity /
+safety contract in the system prompt, where they cannot override
+safety, identity, auth, or admin rules. A proposal is a suggestion you
+review and apply yourself.
 
 ## Setup
 
@@ -115,33 +167,42 @@ one of those roots, and click **Link**. The panel then shows that
 repo's read-only Git state. **Unlink** clears the stored path and
 never touches the repository.
 
-## API surface (Phase 1)
+## API surface (Phase 1 + Phase 2)
 
 | Method | Path | Purpose |
 | ------ | ---- | ------- |
 | `PUT` | `/projects/{id}/repo` | Body `{ "path": "<abs path>" \| null }`. A non-empty path is validated then stored (resolved); `null` / empty unlinks. Invalid path → `400` with a short reason; foreign project → `404`. |
 | `GET` | `/projects/{id}/repo/status` | `{ "linked": false }` when no repo; otherwise a calm read-only snapshot (`state`, `branch`, `clean`, `status_short`, `recent_commits`, `changed_files`, `diff_stat`, `detail`). Foreign project → `404`. |
+| `POST` | `/projects/{id}/repo/patch-proposal` | Body is the model's structured change description: `{ "summary"?, "plan"?: [str], "changes": [{ "path", "action"?: "modify"\|"add"\|"delete", "old_content"?, "new_content"? }], "tests"?: [str], "risks"?: [str] }`. Returns a **review-only** `PatchProposal` (`review_only`, `applied:false`, `summary`, `plan`, `files[].diff`, `diff_preview`, `suggested_tests`, `risks`, `safety`). Nothing is written. No linked repo → `400`; any invalid path / proposal → `400` with a short reason; foreign project → `404`; an extra body field → `422`. |
 
 `GET /projects` and the other project endpoints additionally report
 `local_repo_path` and `has_local_repo` so the UI can show which
 projects are linked.
 
-## Roadmap (later phases — not in Phase 1)
+## Roadmap
 
 Each phase is additive and stays behind explicit user confirmation;
-nothing below is enabled by Phase 1.
+nothing below is enabled until its phase ships.
 
-- **Phase 2 — patch proposal mode.** Nova may *propose* a unified diff;
-  it is shown for review and never applied automatically.
-- **Phase 3 — apply patch with approval.** Apply a reviewed patch to
-  the working tree only after explicit per-patch approval.
-- **Phase 4 — branch + commit locally.** Create a local feature branch
-  and commit, never on `main`, never pushed.
-- **Phase 5 — PR draft assistant.** Help draft a PR description from
-  the local diff — still no network writes.
-- **Phase 6 — optional push after explicit confirmation.** A push,
-  only after an unmistakable, per-action confirmation; never to
+- **Phase 1 — read-only Git context.** *Shipped.* Observe a linked
+  repo's state; never modify it.
+- **Phase 2 — patch proposal mode.** *Shipped.* Nova may *propose* a
+  validated unified diff (plan, files, tests, risks); it is shown for
+  review only and **never applied** — no writes, no git, no process.
+- **Phase 3 — apply patch with approval.** *Not yet.* Apply a reviewed
+  patch to the working tree only after an explicit, per-patch approval;
+  still no commit / push / branch.
+- **Phase 4 — branch + commit locally.** *Not yet.* Create a local
+  feature branch and commit, never on `main`, never pushed.
+- **Phase 5 — PR draft assistant.** *Not yet.* Help draft a PR
+  description from the local diff — still no network writes.
+- **Phase 6 — optional push after explicit confirmation.** *Not yet.*
+  A push, only after an unmistakable, per-action confirmation; never to
   `main`, never autonomous.
 
-These are intentionally out of scope for Phase 1 to keep it small,
-auditable, and safe.
+The safety model is cumulative: each phase keeps every guarantee of the
+phases before it (opt-in operator root, hard path validation, no secret
+files, user scoping, capped/sanitised output) and only adds the one
+narrowly-scoped capability named in that phase, always behind explicit
+user action. Phases 3-6 are intentionally out of scope today to keep
+the surface small, auditable, and safe.
