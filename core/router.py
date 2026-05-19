@@ -21,6 +21,11 @@ Request: {query}
 
 Reply with ONE word (simple/code/normal/advanced):"""
 
+# Compiled-in routing map. Kept as a module constant (and asserted as
+# such by the registry / pull suites) so the *config* routing contract
+# is documented and unchanged. The admin-selected default model is an
+# overlay applied at call time in ``route`` below — it never rewrites
+# this map, so `code`/`advanced` routing is untouched.
 MODEL_MAP = {
     "simple":   MODELS["default"],
     "normal":   MODELS["default"],
@@ -31,8 +36,34 @@ MODEL_MAP = {
 FALLBACK_MODEL = MODELS["default"]
 
 
+def _default_model() -> str:
+    """The default chat model: admin-selected if safely persisted, else config.
+
+    Resolved per call (not bound at import) so an admin's validated
+    choice takes effect without a restart. Network-free and never
+    raises; with nothing persisted it returns ``config.MODELS["default"]``
+    so existing behaviour — and the routing-preserved suites — are
+    unaffected.
+    """
+    try:
+        from core.model_settings import resolve_default_model
+
+        return resolve_default_model()
+    except Exception:  # never let routing fail on a settings read
+        return FALLBACK_MODEL
+
+
 def route(user_input: str) -> str:
     """Choisit le bon modèle selon la complexité de la requête."""
+    default_model = _default_model()
+    # `simple`/`normal` and the fallback follow the admin-selected
+    # default; `code`/`advanced` keep their dedicated config models.
+    model_map = {
+        "simple":   default_model,
+        "normal":   default_model,
+        "advanced": MODELS["advanced"],
+        "code":     MODELS["code"],
+    }
     prompt = ROUTER_PROMPT.format(query=user_input)
     try:
         response = client.chat(
@@ -41,7 +72,7 @@ def route(user_input: str) -> str:
         )
         content = response["message"]["content"].strip().lower()
         category = content.split()[0] if content else ""
-        return MODEL_MAP.get(category, FALLBACK_MODEL)
+        return model_map.get(category, default_model)
     except (ollama.ResponseError, ConnectionError, httpx.HTTPError) as e:
         logger.warning("Router model unavailable, falling back to default: %s", e)
-        return FALLBACK_MODEL
+        return default_model

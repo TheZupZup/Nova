@@ -10,6 +10,9 @@ from __future__ import annotations
 
 from typing import Iterator, Optional, Sequence
 
+# This provider is test/offline-only and is never advertised as a
+# selectable production backend (see ``core.provider_status``).
+
 from .base import (
     ModelChunk,
     ModelProvider,
@@ -29,7 +32,11 @@ class MockProvider(ModelProvider):
       concatenation is also what :meth:`generate` returns when
       ``response`` is left at its default so the two paths stay
       consistent for a given configuration.
-    * ``healthy`` — what :meth:`health` reports.
+    * ``healthy`` — the ``ok`` flag :meth:`health` reports.
+    * ``models`` — the model list :meth:`health` reports, so suites can
+      exercise the Phase-2 "validate the selected default against the
+      provider's reported models" path without a real backend. Defaults
+      to empty, matching the pre-Phase-2 behaviour.
     * ``error`` — if set, every :meth:`generate` / :meth:`stream` call
       raises it (use a :class:`ModelProviderError` to simulate an
       unreachable backend cleanly).
@@ -48,6 +55,7 @@ class MockProvider(ModelProvider):
         response: Optional[str] = None,
         chunks: Optional[Sequence[str]] = None,
         healthy: bool = True,
+        models: Optional[Sequence[str]] = None,
         error: Optional[Exception] = None,
     ):
         self._chunks: list[str] = list(chunks) if chunks is not None else []
@@ -60,6 +68,7 @@ class MockProvider(ModelProvider):
         if not self._chunks:
             self._chunks = [self._response] if self._response else []
         self._healthy = healthy
+        self._models: list[str] = list(models) if models is not None else []
         self._error = error
         self.requests: list[ModelRequest] = []
 
@@ -81,6 +90,7 @@ class MockProvider(ModelProvider):
             ok=self._healthy,
             provider=self.name,
             detail="" if self._healthy else "mock provider marked unhealthy",
+            models=list(self._models),
         )
 
 

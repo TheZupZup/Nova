@@ -1,11 +1,12 @@
 import logging
 from typing import Iterator
-from config import NOVA_SYSTEM_PROMPT, CHAT_HISTORY_LIMIT, MODELS
+from config import NOVA_SYSTEM_PROMPT, CHAT_HISTORY_LIMIT
 from core.model_providers import (
     ModelProviderError,
     ModelRequest,
     get_provider,
 )
+from core.model_settings import resolve_default_model
 from core.memory import format_memories_for_prompt, parse_and_save
 from core.identity import IDENTITY_CONTRACT
 from core.nova_contract import build_personalization_block
@@ -136,7 +137,7 @@ def extract_and_save_memory(
     )
     try:
         result = _generate(
-            MODELS["default"],
+            resolve_default_model(),
             [{"role": "user", "content": prompt}],
         ).strip()
     except ModelProviderError:
@@ -245,12 +246,13 @@ def chat(history: list[dict], user_input: str, memories: list[dict], user_id: in
         if image:
             logger.debug("Processing image request, encoded length=%d", len(image))
             messages = build_image_messages(user_input, image)
-            reply = _generate(MODELS["default"], messages)
+            default_model = resolve_default_model()
+            reply = _generate(default_model, messages)
             if policy.memory_save_enabled:
                 extract_and_save_memory(
                     user_input or "image", reply, user_id, project_id
                 )
-            return reply, MODELS["default"]
+            return reply, default_model
 
         model = forced_model if forced_model else route(user_input)
 
@@ -344,7 +346,7 @@ def chat(history: list[dict], user_input: str, memories: list[dict], user_id: in
 
     except ModelProviderError as e:
         logger.warning("Model provider unavailable during chat: %s", e)
-        return OLLAMA_UNAVAILABLE, MODELS["default"]
+        return OLLAMA_UNAVAILABLE, resolve_default_model()
 
 
 def chat_stream(
@@ -388,15 +390,16 @@ def chat_stream(
         if image:
             logger.debug("Processing streaming-image request, encoded length=%d", len(image))
             messages = build_image_messages(user_input, image)
-            reply = _generate(MODELS["default"], messages)
+            default_model = resolve_default_model()
+            reply = _generate(default_model, messages)
             if policy.memory_save_enabled:
                 extract_and_save_memory(
                     user_input or "image", reply, user_id, project_id
                 )
-            yield {"type": "meta", "model": MODELS["default"]}
+            yield {"type": "meta", "model": default_model}
             if reply:
                 yield {"type": "delta", "content": reply}
-            yield {"type": "done", "reply": reply, "model": MODELS["default"]}
+            yield {"type": "done", "reply": reply, "model": default_model}
             return
 
         model = forced_model if forced_model else route(user_input)
