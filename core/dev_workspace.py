@@ -55,13 +55,15 @@ functions here and keep them user-scoped.
 Phase 2 — **patch proposal mode** — is also implemented here (see the
 "Patch proposal" section near the bottom). It is a *pure* transform: it
 turns a structured, model-produced change description into a validated,
-review-only :class:`PatchProposal` (plan, likely files, a unified-diff
-preview, suggested tests, a risk checklist). It performs **no** git
+review-only :class:`PatchProposal` (title, summary, plan, likely files,
+a unified-diff preview, suggested tests, a risk/warning checklist, plus
+a transient ``id`` + UTC ``created_at`` stamp). It performs **no** git
 calls, **no** file writes, and **no** subprocess work — it never
 applies, stages, commits, pushes, or branches anything. Every proposed
 path is validated to be repo-relative, traversal-free, non-secret, and
-contained inside the linked repo. Applying a reviewed patch is a
-deliberately separate, later phase.
+contained inside the linked repo, and any file whose content carries a
+NUL byte is refused as binary (no readable text diff possible).
+Applying a reviewed patch is a deliberately separate, later phase.
 
 See ``docs/dev-workspace.md`` for the operator walkthrough, the
 explicit non-goals, and the Phase 2-6 roadmap.
@@ -74,7 +76,9 @@ import logging
 import os
 import shutil
 import subprocess
+import uuid
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Optional, Sequence
 
@@ -614,6 +618,10 @@ def read_status(
 #     secret/private file (``.env``, ``*.db``/``nova.db``, SSH keys,
 #     tokens, credentials, logs, backups, exports, ``.git`` internals,
 #     …), and contained inside the validated linked repo.
+#   * Binary blobs are refused outright (a NUL byte in either
+#     ``old_content`` or ``new_content`` means the file is not text and
+#     has no useful unified-diff preview); reviewing binary changes is a
+#     deliberately later phase.
 #   * The diff is produced locally with :mod:`difflib` from the
 #     model-supplied before/after text — Nova does not read the working
 #     tree to build it, so a proposal cannot leak file contents the
@@ -621,6 +629,11 @@ def read_status(
 #     deliberately separate, later (apply) phase.
 #   * Every field is capped so a runaway model reply cannot balloon the
 #     payload, and the result restates that nothing was applied.
+#   * Each built proposal carries a transient ``id`` (random UUID) and a
+#     UTC ``created_at`` ISO timestamp so the review UI can pin a
+#     preview to the exact build it is looking at. No proposal is
+#     persisted in this phase — the values are recomputed on every
+#     call.
 
 
 class PatchProposalError(ValueError):
@@ -634,6 +647,7 @@ class PatchProposalError(ValueError):
 
 # Caps. A patch proposal is model-produced text; every list and blob is
 # bounded so a runaway reply cannot wedge a request or bloat the JSON.
+_MAX_PROPOSAL_TITLE_CHARS = 120
 _MAX_PROPOSAL_SUMMARY_CHARS = 300
 _MAX_PROPOSAL_PLAN_STEPS = 40
 _MAX_PROPOSAL_FILES = 50
@@ -731,6 +745,18 @@ _PROPOSAL_SAFETY_NOTES = (
     "Review it, then apply it yourself. A later phase will add an "
     "explicit, per-patch approval step before anything is written.",
 )
+
+
+def _looks_binary(content: str) -> bool:
+    """True when ``content`` is not safe to preview as a text patch.
+
+    A real text source file never contains a NUL byte, so a NUL is the
+    cheapest, most reliable binary signal — and the same heuristic git
+    itself uses to flag a file as "Binary". The diff preview is pure
+    text, so a binary blob is refused outright in this phase rather than
+    surfacing a broken or huge diff. Empty content is trivially text.
+    """
+    return "\x00" in content
 
 
 def _is_secret_path(rel_posix: str) -> bool:
@@ -875,26 +901,42 @@ class PatchProposal:
     checklist. Nothing here has been applied; ``as_dict`` always reports
     ``review_only`` / ``applied`` and the standing safety notes so the
     contract travels with the data.
+
+    ``id`` and ``created_at`` are transient metadata stamped when the
+    proposal is built (random UUID + UTC ISO timestamp). No proposal is
+    persisted in this phase — these fields exist so the UI can keep the
+    preview pinned to a specific build while the user reviews it. The
+    ``risks`` data is additionally surfaced as ``warnings`` in
+    :meth:`as_dict` so the JSON contract matches both the spec wording
+    and the existing Phase 2 endpoint.
     """
 
     repo_path: str
     summary: str = ""
+    title: str = ""
     plan: tuple[str, ...] = field(default_factory=tuple)
     files: tuple[ProposedFileChange, ...] = field(default_factory=tuple)
     suggested_tests: tuple[str, ...] = field(default_factory=tuple)
     risks: tuple[str, ...] = field(default_factory=tuple)
     diff_preview: str = ""
+    id: str = ""
+    created_at: str = ""
 
     def as_dict(self) -> dict:
+        risks = list(self.risks)
         return {
             "review_only": True,
             "applied": False,
+            "id": self.id,
+            "created_at": self.created_at,
             "repo_path": self.repo_path,
+            "title": self.title,
             "summary": self.summary,
             "plan": list(self.plan),
             "files": [f.as_dict() for f in self.files],
             "suggested_tests": list(self.suggested_tests),
-            "risks": list(self.risks),
+            "risks": risks,
+            "warnings": list(risks),
             "diff_preview": self.diff_preview,
             "safety": list(_PROPOSAL_SAFETY_NOTES),
         }
@@ -974,6 +1016,7 @@ def build_patch_proposal(
     ``proposal`` is the model's structured description::
 
         {
+          "title": "<short label>",
           "summary": "<one line>",
           "plan": ["step", ...],
           "changes": [
@@ -982,14 +1025,18 @@ def build_patch_proposal(
             ...
           ],
           "tests": ["pytest ...", ...],
-          "risks": ["touches auth", ...],
+          "risks": ["touches auth", ...],     # alias: "warnings"
         }
 
     Every change's path is validated by :func:`validate_proposed_path`
-    (repo-relative, no traversal, non-secret, inside the repo) and the
-    diff is computed locally. **Nothing is applied**; this never writes,
-    spawns a process, or touches git. Raises :class:`PatchProposalError`
-    (short, safe message) on any validation failure.
+    (repo-relative, no traversal, non-secret, inside the repo), a binary
+    blob (NUL-bearing content) is refused, and the diff is computed
+    locally. ``title`` is optional and collapsed to a single safe line;
+    ``warnings`` is accepted as a synonym for ``risks``. The built
+    proposal is stamped with a transient random ``id`` and UTC
+    ``created_at``. **Nothing is applied**; this never writes, spawns a
+    process, or touches git. Raises :class:`PatchProposalError` (short,
+    safe message) on any validation failure.
     """
     try:
         resolved = validate_repo_path(repo_path, roots=roots)
@@ -1001,6 +1048,12 @@ def build_patch_proposal(
     if not isinstance(proposal, dict):
         raise PatchProposalError("patch proposal must be an object")
 
+    title_raw = proposal.get("title") or ""
+    if not isinstance(title_raw, str):
+        raise PatchProposalError("title must be a string")
+    # Collapse whitespace so the title stays a single safe line.
+    title = " ".join(title_raw.split())[:_MAX_PROPOSAL_TITLE_CHARS]
+
     summary_raw = proposal.get("summary") or ""
     if not isinstance(summary_raw, str):
         raise PatchProposalError("summary must be a string")
@@ -1009,7 +1062,13 @@ def build_patch_proposal(
 
     plan = _string_list(proposal.get("plan"), _MAX_PROPOSAL_PLAN_STEPS)
     tests = _string_list(proposal.get("tests"), _MAX_PROPOSAL_TESTS)
-    risks = _string_list(proposal.get("risks"), _MAX_PROPOSAL_RISKS)
+    # Accept ``risks`` and ``warnings`` interchangeably so a model that
+    # follows the spec wording lands in the same field as one that
+    # follows the Phase 2 endpoint shape; both are surfaced on output.
+    risks_raw = proposal.get("risks")
+    if risks_raw is None:
+        risks_raw = proposal.get("warnings")
+    risks = _string_list(risks_raw, _MAX_PROPOSAL_RISKS)
 
     raw_changes = proposal.get("changes")
     if not isinstance(raw_changes, (list, tuple)) or not raw_changes:
@@ -1038,6 +1097,13 @@ def build_patch_proposal(
         new = "" if (new is None or action == "delete") else new
         if not isinstance(old, str) or not isinstance(new, str):
             raise PatchProposalError("file content must be a string")
+        if _looks_binary(old) or _looks_binary(new):
+            # Binary patches are out of scope for the text preview: their
+            # diff would be unreadable or huge, and reviewing a binary
+            # change as text is unsafe. Refuse outright in this phase.
+            raise PatchProposalError(
+                f"binary content is not supported for {rel}"
+            )
         if (
             len(old) > _MAX_PROPOSAL_CONTENT_CHARS
             or len(new) > _MAX_PROPOSAL_CONTENT_CHARS
@@ -1086,10 +1152,13 @@ def build_patch_proposal(
 
     return PatchProposal(
         repo_path=str(resolved),
+        title=title,
         summary=summary,
         plan=plan,
         files=tuple(files),
         suggested_tests=tests,
         risks=risks,
         diff_preview="\n".join(preview_parts),
+        id=uuid.uuid4().hex,
+        created_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     )

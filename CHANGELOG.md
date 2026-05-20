@@ -1,6 +1,60 @@
 # Changelog
 
 ## Unreleased
+### Added
+- Dev Workspace Phase 2 — patch proposal preview surface (review-only):
+  the Dev Workspace panel (`⎇`) gains a "Patch proposal preview"
+  section that appears whenever a project's linked repo is in the
+  `ready` state. Paste a structured proposal as JSON, click
+  **Preview proposal**, and the panel renders the validated reply
+  side by side — title, one-line summary, implementation plan,
+  affected files (action badge + `+/−` line counts), the proposed
+  unified diff in a scrollable code block, suggested tests, warnings,
+  and the standing safety notes — followed by **Copy patch** and
+  **Copy test plan** clipboard helpers. There is intentionally no
+  "Apply" button, no commit / push / branch affordance, and no
+  persistence: the preview is a strict, transient, client-side
+  rendering of the calm `PatchProposal` dict returned by the backend.
+  Every dynamic value (diff lines, file paths, plan steps, the title
+  itself) is written via `textContent`, never `innerHTML`, so a
+  proposal that happens to contain HTML metacharacters cannot inject
+  markup. Bilingual labels (FR/EN) match the rest of the Dev Workspace
+  UI.
+- Dev Workspace Phase 2 — `PatchProposal` gains optional `title`,
+  transient `id` (random UUID), and UTC `created_at` ISO timestamp so
+  a review UI can pin a preview to the exact build it is rendering;
+  `warnings` is accepted as a synonym for `risks` on input and is
+  mirrored on output, matching both the Phase 2 spec wording and the
+  original endpoint shape. The title is collapsed to a single safe
+  line and length-capped (`_MAX_PROPOSAL_TITLE_CHARS = 120`); none of
+  these additions are persisted (Phase 2 stays transient).
+- Dev Workspace Phase 2 — binary patch rejection: any change whose
+  `old_content` or `new_content` contains a NUL byte (the cheapest
+  reliable text-vs-binary signal, the same heuristic `git` uses to
+  flag a file as "Binary") fails validation with `PatchProposalError`
+  ("binary content is not supported for <path>"). Pure text patches,
+  including emoji / CJK / RTL content, are unaffected; reviewing
+  binary changes is deliberately deferred to a later phase.
+- Dev Workspace Phase 2 — spec-suggested validate endpoint alias:
+  `POST /projects/{id}/patch-proposals/validate` shares the same body,
+  per-project / per-user scope, and response as
+  `POST /projects/{id}/repo/patch-proposal`. The URL's `.../validate`
+  ending makes the "we are only validating, nothing is applied"
+  intent explicit; both endpoints route through one shared
+  `_build_patch_proposal_response` helper so they cannot drift.
+  Foreign project → `404`, no linked repo → `400`, invalid
+  proposal/path/binary → `400`, extra body field → `422`, missing
+  auth → `401`. Regression tests cover all of these paths plus
+  end-to-end title / warnings handling.
+- `docs/dev-workspace.md` documents the new fields (`title`, `id`,
+  `created_at`), the binary-content refusal, the validate-endpoint
+  alias, and the patch-proposal preview surface inside the Dev
+  Workspace panel; the safety-boundaries section adds the "no Apply
+  affordance in the UI" guarantee. The Phase 2 roadmap entry is
+  rewritten to reflect the shipped UI surface and the new endpoint
+  path. Phase 2 still grants Nova **no** power to write files,
+  commit, push, or branch.
+
 ### Fixed
 - Streaming chat no longer surfaces "Nova didn't produce a reply." for
   every prompt. The chunk extractor used to filter Ollama events with

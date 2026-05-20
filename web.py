@@ -342,14 +342,20 @@ class PatchProposalRequest(BaseModel):
     A structured, model-produced change description. The endpoint turns
     it into a calm, validated, **review-only** patch preview — it never
     writes files, commits, pushes, branches, or runs a command.
+
+    ``warnings`` is accepted as a synonym for ``risks`` so callers may
+    follow either the Phase 2 spec wording or the original endpoint
+    shape; both surface in the response.
     """
     model_config = {"extra": "forbid"}
 
+    title: str | None = None
     summary: str | None = None
     plan: list[str] | None = None
     changes: list[PatchProposalChange]
     tests: list[str] | None = None
     risks: list[str] | None = None
+    warnings: list[str] | None = None
 
 
 class MemoryUpdateRequest(BaseModel):
@@ -725,23 +731,18 @@ def get_project_repo_status_endpoint(
     return snapshot
 
 
-@app.post("/projects/{project_id}/repo/patch-proposal")
-def create_project_repo_patch_proposal_endpoint(
+def _build_patch_proposal_response(
     project_id: int,
     request: PatchProposalRequest,
-    user: CurrentUser = Depends(get_current_user),
-):
-    """Build a **review-only** patch proposal for a linked repo (Phase 2).
+    user: CurrentUser,
+) -> dict:
+    """Shared body for the two Phase 2 patch-proposal endpoints.
 
-    Turns the model's structured change description into a validated,
-    calm :class:`core.dev_workspace.PatchProposal` (plan, likely files,
-    a unified-diff preview, suggested tests, risk checklist). This is a
-    pure transform: it never writes files, stages, commits, pushes,
-    branches, or runs a command — the repo is not touched.
-
-    A foreign / unknown project id is a 404 (existence not leaked); a
-    project with no linked repo, or any proposal/path that fails
-    validation, is a 400 with a short, safe reason.
+    Both ``POST /projects/{id}/repo/patch-proposal`` (the original Phase
+    2 path) and ``POST /projects/{id}/patch-proposals/validate`` (the
+    spec-suggested validate path) share the same per-project, per-user
+    scope and the same read-only validation; this helper keeps them in
+    sync so the two paths can never drift.
     """
     project = _projects.get_project(project_id, user.id)
     if project is None:
@@ -761,6 +762,44 @@ def create_project_repo_patch_proposal_endpoint(
     except dev_workspace.PatchProposalError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return proposal.as_dict()
+
+
+@app.post("/projects/{project_id}/repo/patch-proposal")
+def create_project_repo_patch_proposal_endpoint(
+    project_id: int,
+    request: PatchProposalRequest,
+    user: CurrentUser = Depends(get_current_user),
+):
+    """Build a **review-only** patch proposal for a linked repo (Phase 2).
+
+    Turns the model's structured change description into a validated,
+    calm :class:`core.dev_workspace.PatchProposal` (plan, likely files,
+    a unified-diff preview, suggested tests, risk checklist). This is a
+    pure transform: it never writes files, stages, commits, pushes,
+    branches, or runs a command — the repo is not touched.
+
+    A foreign / unknown project id is a 404 (existence not leaked); a
+    project with no linked repo, or any proposal/path that fails
+    validation, is a 400 with a short, safe reason.
+    """
+    return _build_patch_proposal_response(project_id, request, user)
+
+
+@app.post("/projects/{project_id}/patch-proposals/validate")
+def validate_project_patch_proposal_endpoint(
+    project_id: int,
+    request: PatchProposalRequest,
+    user: CurrentUser = Depends(get_current_user),
+):
+    """Validate a patch proposal and return its review-only preview.
+
+    Spec-suggested alias of ``POST /projects/{id}/repo/patch-proposal``:
+    same body, same per-project / per-user scoping, same response shape.
+    Naming this endpoint ``.../patch-proposals/validate`` makes the
+    intent — *we are only validating, nothing is applied* — explicit at
+    the URL level. Phase 2 has no persistence and no apply step.
+    """
+    return _build_patch_proposal_response(project_id, request, user)
 
 
 @app.get("/conversations/{conversation_id}/messages")

@@ -51,22 +51,45 @@ structured change description from the model, the
 `core.dev_workspace.build_patch_proposal` helper returns a calm,
 validated, **review-only** object containing:
 
-- a short **summary** and an **implementation plan**,
-- the **files likely to change** (repo-relative paths),
+- an optional short **title** and a one-line **summary**,
+- an **implementation plan**,
+- the **files likely to change** (repo-relative paths) with a per-file
+  added / removed line count,
 - a **unified-diff preview** per file plus a combined preview,
 - **suggested tests**, and
-- a **risk checklist**.
+- a **risk / warning checklist**.
+
+Every built proposal additionally carries a transient `id` (random
+UUID) and a UTC `created_at` ISO timestamp so the review UI can pin a
+preview to the exact build it is rendering. **No proposal is stored**
+in this phase — the values are recomputed on every call, and there is
+no read-back endpoint.
 
 The diff is computed locally with Python's `difflib` from the
 before/after text the model supplies; Nova does not read your working
 tree to build it, so a proposal cannot surface file contents the model
-was not already given. The result always carries `review_only: true`,
-`applied: false`, and a fixed safety note restating that nothing was
-written. You review it and apply it yourself — an explicit,
-per-patch *apply* step is a deliberately separate, later phase.
+was not already given. **Binary content is refused**: any change whose
+`old_content` or `new_content` contains a NUL byte fails validation
+with a short reason — there is no readable text diff for a binary
+blob, and reviewing binary changes is a deliberately later phase. The
+result always carries `review_only: true`, `applied: false`, and a
+fixed safety note restating that nothing was written. You review it
+and apply it yourself — an explicit, per-patch *apply* step is a
+deliberately separate, later phase.
 
-It is reachable per linked project at
-`POST /projects/{id}/repo/patch-proposal`.
+A linked project surfaces a **Patch proposal preview** section inside
+the Dev Workspace panel (`⎇`) where you can paste a structured
+proposal, validate it through the same backend logic, and review the
+resulting title, summary, plan, affected files, diff, tests, and
+warnings side by side. Two buttons — **Copy patch** and
+**Copy test plan** — copy the combined unified diff and the suggested
+tests to your clipboard so you can apply them yourself in your editor
+or terminal. There is intentionally no "Apply" button in this phase.
+
+It is reachable per linked project at either
+`POST /projects/{id}/repo/patch-proposal` (the original Phase 2 path)
+or `POST /projects/{id}/patch-proposals/validate` (the spec-suggested
+"validate-only" alias). Both share the same body, scope, and response.
 
 ## What Phase 1 and Phase 2 deliberately do NOT do
 
@@ -136,11 +159,21 @@ These are enforced in `core/dev_workspace.py` and covered by
      `logs`, `.git`, `__pycache__`, `.venv`, `node_modules`);
    - the path must still resolve **inside** the linked repo (a
      symlinked subdir pointing outside it is refused);
+   - **binary content is refused** — any `old_content` /
+     `new_content` carrying a NUL byte fails validation, since there
+     is no readable text diff for a binary blob;
    - the diff is built locally with `difflib` from the model-supplied
      before/after text — **no git, no subprocess, no file I/O, no
      network**; nothing is applied, staged, committed, pushed, or
      branched, and every field is capped. The result restates
-     `review_only: true` / `applied: false`.
+     `review_only: true` / `applied: false`, and includes a transient
+     random `id` + UTC `created_at` so the UI can pin a preview to a
+     specific build (no proposal is persisted in this phase).
+8. **No "Apply" affordance in the UI.** The patch proposal preview
+   surface inside the Dev Workspace panel only renders the result and
+   offers **Copy patch** / **Copy test plan** clipboard helpers.
+   There is no button, endpoint, or code path in this phase that
+   could write the proposed diff to disk.
 
 The linked path **and any patch proposal** are **contextual data
 only** — they confer no write power. They are surfaced to the model
@@ -173,7 +206,8 @@ never touches the repository.
 | ------ | ---- | ------- |
 | `PUT` | `/projects/{id}/repo` | Body `{ "path": "<abs path>" \| null }`. A non-empty path is validated then stored (resolved); `null` / empty unlinks. Invalid path → `400` with a short reason; foreign project → `404`. |
 | `GET` | `/projects/{id}/repo/status` | `{ "linked": false }` when no repo; otherwise a calm read-only snapshot (`state`, `branch`, `clean`, `status_short`, `recent_commits`, `changed_files`, `diff_stat`, `detail`). Foreign project → `404`. |
-| `POST` | `/projects/{id}/repo/patch-proposal` | Body is the model's structured change description: `{ "summary"?, "plan"?: [str], "changes": [{ "path", "action"?: "modify"\|"add"\|"delete", "old_content"?, "new_content"? }], "tests"?: [str], "risks"?: [str] }`. Returns a **review-only** `PatchProposal` (`review_only`, `applied:false`, `summary`, `plan`, `files[].diff`, `diff_preview`, `suggested_tests`, `risks`, `safety`). Nothing is written. No linked repo → `400`; any invalid path / proposal → `400` with a short reason; foreign project → `404`; an extra body field → `422`. |
+| `POST` | `/projects/{id}/repo/patch-proposal` | Body is the model's structured change description: `{ "title"?, "summary"?, "plan"?: [str], "changes": [{ "path", "action"?: "modify"\|"add"\|"delete", "old_content"?, "new_content"? }], "tests"?: [str], "risks"?: [str], "warnings"?: [str] }`. Returns a **review-only** `PatchProposal` (`review_only`, `applied:false`, `id`, `created_at`, `title`, `summary`, `plan`, `files[].diff`, `diff_preview`, `suggested_tests`, `risks`, `warnings`, `safety`). Nothing is written. No linked repo → `400`; any invalid path / proposal → `400` with a short reason; foreign project → `404`; an extra body field → `422`. |
+| `POST` | `/projects/{id}/patch-proposals/validate` | Spec-suggested alias of the row above: same body, same per-project / per-user scope, same response. Naming the path `.../validate` makes the "we are only validating, nothing is applied" intent explicit at the URL level. |
 
 `GET /projects` and the other project endpoints additionally report
 `local_repo_path` and `has_local_repo` so the UI can show which
@@ -187,8 +221,14 @@ nothing below is enabled until its phase ships.
 - **Phase 1 — read-only Git context.** *Shipped.* Observe a linked
   repo's state; never modify it.
 - **Phase 2 — patch proposal mode.** *Shipped.* Nova may *propose* a
-  validated unified diff (plan, files, tests, risks); it is shown for
-  review only and **never applied** — no writes, no git, no process.
+  validated unified diff (title, summary, plan, files, tests,
+  warnings/risks, transient `id` + `created_at`); it is shown for
+  review only — backed by a Dev Workspace preview surface with
+  **Copy patch** / **Copy test plan** clipboard helpers, and reachable
+  at either `POST /projects/{id}/repo/patch-proposal` or
+  `POST /projects/{id}/patch-proposals/validate`. Binary content is
+  refused. Patches are **never applied** — no writes, no git, no
+  process, no persistence.
 - **Phase 3 — apply patch with approval.** *Not yet.* Apply a reviewed
   patch to the working tree only after an explicit, per-patch approval;
   still no commit / push / branch.

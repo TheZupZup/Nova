@@ -491,6 +491,56 @@
             color: var(--text-dim); white-space: pre-wrap; word-break: break-all;
             max-height: 220px; overflow-y: auto;
         }
+        .repo-patch-section {
+            margin-top: 22px; padding-top: 16px;
+            border-top: 1px solid var(--border);
+        }
+        .repo-patch-input {
+            width: 100%; box-sizing: border-box; padding: 9px 12px;
+            background: rgba(255,255,255,0.025);
+            border: 1px solid var(--border); border-radius: 10px;
+            color: var(--text); font-size: 0.78rem; outline: none;
+            font-family: var(--mono, monospace); resize: vertical;
+            min-height: 110px;
+        }
+        .repo-patch-input:focus {
+            border-color: var(--cyan-glow); box-shadow: 0 0 0 3px var(--cyan-soft);
+        }
+        .repo-patch-result { margin-top: 16px; }
+        .repo-patch-badges {
+            display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px;
+        }
+        .repo-patch-badge {
+            display: inline-block; padding: 2px 10px; border-radius: 999px;
+            font-size: 0.7rem; font-weight: 600; letter-spacing: 0.02em;
+        }
+        .repo-patch-badge.review { color: var(--cyan-glow); background: var(--cyan-soft); }
+        .repo-patch-badge.applied { color: #7fe0a8; background: rgba(80,200,140,0.12); }
+        .repo-patch-text {
+            font-size: 0.82rem; color: var(--text); line-height: 1.45;
+            word-break: break-word;
+        }
+        .repo-patch-ol { list-style: decimal inside; }
+        .repo-patch-ol li { padding-left: 4px; }
+        .repo-patch-diff {
+            max-height: 320px; font-size: 0.72rem;
+            white-space: pre; word-break: normal; overflow-x: auto;
+        }
+        .repo-patch-warnings li { color: #f0c479; }
+        .repo-patch-file-action {
+            display: inline-block; margin-right: 8px; padding: 1px 7px;
+            border-radius: 6px; font-size: 0.66rem; font-weight: 600;
+            text-transform: uppercase; letter-spacing: 0.04em;
+        }
+        .repo-patch-file-action.add { color: #7fe0a8; background: rgba(80,200,140,0.12); }
+        .repo-patch-file-action.modify { color: var(--cyan-glow); background: var(--cyan-soft); }
+        .repo-patch-file-action.delete { color: #f0a0a0; background: rgba(220,90,90,0.10); }
+        .repo-patch-file-stats {
+            margin-left: 8px; color: var(--text-dim); font-size: 0.7rem;
+        }
+        .repo-patch-actions {
+            display: flex; gap: 8px; margin-top: 14px; flex-wrap: wrap;
+        }
 
         .conv-group-header {
             font-size: 0.66rem;
@@ -3307,6 +3357,69 @@
                     <pre class="repo-pre" id="repo-diffstat-pre"></pre>
                 </div>
             </div>
+
+            <!-- ── PATCH PROPOSAL PREVIEW (Phase 2, review-only) ──
+                 Renders a validated PatchProposal returned by
+                 ``POST /projects/{id}/patch-proposals/validate``. The
+                 entire surface is review-only: no Apply button, no edit
+                 of the working tree, no commit/push. All dynamic text
+                 from the server (diffs, paths, plan steps) is written
+                 with textContent — never innerHTML — so a proposal can
+                 never inject markup. -->
+            <div id="patch-section" class="repo-patch-section" style="display:none;">
+                <div class="repo-block-title" id="patch-section-title">Patch proposal preview</div>
+                <p class="repo-note" id="patch-intro-text"></p>
+                <label class="repo-label" id="patch-input-label" for="patch-input">Proposal JSON</label>
+                <textarea id="patch-input" class="repo-patch-input" spellcheck="false" autocomplete="off" rows="6"></textarea>
+                <div class="repo-actions">
+                    <button id="patch-preview-btn" class="repo-btn repo-btn-primary" type="button" onclick="previewPatchProposal()">Preview proposal</button>
+                    <button id="patch-clear-btn" class="repo-btn" type="button" onclick="clearPatchPreview()" style="display:none;">Clear</button>
+                </div>
+                <div id="patch-msg" class="repo-msg" style="display:none;"></div>
+
+                <div id="patch-result" class="repo-patch-result" style="display:none;">
+                    <div class="repo-patch-badges">
+                        <span class="repo-patch-badge review">Review-only</span>
+                        <span class="repo-patch-badge applied">Not applied</span>
+                    </div>
+                    <div class="repo-block" id="patch-title-block" style="display:none;">
+                        <div class="repo-block-title" id="patch-title-label">Title</div>
+                        <div class="repo-patch-text" id="patch-title-val"></div>
+                    </div>
+                    <div class="repo-block" id="patch-summary-block" style="display:none;">
+                        <div class="repo-block-title" id="patch-summary-label">Summary</div>
+                        <div class="repo-patch-text" id="patch-summary-val"></div>
+                    </div>
+                    <div class="repo-block" id="patch-plan-block" style="display:none;">
+                        <div class="repo-block-title" id="patch-plan-label">Plan</div>
+                        <ol class="repo-list repo-patch-ol" id="patch-plan-list"></ol>
+                    </div>
+                    <div class="repo-block" id="patch-files-block" style="display:none;">
+                        <div class="repo-block-title" id="patch-files-label">Affected files</div>
+                        <ul class="repo-list" id="patch-files-list"></ul>
+                    </div>
+                    <div class="repo-block" id="patch-diff-block" style="display:none;">
+                        <div class="repo-block-title" id="patch-diff-label">Proposed diff</div>
+                        <pre class="repo-pre repo-patch-diff" id="patch-diff-pre"></pre>
+                    </div>
+                    <div class="repo-block" id="patch-tests-block" style="display:none;">
+                        <div class="repo-block-title" id="patch-tests-label">Suggested tests</div>
+                        <ul class="repo-list" id="patch-tests-list"></ul>
+                    </div>
+                    <div class="repo-block" id="patch-warnings-block" style="display:none;">
+                        <div class="repo-block-title" id="patch-warnings-label">Warnings</div>
+                        <ul class="repo-list repo-patch-warnings" id="patch-warnings-list"></ul>
+                    </div>
+                    <div class="repo-block" id="patch-safety-block">
+                        <div class="repo-block-title" id="patch-safety-label">Safety</div>
+                        <ul class="repo-list" id="patch-safety-list"></ul>
+                    </div>
+                    <div class="repo-patch-actions">
+                        <button id="patch-copy-diff-btn" class="repo-btn" type="button" onclick="copyPatchDiff()">Copy patch</button>
+                        <button id="patch-copy-tests-btn" class="repo-btn" type="button" onclick="copyPatchTests()">Copy test plan</button>
+                    </div>
+                </div>
+            </div>
         </div>
     </div>
 </div>
@@ -3808,6 +3921,30 @@
             repo_error: "Impossible de lire l'état Git du dépôt.",
             repo_saved: "Dépôt lié.",
             repo_unlinked: "Dépôt délié.",
+            patch_section_title: "Aperçu de proposition de patch",
+            patch_intro: "Collez une proposition structurée pour la prévisualiser. Nova ne modifie aucun fichier — l'aperçu est strictement en lecture seule.",
+            patch_input_label: "Proposition (JSON)",
+            patch_input_ph: "{\n  \"title\": \"\",\n  \"summary\": \"\",\n  \"plan\": [],\n  \"changes\": [\n    {\"path\": \"core/foo.py\", \"action\": \"modify\", \"old_content\": \"\", \"new_content\": \"\"}\n  ],\n  \"tests\": [],\n  \"warnings\": []\n}",
+            patch_preview: "Prévisualiser",
+            patch_clear: "Effacer",
+            patch_title: "Titre",
+            patch_summary: "Résumé",
+            patch_plan: "Plan",
+            patch_files: "Fichiers concernés",
+            patch_diff: "Diff proposé",
+            patch_tests: "Tests suggérés",
+            patch_warnings: "Avertissements",
+            patch_safety: "Sécurité",
+            patch_review_only: "Lecture seule",
+            patch_not_applied: "Non appliqué",
+            patch_copy_diff: "Copier le patch",
+            patch_copy_tests: "Copier le plan de tests",
+            patch_copy_done: "Copié.",
+            patch_copy_fail: "La copie a échoué.",
+            patch_invalid_json: "JSON invalide.",
+            patch_error: "Impossible de prévalider la proposition.",
+            patch_no_diff: "Aucun diff à copier.",
+            patch_no_tests: "Aucun test à copier.",
             no_match: "Aucun résultat",
             search_placeholder: "Rechercher...",
             group_today: "AUJOURD'HUI",
@@ -4026,6 +4163,30 @@
             repo_error: "Could not read the repository's Git status.",
             repo_saved: "Repository linked.",
             repo_unlinked: "Repository unlinked.",
+            patch_section_title: "Patch proposal preview",
+            patch_intro: "Paste a structured proposal to preview it. Nova does not modify any file — the preview is strictly read-only.",
+            patch_input_label: "Proposal (JSON)",
+            patch_input_ph: "{\n  \"title\": \"\",\n  \"summary\": \"\",\n  \"plan\": [],\n  \"changes\": [\n    {\"path\": \"core/foo.py\", \"action\": \"modify\", \"old_content\": \"\", \"new_content\": \"\"}\n  ],\n  \"tests\": [],\n  \"warnings\": []\n}",
+            patch_preview: "Preview proposal",
+            patch_clear: "Clear",
+            patch_title: "Title",
+            patch_summary: "Summary",
+            patch_plan: "Plan",
+            patch_files: "Affected files",
+            patch_diff: "Proposed diff",
+            patch_tests: "Suggested tests",
+            patch_warnings: "Warnings",
+            patch_safety: "Safety",
+            patch_review_only: "Review-only",
+            patch_not_applied: "Not applied",
+            patch_copy_diff: "Copy patch",
+            patch_copy_tests: "Copy test plan",
+            patch_copy_done: "Copied.",
+            patch_copy_fail: "Copy failed.",
+            patch_invalid_json: "Invalid JSON.",
+            patch_error: "Could not validate the proposal.",
+            patch_no_diff: "No diff to copy.",
+            patch_no_tests: "No tests to copy.",
             no_match: "No matches",
             search_placeholder: "Search...",
             group_today: "TODAY",
@@ -4949,6 +5110,28 @@
         if (input) input.placeholder = t("repo_path_ph");
         const repoBtn = document.getElementById("repo-settings-btn");
         if (repoBtn) repoBtn.title = t("repo_settings");
+        // Patch proposal preview.
+        set("patch-section-title", "patch_section_title");
+        set("patch-intro-text", "patch_intro");
+        set("patch-input-label", "patch_input_label");
+        set("patch-preview-btn", "patch_preview");
+        set("patch-clear-btn", "patch_clear");
+        set("patch-title-label", "patch_title");
+        set("patch-summary-label", "patch_summary");
+        set("patch-plan-label", "patch_plan");
+        set("patch-files-label", "patch_files");
+        set("patch-diff-label", "patch_diff");
+        set("patch-tests-label", "patch_tests");
+        set("patch-warnings-label", "patch_warnings");
+        set("patch-safety-label", "patch_safety");
+        set("patch-copy-diff-btn", "patch_copy_diff");
+        set("patch-copy-tests-btn", "patch_copy_tests");
+        const patchInput = document.getElementById("patch-input");
+        if (patchInput) patchInput.placeholder = t("patch_input_ph");
+        const reviewBadge = document.querySelector("#patch-result .repo-patch-badge.review");
+        if (reviewBadge) reviewBadge.textContent = t("patch_review_only");
+        const appliedBadge = document.querySelector("#patch-result .repo-patch-badge.applied");
+        if (appliedBadge) appliedBadge.textContent = t("patch_not_applied");
     }
 
     function openRepoSettings() {
@@ -4958,6 +5141,8 @@
         document.getElementById("repo-status").style.display = "none";
         document.getElementById("repo-path-input").value = "";
         document.getElementById("repo-overlay").classList.add("open");
+        _hidePatchSection();
+        clearPatchPreview();
         closeSidebar();
         loadRepoStatus();
     }
@@ -5007,6 +5192,7 @@
         if (!data || data.linked === false) {
             statusBox.style.display = "none";
             unlinkBtn.style.display = "none";
+            _hidePatchSection();
             if (!input.value) _repoMsg(t("repo_none"), "ok");
             return;
         }
@@ -5016,10 +5202,13 @@
         unlinkBtn.style.display = "";
 
         const state = data.state || "error";
-        if (state === "disabled") { _repoMsg(t("repo_disabled"), "err"); statusBox.style.display = "none"; return; }
-        if (state === "invalid_path") { _repoMsg((t("repo_invalid") + ": " + (data.detail || "")).trim(), "err"); statusBox.style.display = "none"; return; }
-        if (state === "git_unavailable") { _repoMsg(t("repo_git_missing"), "err"); statusBox.style.display = "none"; return; }
-        if (state === "error") { _repoMsg(t("repo_error"), "err"); statusBox.style.display = "none"; return; }
+        if (state === "disabled") { _repoMsg(t("repo_disabled"), "err"); statusBox.style.display = "none"; _hidePatchSection(); return; }
+        if (state === "invalid_path") { _repoMsg((t("repo_invalid") + ": " + (data.detail || "")).trim(), "err"); statusBox.style.display = "none"; _hidePatchSection(); return; }
+        if (state === "git_unavailable") { _repoMsg(t("repo_git_missing"), "err"); statusBox.style.display = "none"; _hidePatchSection(); return; }
+        if (state === "error") { _repoMsg(t("repo_error"), "err"); statusBox.style.display = "none"; _hidePatchSection(); return; }
+
+        // Ready: expose the patch-proposal preview surface.
+        _showPatchSection();
 
         // state === "ready"
         _repoMsg("", null);
@@ -5132,8 +5321,216 @@
         document.getElementById("repo-path-input").value = "";
         document.getElementById("repo-status").style.display = "none";
         document.getElementById("repo-unlink-btn").style.display = "none";
+        _hidePatchSection();
+        clearPatchPreview();
         _repoMsg(t("repo_unlinked"), "ok");
         await loadProjects();
+    }
+
+    // ── PATCH PROPOSAL PREVIEW (Phase 2, review-only) ──
+    //
+    // The preview surface is strictly client-side rendering: it POSTs a
+    // structured proposal to the per-project validate endpoint and shows
+    // the calm, validated reply. No Apply button, no commit, no push —
+    // the backend already enforces those invariants in
+    // ``core/dev_workspace.build_patch_proposal``; the UI never claims
+    // otherwise. All dynamic text (diffs, paths, titles, plans) is
+    // written with ``textContent``, never ``innerHTML``, so a proposal
+    // that happens to contain HTML metacharacters cannot inject markup.
+
+    // Most recently rendered proposal so the Copy buttons can serialise
+    // it without re-parsing the DOM. Reset on every preview / clear.
+    let _lastPatchProposal = null;
+
+    function _showPatchSection() {
+        const sec = document.getElementById("patch-section");
+        if (sec) sec.style.display = "";
+    }
+
+    function _hidePatchSection() {
+        const sec = document.getElementById("patch-section");
+        if (sec) sec.style.display = "none";
+    }
+
+    function _patchMsg(text, kind) {
+        const box = document.getElementById("patch-msg");
+        if (!box) return;
+        if (!text) { box.style.display = "none"; box.textContent = ""; return; }
+        box.textContent = text;
+        box.className = "repo-msg " + (kind === "ok" ? "ok" : "err");
+        box.style.display = "";
+    }
+
+    function clearPatchPreview() {
+        _lastPatchProposal = null;
+        _patchMsg("", null);
+        const input = document.getElementById("patch-input");
+        if (input) input.value = "";
+        const result = document.getElementById("patch-result");
+        if (result) result.style.display = "none";
+        const clearBtn = document.getElementById("patch-clear-btn");
+        if (clearBtn) clearBtn.style.display = "none";
+    }
+
+    async function previewPatchProposal() {
+        if (activeProjectId === "") return;
+        const input = document.getElementById("patch-input");
+        const raw = (input && input.value || "").trim();
+        if (!raw) { _patchMsg(t("patch_invalid_json"), "err"); return; }
+        let parsed;
+        try { parsed = JSON.parse(raw); }
+        catch { _patchMsg(t("patch_invalid_json"), "err"); return; }
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+            _patchMsg(t("patch_invalid_json"), "err"); return;
+        }
+
+        let res;
+        try {
+            res = await fetch(
+                `/projects/${encodeURIComponent(activeProjectId)}/patch-proposals/validate`,
+                {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                        "Authorization": `Bearer ${token}`
+                    },
+                    body: JSON.stringify(parsed)
+                }
+            );
+        } catch { _patchMsg(t("patch_error"), "err"); return; }
+
+        if (res.status === 401) { logout(); return; }
+        if (res.status === 404) { closeRepoSettings(); return; }
+        if (res.status === 422) {
+            _patchMsg(t("patch_invalid_json"), "err"); return;
+        }
+        if (res.status === 400) {
+            let detail = t("patch_error");
+            try { const j = await res.json(); if (j && j.detail) detail = j.detail; } catch {}
+            _patchMsg(detail, "err");
+            return;
+        }
+        if (!res.ok) { _patchMsg(t("patch_error"), "err"); return; }
+
+        let proposal;
+        try { proposal = await res.json(); }
+        catch { _patchMsg(t("patch_error"), "err"); return; }
+        renderPatchProposal(proposal);
+    }
+
+    function _setTextBlock(blockId, valId, value) {
+        const block = document.getElementById(blockId);
+        const target = document.getElementById(valId);
+        if (!block || !target) return;
+        const text = (value || "").trim();
+        if (!text) { block.style.display = "none"; target.textContent = ""; return; }
+        target.textContent = text;
+        block.style.display = "";
+    }
+
+    function _setListBlock(blockId, listId, values, decorate) {
+        const block = document.getElementById(blockId);
+        const list = document.getElementById(listId);
+        if (!block || !list) return;
+        _clearList(list);
+        const items = Array.isArray(values) ? values.filter(v => v != null) : [];
+        if (!items.length) { block.style.display = "none"; return; }
+        items.forEach(v => {
+            const li = document.createElement("li");
+            if (typeof decorate === "function") decorate(li, v);
+            else li.textContent = String(v);
+            list.appendChild(li);
+        });
+        block.style.display = "";
+    }
+
+    function renderPatchProposal(proposal) {
+        if (!proposal || typeof proposal !== "object") {
+            _patchMsg(t("patch_error"), "err"); return;
+        }
+        _lastPatchProposal = proposal;
+        _patchMsg("", null);
+        document.getElementById("patch-result").style.display = "";
+        const clearBtn = document.getElementById("patch-clear-btn");
+        if (clearBtn) clearBtn.style.display = "";
+
+        _setTextBlock("patch-title-block", "patch-title-val", proposal.title);
+        _setTextBlock("patch-summary-block", "patch-summary-val", proposal.summary);
+        _setListBlock("patch-plan-block", "patch-plan-list", proposal.plan);
+
+        _setListBlock("patch-files-block", "patch-files-list",
+            Array.isArray(proposal.files) ? proposal.files : [],
+            (li, f) => {
+                const action = (f && f.action) || "modify";
+                const tag = document.createElement("span");
+                tag.className = "repo-patch-file-action " + action;
+                tag.textContent = action;
+                const p = document.createElement("span");
+                p.textContent = (f && f.path) || "";
+                li.appendChild(tag);
+                li.appendChild(p);
+                const added = Number((f && f.added) || 0);
+                const removed = Number((f && f.removed) || 0);
+                if (added || removed) {
+                    const stats = document.createElement("span");
+                    stats.className = "repo-patch-file-stats";
+                    stats.textContent = `+${added} −${removed}`;
+                    li.appendChild(stats);
+                }
+            }
+        );
+
+        const diffBlock = document.getElementById("patch-diff-block");
+        const diffPre = document.getElementById("patch-diff-pre");
+        const diff = (proposal.diff_preview || "").trim();
+        if (diff) { diffPre.textContent = diff; diffBlock.style.display = ""; }
+        else { diffPre.textContent = ""; diffBlock.style.display = "none"; }
+
+        _setListBlock("patch-tests-block", "patch-tests-list", proposal.suggested_tests);
+        const warnings = Array.isArray(proposal.warnings) && proposal.warnings.length
+            ? proposal.warnings
+            : (Array.isArray(proposal.risks) ? proposal.risks : []);
+        _setListBlock("patch-warnings-block", "patch-warnings-list", warnings);
+        _setListBlock("patch-safety-block", "patch-safety-list", proposal.safety);
+    }
+
+    async function _writeClipboardOrFallback(text) {
+        try {
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                await navigator.clipboard.writeText(text);
+                return true;
+            }
+        } catch {}
+        try {
+            const ta = document.createElement("textarea");
+            ta.value = text;
+            ta.style.position = "fixed";
+            ta.style.opacity = "0";
+            document.body.appendChild(ta);
+            ta.select();
+            const ok = document.execCommand("copy");
+            document.body.removeChild(ta);
+            return ok;
+        } catch { return false; }
+    }
+
+    async function copyPatchDiff() {
+        if (!_lastPatchProposal) { _patchMsg(t("patch_no_diff"), "err"); return; }
+        const text = (_lastPatchProposal.diff_preview || "").trim();
+        if (!text) { _patchMsg(t("patch_no_diff"), "err"); return; }
+        const ok = await _writeClipboardOrFallback(text);
+        _patchMsg(t(ok ? "patch_copy_done" : "patch_copy_fail"), ok ? "ok" : "err");
+    }
+
+    async function copyPatchTests() {
+        if (!_lastPatchProposal) { _patchMsg(t("patch_no_tests"), "err"); return; }
+        const tests = Array.isArray(_lastPatchProposal.suggested_tests)
+            ? _lastPatchProposal.suggested_tests : [];
+        const clean = tests.filter(line => typeof line === "string" && line.trim());
+        if (!clean.length) { _patchMsg(t("patch_no_tests"), "err"); return; }
+        const text = clean.map((line, i) => `${i + 1}. ${line.trim()}`).join("\n");
+        const ok = await _writeClipboardOrFallback(text);
+        _patchMsg(t(ok ? "patch_copy_done" : "patch_copy_fail"), ok ? "ok" : "err");
     }
 
     // ── CONVERSATIONS ──
