@@ -78,12 +78,29 @@ Shipped today:
   admin-managed user list, per-user settings, and an optional
   family-controls layer for restricted roles.
 - **Personalization preferences.** Response length, warmth,
-  enthusiasm, emoji density (none / low / medium / expressive), and
-  free-text custom instructions are stored per user and shape Nova's
-  tone without leaking into other accounts. Technical / code / PR /
-  security replies stay sober regardless of the emoji level — the
-  preference shapes casual chat only and never overrides the Nova
-  Safety and Trust Contract.
+  enthusiasm, emoji density (none / low / medium / expressive), tone
+  profile (default / professional / developer / warm companion / calm
+  support), and free-text custom instructions are stored per user and
+  shape Nova's tone without leaking into other accounts. Technical /
+  code / PR / security replies stay sober regardless of the emoji
+  level — the preference shapes casual chat only and never overrides
+  the Nova Safety and Trust Contract.
+- **Tone profile (foundation, opt-in, local).** A small per-user
+  setting picks the *register* Nova speaks in across normal
+  conversations: a steady **professional** voice, a sober **developer**
+  voice, a warm and encouraging **warm companion** voice, or a
+  particularly soft and reassuring **calm support** voice. `default`
+  produces no extra prompt block and behaves byte-identically to the
+  baseline. The two warm profiles are explicitly **not** an "AI
+  girlfriend" / "AI partner" system: each block restates — never
+  relaxes — the identity contract's rules (no claim to be human, no
+  claim to be the user's partner, no simulated feelings as facts, no
+  manipulation, no dependency, no isolation, warmth never overrides
+  truth) and the auth / admin / privacy boundary (the tone profile
+  changes wording, not permissions, facts, or project rules). The
+  block (no LLM, no network) sits *below* the identity / safety
+  contract and never overrides it. See
+  [docs/tone-profile.md](docs/tone-profile.md).
 - **Local response feedback.** Thumbs up / thumbs down under each
   assistant message records a per-user preference signal in the local
   SQLite database; a thumbs-down accepts an optional short reason such
@@ -179,6 +196,8 @@ core/
   feedback.py         Local response feedback (thumbs up/down) → preference block
   relationship_coach.py  Non-clinical situation-coach prompt block (local)
   companion.py        Opt-in calm-presence + acute-distress grounding blocks (local)
+  tone_profile.py     Opt-in per-user tone-profile prompt blocks (professional /
+                      developer / warm companion / calm support; local)
   identity.py         Identity contract constant
   auth.py             JWT creation and verification
   github_oauth.py     Optional GitHub OAuth gate (alpha channel)

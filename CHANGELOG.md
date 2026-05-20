@@ -2,6 +2,58 @@
 
 ## Unreleased
 ### Added
+- Tone Profile (foundation, opt-in, local-first): a new
+  `core/tone_profile.py` adds a small per-user setting that picks the
+  *register* Nova speaks in across normal conversations — a steady
+  **professional** voice, a sober **developer** voice, a warm and
+  encouraging **warm companion** voice, or a particularly soft and
+  reassuring **calm support** voice. `tone_profile` is a new enum
+  field in `PERSONALIZATION_ENUMS` / `PERSONALIZATION_DEFAULTS` with
+  `default` as the baseline; `default` resolves to the empty block,
+  so a fresh account is byte-identical to a Nova install without the
+  feature (zero token cost, identical prompt). The four non-default
+  blocks are fixed deterministic French constants (no LLM, no I/O,
+  never raises) appended *below* `IDENTITY_CONTRACT`, the system
+  prompt, and the existing personalization block in `build_messages`
+  — ordering guarantees they can never override identity, safety,
+  capability, auth, admin, privacy, or project rules. The two warm
+  profiles (`warm_companion`, `calm_support`) are explicitly **not**
+  an "AI girlfriend" / "AI partner" system and are built so they
+  cannot become one: each block restates — never relaxes — the
+  identity contract's rules (Nova never claims to be human, never
+  positions itself as the user's partner, never simulates feelings
+  or attachment as factual claims), names and forbids the
+  dependency / isolation / manipulation / possessive-language /
+  unsolicited-pet-names / prolonging-the-conversation /
+  discouraging-real-human-contact patterns explicitly, encourages
+  real-world connection (people the user trusts, professionals,
+  sleep / food / air / movement) and that real human relationships
+  are not replaceable, and ends with a honesty clause (warmth never
+  overrides truth — risky / wrong / dangerous things are still said
+  plainly). The sober profiles (`professional`, `developer`) reaffirm
+  the no-human-role rule and the no-destructive-action / no-sudo /
+  no-permission-override rule. Tone profile and the existing
+  `companion_mode_enabled` toggle are independent and may coexist;
+  the always-on acute-distress grounding safety net still runs
+  regardless of either, so turning a comfort feature *on* never
+  turns the safety net off. Wired through `core/settings.py`
+  (single source of truth `TONE_PROFILE_VALUES`), `web.py`
+  (`SettingsUpdateRequest.tone_profile` with the same Pydantic
+  enum validator the other personalization fields use), and the
+  Personalization pane in `static/index.html` (new bilingual FR/EN
+  `<select id="pers-tone-profile">` with five options). Adds
+  `tests/test_tone_profile.py` (75 tests: constant surface,
+  validator, deterministic block resolution, every per-block
+  safety-language commitment, chat-wiring including ordering and
+  coexistence with companion mode and the grounding safety net,
+  per-user storage / isolation, HTTP layer, partial-update
+  preservation, 422 on invalid values, `extra="forbid"` regression)
+  and `docs/tone-profile.md` (what it is, how it differs from
+  "pretending to be human", how it is wired, privacy /
+  local-first behaviour, how to disable, relationship to Companion
+  Mode and to the Safety and Trust Contract). The existing
+  personalization tests are updated to round-trip the new field;
+  full suite still passes (2372 tests).
 - Dev Workspace Phase 2 — control-character hardening for the patch
   proposal preview. The text-only refusal in `core.dev_workspace`
   (previously NUL-only) now also refuses any C0 byte other than tab /

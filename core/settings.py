@@ -22,6 +22,8 @@ from __future__ import annotations
 import sqlite3
 from typing import Optional
 
+from core.tone_profile import TONE_PROFILE_VALUES
+
 # ── Personalization ─────────────────────────────────────────────────────────
 # Tone-shaping preferences the user can flip from the settings panel. Stored
 # as plain strings in user_settings; enum values are validated server-side
@@ -31,6 +33,13 @@ PERSONALIZATION_ENUMS: dict[str, frozenset[str]] = {
     "warmth_level": frozenset({"low", "normal", "high"}),
     "enthusiasm_level": frozenset({"low", "normal", "high"}),
     "emoji_level": frozenset({"none", "low", "medium", "expressive"}),
+    # Tone profile picks the *register* Nova speaks in (warm, calm, sober,
+    # technical). The single source of truth for the allowed values lives
+    # in ``core.tone_profile`` so the prompt builder and the validator
+    # never drift. Orthogonal to ``response_style`` (which controls
+    # length / detail): a user can ask for a "concise warm_companion" or
+    # a "detailed developer" reply.
+    "tone_profile": frozenset(TONE_PROFILE_VALUES),
 }
 
 PERSONALIZATION_DEFAULTS: dict[str, str] = {
@@ -38,6 +47,9 @@ PERSONALIZATION_DEFAULTS: dict[str, str] = {
     "warmth_level": "normal",
     "enthusiasm_level": "normal",
     "emoji_level": "low",
+    # ``default`` produces no prompt block — a fresh user pays zero token
+    # cost and behaves exactly as before.
+    "tone_profile": "default",
     "custom_instructions": "",
 }
 

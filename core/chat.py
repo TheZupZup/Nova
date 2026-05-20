@@ -23,6 +23,7 @@ from core.companion import (
     is_acute_distress,
     is_sensitive_emotional_content,
 )
+from core.tone_profile import build_tone_profile_block
 from core.settings import get_personalization, get_user_setting
 from core.router import route
 from core.search import web_search, should_search
@@ -240,6 +241,17 @@ def build_messages(
     pers_block = build_personalization_block(personalization)
     if pers_block:
         parts.append(pers_block)
+    # Tone profile — opt-in register the user picks in Personalization
+    # (default / professional / developer / warm_companion / calm_support).
+    # ``default`` resolves to an empty block, so a fresh account pays zero
+    # token cost and behaves exactly as before. Sits below the identity
+    # contract and the personalization block on purpose: tone never
+    # weakens identity, safety, or capability rules — every non-default
+    # block re-states those bounds in its own text.
+    if personalization:
+        tone_block = build_tone_profile_block(personalization.get("tone_profile"))
+        if tone_block:
+            parts.append(tone_block)
     if feedback_preferences:
         # Sits below identity + personalization on purpose: the system
         # prompt is ordered so safety/identity rules always win.
