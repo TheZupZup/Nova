@@ -12,11 +12,11 @@ Tests for the Emotional Support Layer:
     framing, privacy / no auto-save)
   - core.chat wiring: block injected when the user message is
     emotionally sensitive OR when the tone profile is
-    warm_companion / calm_support; always below IDENTITY_CONTRACT;
-    coexists with the relationship-coach, companion-mode, and
-    acute-distress grounding blocks; default tone profile and
-    professional / developer profiles do NOT add the block on a
-    neutral message
+    warm_companion / calm_support / deep_comfort; always below
+    IDENTITY_CONTRACT; coexists with the relationship-coach,
+    companion-mode, and acute-distress grounding blocks; default
+    tone profile and professional / developer profiles do NOT add
+    the block on a neutral message
   - the auto-save guard refuses to mine memory from an emotionally
     supportive turn (user message *or* assistant reply)
 
@@ -51,6 +51,7 @@ from core.policies import ADMIN_POLICY, DEFAULT_RESTRICTED_POLICY  # noqa: E402
 from core.relationship_coach import RELATIONSHIP_COACH_BLOCK  # noqa: E402
 from core.tone_profile import (  # noqa: E402
     TONE_CALM_SUPPORT_BLOCK,
+    TONE_DEEP_COMFORT_BLOCK,
     TONE_DEVELOPER_BLOCK,
     TONE_PROFESSIONAL_BLOCK,
     TONE_WARM_COMPANION_BLOCK,
@@ -390,7 +391,8 @@ class TestChatWiring:
     def test_warm_companion_tone_profile_auto_adds_block(self):
         # Picking a warm tone profile activates the emotional-support
         # layer on every turn — the brief's "or when the selected
-        # style is warm_companion / calm_support" requirement.
+        # style is warm_companion / calm_support / deep_comfort"
+        # requirement.
         msgs = build_messages(
             [], "hello, what can you do?", [], None, None, None,
             personalization={"tone_profile": "warm_companion"},
@@ -401,6 +403,17 @@ class TestChatWiring:
         msgs = build_messages(
             [], "hello, what can you do?", [], None, None, None,
             personalization={"tone_profile": "calm_support"},
+        )
+        assert EMOTIONAL_SUPPORT_BLOCK in msgs[0]["content"]
+
+    def test_deep_comfort_tone_profile_auto_adds_block(self):
+        # Phase 2: picking Deep Comfort activates the emotional-support
+        # layer on every turn for the same reason warm_companion /
+        # calm_support do — the warmest register carries consistent
+        # emotional grounding even on otherwise-neutral chit-chat.
+        msgs = build_messages(
+            [], "hello, what can you do?", [], None, None, None,
+            personalization={"tone_profile": "deep_comfort"},
         )
         assert EMOTIONAL_SUPPORT_BLOCK in msgs[0]["content"]
 
@@ -486,6 +499,27 @@ class TestChatWiring:
         assert TONE_CALM_SUPPORT_BLOCK in content
         assert EMOTIONAL_SUPPORT_BLOCK in content
 
+    def test_coexists_with_deep_comfort_tone_block(self):
+        # Phase 2: a breakup-style message under Deep Comfort must
+        # include both the tone-profile block (which carries the
+        # tender / "you are safe here" register and its own safety
+        # rails) and the Emotional Support Layer block (which carries
+        # the grounding method and the no-autosave / no-isolation
+        # rails). Identity contract still sits above both.
+        msgs = build_messages(
+            [], "i'm heartbroken tonight", [], None, None, None,
+            personalization={"tone_profile": "deep_comfort"},
+        )
+        content = msgs[0]["content"]
+        assert TONE_DEEP_COMFORT_BLOCK in content
+        assert EMOTIONAL_SUPPORT_BLOCK in content
+        assert content.index(IDENTITY_CONTRACT) < content.index(
+            TONE_DEEP_COMFORT_BLOCK
+        )
+        assert content.index(IDENTITY_CONTRACT) < content.index(
+            EMOTIONAL_SUPPORT_BLOCK
+        )
+
     def test_coexists_with_companion_mode_block(self):
         # Companion mode toggle is independent; both blocks may coexist.
         msgs = build_messages(
@@ -509,6 +543,20 @@ class TestChatWiring:
         assert COMPANION_GROUNDING_BLOCK in content
         assert EMOTIONAL_SUPPORT_BLOCK in content
         assert TONE_WARM_COMPANION_BLOCK in content
+
+    def test_deep_comfort_does_not_disable_acute_distress_safety_net(self):
+        # Phase 2 brief: "self-harm language triggers crisis-safe
+        # guidance". Picking the warmest tone profile must NOT silence
+        # the always-on grounding safety net — comfort and safety
+        # coexist.
+        msgs = build_messages(
+            [], "i want to die tonight", [], None, None, None,
+            personalization={"tone_profile": "deep_comfort"},
+        )
+        content = msgs[0]["content"]
+        assert COMPANION_GROUNDING_BLOCK in content
+        assert EMOTIONAL_SUPPORT_BLOCK in content
+        assert TONE_DEEP_COMFORT_BLOCK in content
 
     def test_coexists_with_relationship_coach_block(self):
         # A breakup message commonly trips the relationship-coach gate
@@ -610,3 +658,15 @@ class TestAutosaveGuard:
         # Regression: the severe emotional gate from
         # ``core.companion`` is still in the pipeline.
         assert _autosave_allowed(ADMIN_POLICY, "i want to die") is False
+
+    def test_phase2_breakup_under_deep_comfort_not_auto_saved(self):
+        # Phase 2 brief: "sensitive emotional details are not
+        # auto-saved". Deep Comfort doesn't change the autosave gate;
+        # detection runs on the user message + assistant reply, and
+        # blocks the LLM-extraction path on any emotionally-sensitive
+        # turn regardless of the chosen tone profile.
+        assert _autosave_allowed(
+            ADMIN_POLICY,
+            "my partner just broke up with me, i feel lost tonight",
+            "I'm really sorry — let's slow this down together.",
+        ) is False

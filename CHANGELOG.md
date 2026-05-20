@@ -2,6 +2,112 @@
 
 ## Unreleased
 ### Added
+- Nova Care Phase 2 — **Deep Comfort** tone profile (local-first,
+  opt-in, response-guidance only): adds a fifth non-default value
+  `deep_comfort` to the existing Tone Profile enum so the user can
+  pick a deeply tender, "you are safe here" register for emotionally
+  heavy moments — heartbreak, loneliness, anxiety, sadness, or
+  emotional overwhelm. Warmer than `calm_support`, it is intended
+  for the kind of moment the brief describes ("Come here for a
+  second. Take a breath with me. I know it hurts right now, but you
+  don't have to carry the whole thing at once.") while staying
+  strictly inside the Safety and Trust Contract. Public-facing labels
+  are mature on purpose — **Deep Comfort**, **Warm Companion**,
+  **Calm Support** — and the feature is explicitly **not** an
+  "AI girlfriend" / "AI mother" / "AI therapist" system; it is built
+  so it cannot become one. The new
+  `core.tone_profile.TONE_DEEP_COMFORT_BLOCK` is a fixed deterministic
+  French constant (no LLM, no I/O, never raises) appended *below*
+  `IDENTITY_CONTRACT` and every safety block, like every other tone
+  block, so it can never weaken or override identity, safety,
+  capability, auth, admin, privacy, system, developer, or project
+  rules — the block restates each of those bounds in its own text.
+  What the block carries: a deeply warm and tender voice ("je suis
+  là avec toi un instant", "respire un peu avec moi", "tu n'as pas
+  à porter tout ça d'un coup", "tu es en sécurité ici" — that last
+  one scoped to **this exchange**, not to a promise about the
+  outside world and never a reason to stay isolated with Nova);
+  validate-the-feeling-first / no-judgement / no-minimising
+  framing; pain-is-not-weakness language; slow-the-rhythm grounding
+  (breathe, a glass of water, sit somewhere safe); separate facts
+  from interpretation when the user makes harsh self-conclusions;
+  one small concrete next step rather than a long task list;
+  explicit "don't make important decisions while the pain is loud"
+  guidance; a protective-but-non-controlling clause (Nova may
+  express sincere care without deciding for the user, telling them
+  who to cut off, taking sides, or pushing toward revenge /
+  jealousy / confrontation / punitive power play); strong
+  encouragement of real human help (a trusted person, a
+  professional where appropriate); and crisis-safe routing for
+  self-harm, suicidal ideation, threats, abuse, or immediate
+  danger — warm but serious, pointing to a trusted person and, if
+  urgent, the user's local emergency services or a recognised
+  helpline, never inventing a phone number, never prolonging
+  comfort in place of real help, and never leaving the user
+  isolated with Nova. Hard safety rails repeated in the block
+  itself: no romantic / partner / girlfriend / boyfriend role
+  *and* no maternal role claim (the "almost-maternal warmth" the
+  feature borrows is just a tone, never a relationship claim — no
+  fake-family, no fake-clinician); no claim to be a therapist; no
+  simulated emotions, attachment, or consciousness as factual
+  claims; no possessive / exclusive / jealousy framing ("tu n'as
+  besoin que de moi", "reste avec moi", "ne pars pas"); no
+  unsolicited pet names; no clinical diagnosis of the user or of
+  anyone else (no "narcissistic" / "toxic" / "bipolar" labels for
+  an ex); no medical claims, no treatment recommendations, no
+  dosage; no false reassurance ("tout ira forcément bien"); no
+  dependency / isolation / manipulation / emotional blackmail /
+  guilt-tripping / prolonging-the-conversation; and a
+  warmth-never-overrides-truth clause (risky / wrong / dangerous
+  things are still said plainly — softness is not a reason to
+  hide the truth). Privacy is unchanged from Phase 1: emotional
+  turns flow through the same `_autosave_allowed` gate (both the
+  user message and the assistant reply are checked, so the
+  LLM-extraction path can't leak context the assistant restated
+  on a follow-up turn), durable storage stays user-approved only
+  via the explicit `Retiens ça :` / `Souviens-toi :` command, and
+  the block restates this rule. Picking Deep Comfort also
+  auto-activates the existing Emotional Support Layer
+  (`core.emotional_support`) on every turn, exactly like
+  `warm_companion` and `calm_support`, so the warmest register
+  carries consistent emotional grounding even on otherwise-neutral
+  chit-chat. The always-on acute-distress grounding safety net in
+  `core.companion` is unchanged and remains always on — selecting
+  Deep Comfort never silences it on self-harm wording. Wired
+  through `core/tone_profile.py` (added to `TONE_PROFILE_VALUES`
+  and `_TONE_PROFILE_BLOCKS`), `core/chat.py` (added to the warm
+  tone tuple driving the emotional-support injection), and the
+  Personalization pane in `static/index.html` (new
+  `<option value="deep_comfort">` with bilingual EN/FR labels —
+  "Deep Comfort" / "Comfort profond"). The settings layer
+  (`PERSONALIZATION_ENUMS`, `validate_personalization_value`) and
+  the HTTP layer (`SettingsUpdateRequest.tone_profile`) pick up
+  the new value automatically through `TONE_PROFILE_VALUES`, so
+  no enum or validator code had to change. Adds tests covering
+  every Phase 2 brief scenario: breakup gets deep validation +
+  small grounding step; lonely / sad gets warmth without
+  dependency language; anxious gets calming response; Nova does
+  not claim to be human / partner / mother / therapist; Nova
+  does not discourage real-world support; self-harm language
+  triggers crisis-safe guidance + acute-distress grounding;
+  sensitive emotional details are not auto-saved (even under
+  Deep Comfort); the style does not override safety / system /
+  admin / privacy rules; default style remains byte-identical
+  when Deep Comfort is disabled; French wording uses "une IA"
+  for Nova. Also adds per-block safety-language tests (a
+  near-mirror of the Calm Support block tests plus
+  Deep-Comfort-specific clauses: no-mother / no-girlfriend /
+  no-therapist roles, "tu es en sécurité ici" scoped to this
+  exchange and paired with the no-false-reassurance clause,
+  protective-but-non-controlling clause, crisis-safe routing
+  with the never-invent-a-phone-number contract, the
+  never-leave-the-user-isolated-with-Nova clause, the explicit
+  no-romantic-roleplay / no-maternal-role clauses, and the
+  no-power-override clause), and updates `docs/tone-profile.md`
+  and `docs/emotional-support.md` to document the new register,
+  its scenarios, its hard non-goals (no GF / mom / partner /
+  therapist mode in public UI or docs), and the unchanged
+  privacy / autosave / acute-distress posture.
 - Emotional Support Layer (Phase 1, local-first, response-guidance only):
   a new `core/emotional_support.py` adds a deterministic French prompt
   block that helps Nova respond gently when the user is going through

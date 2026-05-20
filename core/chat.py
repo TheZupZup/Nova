@@ -240,11 +240,11 @@ def build_messages(
     appended whenever the user message carries emotionally-sensitive
     first-person wording (a breakup, sadness, loneliness, anxiety,
     overwhelm) OR the tone profile is ``warm_companion`` /
-    ``calm_support``, so the warm registers carry consistent emotional
-    grounding even on otherwise-neutral chit-chat. Like every other
-    tone-shaping block, it sits below the identity/safety contract and
-    grants no new capability — it only shapes how Nova answers an
-    emotional turn.
+    ``calm_support`` / ``deep_comfort``, so the warm registers carry
+    consistent emotional grounding even on otherwise-neutral chit-chat.
+    Like every other tone-shaping block, it sits below the
+    identity/safety contract and grants no new capability — it only
+    shapes how Nova answers an emotional turn.
     """
     if context_type == "weather":
         system_prompt = WEATHER_SYSTEM_PROMPT.format(weather_data=extra_context)
@@ -263,12 +263,12 @@ def build_messages(
     if pers_block:
         parts.append(pers_block)
     # Tone profile — opt-in register the user picks in Personalization
-    # (default / professional / developer / warm_companion / calm_support).
-    # ``default`` resolves to an empty block, so a fresh account pays zero
-    # token cost and behaves exactly as before. Sits below the identity
-    # contract and the personalization block on purpose: tone never
-    # weakens identity, safety, or capability rules — every non-default
-    # block re-states those bounds in its own text.
+    # (default / professional / developer / warm_companion / calm_support
+    # / deep_comfort). ``default`` resolves to an empty block, so a fresh
+    # account pays zero token cost and behaves exactly as before. Sits
+    # below the identity contract and the personalization block on
+    # purpose: tone never weakens identity, safety, or capability rules —
+    # every non-default block re-states those bounds in its own text.
     if personalization:
         tone_block = build_tone_profile_block(personalization.get("tone_profile"))
         if tone_block:
@@ -302,21 +302,21 @@ def build_messages(
     # Emotional Support Layer — appended either when the user message
     # carries clearly emotionally-sensitive wording (a breakup, a wave
     # of sadness, loneliness, an anxious / overwhelmed moment) OR when
-    # the user has picked ``warm_companion`` / ``calm_support`` as
-    # their tone profile, so the warm registers carry consistent
-    # emotional grounding even on otherwise-neutral chit-chat. Sits
-    # below IDENTITY_CONTRACT and the safety blocks for the same
-    # reason every other tone block does — ordering is what makes the
-    # warmth subordinate to the safety / identity contract. Its own
-    # text forbids manipulation, dependency, isolation, jealousy play,
-    # diagnosing the user or anyone else, revenge advice, and false
-    # promises, and restates that Nova is *une IA* — never human,
-    # never a partner, never a therapist, never a substitute for real
-    # people.
+    # the user has picked ``warm_companion`` / ``calm_support`` /
+    # ``deep_comfort`` as their tone profile, so the warm registers
+    # carry consistent emotional grounding even on otherwise-neutral
+    # chit-chat. Sits below IDENTITY_CONTRACT and the safety blocks
+    # for the same reason every other tone block does — ordering is
+    # what makes the warmth subordinate to the safety / identity
+    # contract. Its own text forbids manipulation, dependency,
+    # isolation, jealousy play, diagnosing the user or anyone else,
+    # revenge advice, and false promises, and restates that Nova is
+    # *une IA* — never human, never a partner, never a mother, never
+    # a therapist, never a substitute for real people.
     tone_value = (personalization or {}).get("tone_profile")
     if (
         is_emotional_support_appropriate(user_input)
-        or tone_value in ("warm_companion", "calm_support")
+        or tone_value in ("warm_companion", "calm_support", "deep_comfort")
     ):
         parts.append(build_emotional_support_block())
 

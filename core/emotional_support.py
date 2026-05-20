@@ -7,10 +7,10 @@ Phase 1: response guidance only. No separate autonomous system, no
 mental-health diagnoses, no clinical claims. A conservative bilingual
 detector spots emotionally sensitive wording in the user's message and
 the chat layer appends a single deterministic French block *below* the
-identity / safety contract. Selecting ``warm_companion`` or
-``calm_support`` in the tone-profile setting also activates the block
-on every turn so the warm registers carry consistent emotional
-grounding even on otherwise-neutral chit-chat.
+identity / safety contract. Selecting ``warm_companion``,
+``calm_support``, or ``deep_comfort`` in the tone-profile setting also
+activates the block on every turn so the warm registers carry
+consistent emotional grounding even on otherwise-neutral chit-chat.
 
 This module is the single place that wording lives. It is **not** an
 "AI girlfriend" / "AI partner" system and is built so it cannot become
@@ -181,7 +181,7 @@ def is_emotional_support_appropriate(text: object) -> bool:
     Nova answers warmly, validates the user's feelings first, slows
     the rhythm, and gently encourages real-world support — all while
     staying honest that Nova is *une IA* (an AI), not a human,
-    therapist, or romantic partner.
+    therapist, mother, or romantic partner.
 
     Conservative on purpose: only emotion-specific multi-word
     first-person phrases match, so generic conversation ("this is a
@@ -301,7 +301,7 @@ def build_emotional_support_block() -> str:
     chat layer appends it (below the identity / safety contract)
     either when :func:`is_emotional_support_appropriate` matched the
     user message or when the user has picked ``warm_companion`` /
-    ``calm_support`` as their tone profile.
+    ``calm_support`` / ``deep_comfort`` as their tone profile.
     """
     return EMOTIONAL_SUPPORT_BLOCK
 
