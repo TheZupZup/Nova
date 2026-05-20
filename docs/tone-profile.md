@@ -131,21 +131,29 @@ To turn it off after enabling it:
   AND key = 'tone_profile'` removes the row entirely; the next read
   falls back to `"default"`.
 
-## Relationship to Companion Mode
+## Relationship to Companion Mode and the Emotional Support Layer
 
-Tone profile and the existing
-[Companion Mode](companion-mode.md) toggle are independent:
+Tone profile, the existing [Companion Mode](companion-mode.md)
+toggle, and the [Emotional Support Layer](emotional-support.md) are
+independent but complementary:
 
 - **Tone profile** changes the everyday tone of Nova's replies across
   all conversations.
 - **Companion Mode** (`companion_mode_enabled`) is a focused
   "calm-presence" layer for emotionally heavy moments, with its own
   block and a different set of safety rails.
+- **Emotional Support Layer** is a response-guidance block that
+  activates automatically when the user's message carries
+  emotionally-sensitive first-person wording (a breakup, a lonely
+  evening, an anxious / overwhelmed moment) — and that picking
+  `warm_companion` / `calm_support` here also activates on every
+  turn, so the warm registers carry consistent emotional grounding
+  even on otherwise-neutral chit-chat.
 
-Both blocks may coexist when the user has set both, and both are
+All three layers may coexist when the user has set them, and all are
 always subordinate to the always-on acute-distress grounding safety
-net (which runs regardless of either setting). Turning either feature
-*on* never turns the grounding safety net off.
+net (which runs regardless of any setting). Turning any of these
+features *on* never turns the grounding safety net off.
 
 ## Relationship to the Safety and Trust Contract
 

@@ -144,6 +144,32 @@ Shipped today:
   auto-saved — two independent gates suppress it, and a fact is stored
   only via the explicit manual memory command. See
   [docs/companion-mode.md](docs/companion-mode.md).
+- **Emotional Support Layer (Phase 1, local).** A deterministic
+  response-guidance block that helps Nova reply gently when the user
+  is going through sadness, loneliness, anxiety, heartbreak, or
+  general emotional difficulty (a breakup, a lonely evening, an
+  overwhelmed moment). The layer activates automatically when a
+  conservative bilingual detector spots emotionally-sensitive
+  first-person wording, or when the user has picked *Warm Companion*
+  / *Calm Support* as their tone profile. The block (no LLM, no
+  network) is appended *below* the identity / safety contract and
+  asks Nova to validate the feeling first, slow the rhythm and
+  invite a calm breath, separate facts from harsh self-thoughts,
+  offer a single small next step rather than a long task list, and
+  gently encourage real-world support (a trusted person, a
+  professional where appropriate). Hard safety rails restated in the
+  block: Nova is **une IA**, never human, never the user's
+  girlfriend / boyfriend / partner, never a therapist; no clinical
+  diagnosis of the user or anyone else, no medical claims, no
+  revenge advice, no jealousy framing, no possessive language, no
+  unsolicited pet names, no isolation / dependency / manipulation,
+  no false reassurance ("everything will definitely be okay"), and
+  warmth never overrides truth. Emotional turns are excluded from
+  automatic memory by the auto-save gate; durable storage stays
+  user-approved only via the explicit `Retiens ça :` /
+  `Souviens-toi :` command. For acute distress wording the existing
+  always-on grounding safety net takes over with crisis-safe
+  guidance. See [docs/emotional-support.md](docs/emotional-support.md).
 - **Edit and delete sent messages.** Every chat message can be edited
   (user messages) or deleted (user and assistant messages) from the
   chat UI. Deleting a user message can optionally remove the paired
@@ -198,6 +224,7 @@ core/
   companion.py        Opt-in calm-presence + acute-distress grounding blocks (local)
   tone_profile.py     Opt-in per-user tone-profile prompt blocks (professional /
                       developer / warm companion / calm support; local)
+  emotional_support.py  Emotional-support layer prompt block + detector (local)
   identity.py         Identity contract constant
   auth.py             JWT creation and verification
   github_oauth.py     Optional GitHub OAuth gate (alpha channel)
