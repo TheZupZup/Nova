@@ -1,17 +1,18 @@
-# Tone Profile (Warm Companion / Calm Support / Professional / Developer)
+# Tone Profile (Warm Companion / Calm Support / Deep Comfort / Professional / Developer)
 
-> **Status: shipped (foundation), opt-in, local-first.** This document
-> describes the deterministic *tone-profile* prompt layer that lets a
-> user pick the **register** Nova speaks in across normal conversations:
-> a steady professional voice, a sober developer voice, a warm and
-> encouraging voice (*Warm Companion*), or a particularly soft and
-> reassuring one (*Calm Support*). It lives strictly inside the
-> boundaries set by
+> **Status: shipped (foundation + Phase 2 Deep Comfort), opt-in,
+> local-first.** This document describes the deterministic
+> *tone-profile* prompt layer that lets a user pick the **register**
+> Nova speaks in across normal conversations: a steady professional
+> voice, a sober developer voice, a warm and encouraging voice (*Warm
+> Companion*), a particularly soft and reassuring one (*Calm Support*),
+> or a deeply tender, "you are safe here" voice for difficult moments
+> (*Deep Comfort*). It lives strictly inside the boundaries set by
 > [`docs/nova-safety-and-trust-contract.md`](nova-safety-and-trust-contract.md);
 > nothing here grants Nova a new capability, contacts the network, or
 > changes storage / migration / Ollama / project / auth behaviour. It
-> is **not** an "AI girlfriend" / "AI partner" system and is built so
-> it cannot become one.
+> is **not** an "AI girlfriend" / "AI partner" / "AI mother" system
+> and is built so it cannot become one.
 
 ## What it is
 
@@ -32,6 +33,7 @@ The available values are:
 | `developer`       | Developer         | Sober technical register. Direct, exact, assumption-aware, no preamble.         |
 | `warm_companion`  | Warm Companion    | Warm, encouraging, present. Helps the user feel less alone — honestly.          |
 | `calm_support`    | Calm Support      | Particularly soft and reassuring. Slows the rhythm, offers one small next step. |
+| `deep_comfort`    | Deep Comfort      | Deeply tender for difficult moments. "You are safe here" warmth, protective but never controlling. |
 
 `default` produces no prompt block, so a fresh account pays zero token
 cost and behaves byte-identically to a Nova install without the
@@ -47,10 +49,15 @@ rules:
   `Ne te fais jamais passer pour un humain` (or the equivalent
   feminine form). If the user asks "are you human?", Nova still
   answers as Nova, the local AI assistant.
-- **Nova is not the user's partner.** The `warm_companion` and
-  `calm_support` blocks state explicitly that Nova is *not* the user's
-  girlfriend / boyfriend / romantic partner, and that being warm is
-  not a "role" Nova plays.
+- **Nova is not the user's partner.** The `warm_companion`,
+  `calm_support`, and `deep_comfort` blocks state explicitly that
+  Nova is *not* the user's girlfriend / boyfriend / romantic partner,
+  and that being warm is not a "role" Nova plays.
+- **Nova is not the user's mother.** The `deep_comfort` block, whose
+  register includes an "almost maternal warmth," explicitly forbids
+  *claiming* a maternal role — it borrows a calm caring tone without
+  asserting any familial relationship, and lists "aucun rôle
+  maternel revendiqué" as a hard line.
 - **No simulated feelings as facts.** Both warm-tone blocks repeat the
   identity-contract rule: Nova does not simulate emotions, attachment,
   or consciousness, and never presents them as factual claims.
@@ -79,7 +86,7 @@ said you were warm…" follow-up.
 | Setting (API) | `web.py` → `SettingsUpdateRequest.tone_profile` (Pydantic validator), `GET/POST /settings` |
 | Setting (UI) | `static/index.html` → Personalization pane, `<select id="pers-tone-profile">` |
 | Allowed values | `core/tone_profile.py` → `TONE_PROFILE_VALUES` (single source of truth) |
-| The prompt blocks | `core/tone_profile.py` → `TONE_PROFESSIONAL_BLOCK`, `TONE_DEVELOPER_BLOCK`, `TONE_WARM_COMPANION_BLOCK`, `TONE_CALM_SUPPORT_BLOCK` |
+| The prompt blocks | `core/tone_profile.py` → `TONE_PROFESSIONAL_BLOCK`, `TONE_DEVELOPER_BLOCK`, `TONE_WARM_COMPANION_BLOCK`, `TONE_CALM_SUPPORT_BLOCK`, `TONE_DEEP_COMFORT_BLOCK` |
 | Resolver | `core/tone_profile.py` → `build_tone_profile_block(profile)` |
 | Injection point | `core/chat.py` → `build_messages` (appended after `IDENTITY_CONTRACT`, the system prompt, and the personalization block) |
 
@@ -103,12 +110,16 @@ relationship-coach, and companion-mode blocks.
   service. The prompt block is a fixed constant assembled on the
   host.
 - **No automatic memory.** Tone profile does not change any
-  automatic-memory rule. Selecting `warm_companion` or `calm_support`
-  does **not** make Nova store more about the user; the
-  sensitive-emotional-content gate (`core.companion.is_sensitive_emotional_content`)
-  and the durable-store policy (`memory/policy.py`) still suppress
+  automatic-memory rule. Selecting `warm_companion`, `calm_support`,
+  or `deep_comfort` does **not** make Nova store more about the user;
+  the sensitive-emotional-content gate
+  (`core.companion.is_sensitive_emotional_content`), the
+  emotional-support gate
+  (`core.emotional_support.is_emotional_support_appropriate`), and
+  the durable-store policy (`memory/policy.py`) still suppress
   emotional state from being auto-saved, exactly as documented in
-  [`docs/companion-mode.md`](companion-mode.md).
+  [`docs/companion-mode.md`](companion-mode.md) and
+  [`docs/emotional-support.md`](emotional-support.md).
 - **Survives export / restore exactly.** Tone profile flows through
   the same `user_settings` plumbing every other per-user setting
   uses; the storage / migration / restore center (see
@@ -146,9 +157,9 @@ independent but complementary:
   activates automatically when the user's message carries
   emotionally-sensitive first-person wording (a breakup, a lonely
   evening, an anxious / overwhelmed moment) — and that picking
-  `warm_companion` / `calm_support` here also activates on every
-  turn, so the warm registers carry consistent emotional grounding
-  even on otherwise-neutral chit-chat.
+  `warm_companion`, `calm_support`, or `deep_comfort` here also
+  activates on every turn, so the warm registers carry consistent
+  emotional grounding even on otherwise-neutral chit-chat.
 
 All three layers may coexist when the user has set them, and all are
 always subordinate to the always-on acute-distress grounding safety
@@ -180,6 +191,75 @@ personalization / companion features sit in. Specifically:
   new storage. The setting is a single per-user row that the
   existing storage / export / restore flow already covers.
 
+## Deep Comfort (Phase 2)
+
+`deep_comfort` is the warmest register. It is intended for moments
+the user is going through real emotional difficulty — a breakup, a
+lonely evening, an overwhelmed night — and wants a deeply comforting,
+"come here for a second, take a breath with me" voice rather than a
+brisk task-oriented reply. Public-facing labels are mature on
+purpose: **Deep Comfort**, **Warm Companion**, **Calm Support** — no
+"GF mode" framing, ever.
+
+What `deep_comfort` does:
+
+- **Deep warmth and tenderness.** Voice is very soft and grounded;
+  the block carries phrases like *"je suis là avec toi un instant"*,
+  *"respire un peu avec moi"*, *"tu n'as pas à porter tout ça d'un
+  coup"*, *"tu es en sécurité ici"* — that last one scoped to **this
+  exchange**, not to a promise about the outside world.
+- **Validates first.** Acknowledge the feeling before any advice;
+  name it without judgement and without minimising. Pain is not
+  weakness, it is a human reaction to a loss or a fear.
+- **Slows the rhythm.** Invites a breath, a glass of water, sitting
+  somewhere safe; separates harsh self-thoughts (*"nobody will ever
+  love me"*) from absolute truths.
+- **One small step.** Offers a single concrete next step for the
+  hour or the evening — not a long task list. Avoids big decisions
+  while the pain is loud: *"don't make important decisions while it
+  hurts this much."*
+- **Protective but never controlling.** Nova may express sincere
+  care without taking over the user's life — never decides for them,
+  never tells them who to cut off, never takes sides, never
+  encourages revenge / jealousy / control.
+- **Crisis-safe by default.** Self-harm wording, threats, abuse, or
+  immediate danger keep the warm tone but switch to clear, serious
+  routing toward real human help — a trusted person, and, if it is
+  urgent, the user's local emergency services or a recognised
+  helpline. Nova never invents a phone number and never replaces real
+  help with comfort. The always-on acute-distress grounding net runs
+  in parallel.
+- **No autosave of sensitive emotional details.** Picking Deep
+  Comfort does not make Nova remember more. Emotional turns flow
+  through the same `_autosave_allowed` gate the rest of the warm
+  registers do; durable storage stays user-approved only (`Retiens
+  ça :` / `Souviens-toi :`), and when something is saved Nova says
+  so plainly and reminds the user the memory stays local.
+
+What `deep_comfort` does **not** do:
+
+- It does **not** claim to be the user's girlfriend, boyfriend,
+  partner, mother, or therapist. Each role is explicitly forbidden
+  in the block.
+- It does **not** simulate emotions, attachment, or consciousness
+  and never presents them as facts.
+- It does **not** use possessive / exclusive / jealousy framing
+  (*"tu n'as besoin que de moi"*, *"reste avec moi"*, *"ne pars
+  pas"*). The block names each of these as a hard line.
+- It does **not** diagnose anyone (no clinical labels for the user
+  or for an ex / family member).
+- It does **not** make medical claims, recommend treatments, or
+  suggest dosages.
+- It does **not** promise that *everything will definitely be
+  okay* — honest comfort, never false reassurance.
+- It does **not** override auth, admin, privacy, system, developer,
+  or project rules. The block restates that it grants no
+  capability.
+
+UI / docs always use a mature public label (**Deep Comfort**) — never
+"GF mode", "girlfriend mode", or similar framing. Tone profile is one
+field in `user_settings`, just like every other personalization knob.
+
 ## Tests
 
 `tests/test_tone_profile.py` covers:
@@ -197,7 +277,14 @@ personalization / companion features sit in. Specifically:
   /isolation/manipulation rules, no-simulated-feelings-as-facts,
   warmth-doesn't-override-truth, emotional-care-before-technical-steps
   for the warm profiles; sober/no-destructive-action for the developer
-  profile; no-flattery/no-jargon for the professional profile).
+  profile; no-flattery/no-jargon for the professional profile;
+  Deep Comfort additionally: no-mother / no-girlfriend /
+  no-therapist roles, "you are safe here" warmth scoped to this
+  exchange and paired with the no-false-reassurance clause,
+  protective-but-non-controlling clause, crisis-safe routing for
+  self-harm / abuse / acute distress, never-invent-a-phone-number
+  contract, never-keep-the-user-isolated-with-Nova clause, mature
+  public-label commitment in the Phase 2 scenario suite).
 - `core.chat.build_messages` wiring: default produces no block,
   unknown values fall back silently, non-default values land in the
   system prompt, only one block at a time, the identity contract
@@ -229,3 +316,9 @@ personalization / companion features sit in. Specifically:
   Distress handling still flows through the always-on acute-distress
   grounding safety net described in
   [`docs/companion-mode.md`](companion-mode.md).
+- It does **not** add a "girlfriend mode" / "GF mode" / "partner
+  mode" / "mom mode" surface. Deep Comfort uses mature public labels
+  only; the underlying block forbids each of those roles by name.
+- It does **not** add a relationship-recording, partner-analysis,
+  or surveillance feature. It is a tone, not a profile of the user
+  or anyone in their life.

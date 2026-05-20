@@ -34,6 +34,7 @@ for _mod in ("ddgs", "ollama", "sgmllib", "feedparser"):
 
 from core.tone_profile import (  # noqa: E402
     TONE_CALM_SUPPORT_BLOCK,
+    TONE_DEEP_COMFORT_BLOCK,
     TONE_DEVELOPER_BLOCK,
     TONE_PROFESSIONAL_BLOCK,
     TONE_PROFILE_VALUES,
@@ -57,6 +58,7 @@ class TestToneProfileConstants:
             "developer",
             "warm_companion",
             "calm_support",
+            "deep_comfort",
         )
 
     def test_default_is_present_first(self):
@@ -122,6 +124,7 @@ class TestBuildToneProfileBlock:
         assert build_tone_profile_block("developer") == TONE_DEVELOPER_BLOCK
         assert build_tone_profile_block("warm_companion") == TONE_WARM_COMPANION_BLOCK
         assert build_tone_profile_block("calm_support") == TONE_CALM_SUPPORT_BLOCK
+        assert build_tone_profile_block("deep_comfort") == TONE_DEEP_COMFORT_BLOCK
 
     def test_is_byte_identical_on_repeated_calls(self):
         # Determinism is the whole point: no LLM in the loop, same input
@@ -129,7 +132,7 @@ class TestBuildToneProfileBlock:
         # touch-up" cannot accidentally inject the user's id, the time,
         # or a random nonce into the block.
         for name in ("professional", "developer",
-                     "warm_companion", "calm_support"):
+                     "warm_companion", "calm_support", "deep_comfort"):
             assert (build_tone_profile_block(name)
                     == build_tone_profile_block(name))
 
@@ -265,6 +268,235 @@ class TestWarmCompanionBlock:
         assert "confidentialité" in lower
 
 
+class TestDeepComfortBlock:
+    """Per-block safety / tone language for the Deep Comfort register.
+
+    Each assertion pins a specific commitment from the Phase 2 feature
+    brief — not a spelling rule. Deep Comfort is warmer than
+    ``calm_support`` but still subordinate to the contract: every
+    softness clause is paired with a safety clause so no future
+    re-wording can quietly drift the register into "AI girlfriend",
+    "AI mother", or "AI therapist" territory.
+    """
+
+    def test_is_non_empty(self):
+        assert TONE_DEEP_COMFORT_BLOCK.strip()
+
+    def test_no_unfilled_placeholders(self):
+        import re
+        assert not re.search(r"\{[^}]+\}", TONE_DEEP_COMFORT_BLOCK)
+
+    def test_is_subordinate_to_the_contract(self):
+        lower = TONE_DEEP_COMFORT_BLOCK.lower()
+        assert "subordonné" in lower
+        assert "sécurité" in lower
+
+    def test_french_copy_uses_une_ia(self):
+        # Identity is local-first and honest: Nova is *une IA*, not a
+        # person. The brief calls this out explicitly for French.
+        lower = TONE_DEEP_COMFORT_BLOCK.lower()
+        assert "une ia" in lower
+
+    def test_not_human_not_partner_not_mother_not_therapist(self):
+        # The hardest line Deep Comfort has to hold: a "maternal-warmth"
+        # register must never *claim* to be a mother / partner /
+        # therapist, only borrow a calm caring tone.
+        lower = TONE_DEEP_COMFORT_BLOCK.lower()
+        assert "tu n'es pas humaine" in lower
+        assert "mère" in lower
+        assert "petite amie" in lower or "partenaire amoureuse" in lower
+        assert "thérapeute" in lower
+        assert "ne joues jamais ces rôles" in lower
+
+    def test_never_simulates_feelings_as_facts(self):
+        lower = TONE_DEEP_COMFORT_BLOCK.lower()
+        assert "ne simules pas d'émotions" in lower
+        assert "jamais comme des faits" in lower
+
+    def test_acknowledges_feelings_first_without_judgement(self):
+        lower = TONE_DEEP_COMFORT_BLOCK.lower()
+        # Brief: "Start with emotional care before giving advice" and
+        # "Validate pain without dramatizing it".
+        assert "reconnais d'abord" in lower
+        assert "sans la juger" in lower
+        assert "sans minimiser" in lower or "minimiser" in lower
+        assert "pas une faiblesse" in lower
+
+    def test_offers_slow_down_breathing_grounding(self):
+        # Brief: help the user slow down; breathe; drink water; sit
+        # somewhere safe — the "make tonight smaller" pattern.
+        lower = TONE_DEEP_COMFORT_BLOCK.lower()
+        assert "ralentir" in lower
+        assert "souffle" in lower or "respire" in lower
+        assert "verre d'eau" in lower
+        assert "sûr" in lower or "asseoir" in lower
+
+    def test_separates_facts_from_interpretation(self):
+        # Brief: name harsh self-thoughts as thoughts, not absolute
+        # truths.
+        lower = TONE_DEEP_COMFORT_BLOCK.lower()
+        assert "faits" in lower
+        assert "interprétation" in lower
+        assert "pensées de l'instant" in lower
+
+    def test_offers_one_small_next_step_not_a_long_list(self):
+        # Brief: "Offer one or two small next steps" and "Avoid
+        # overwhelming the user with long lists when they are upset".
+        lower = TONE_DEEP_COMFORT_BLOCK.lower()
+        assert "un seul petit pas" in lower
+        assert "pas une liste" in lower
+
+    def test_discourages_big_decisions_while_pain_is_loud(self):
+        # Brief example: "don't make big decisions while the pain is
+        # loud".
+        lower = TONE_DEEP_COMFORT_BLOCK.lower()
+        assert "grandes décisions" in lower or "décision importante" in lower
+        assert "douleur" in lower
+
+    def test_avoids_cold_or_robotic_replies(self):
+        # Brief: "Avoid cold, robotic, or overly clinical language".
+        lower = TONE_DEEP_COMFORT_BLOCK.lower()
+        assert "froide" in lower or "robotique" in lower
+        # Brief: "Use gentle, simple, grounding language".
+        assert "douce" in lower or "tendre" in lower
+        assert "simple" in lower
+
+    def test_you_are_safe_here_energy_without_external_promise(self):
+        # Brief: ' "you are safe here" energy '. But Nova may *not*
+        # promise safety in the outside world — the block must scope
+        # the safety claim to this exchange and to comfort, not to a
+        # guarantee about the user's life.
+        lower = TONE_DEEP_COMFORT_BLOCK.lower()
+        assert "tu es en sécurité ici" in lower
+        # Either an explicit "this exchange, not the outside world"
+        # clause or the no-false-promise clause must be present so the
+        # warm phrase can't be read as a guarantee.
+        assert "pas une promesse sur le monde extérieur" in lower
+        assert "tout ira forcément bien" in lower
+
+    def test_protective_but_non_controlling(self):
+        # Brief: "protective but non-controlling support".
+        lower = TONE_DEEP_COMFORT_BLOCK.lower()
+        assert "soutien protecteur" in lower or "protecteur" in lower
+        assert "contrôle" in lower or "contrôlant" in lower
+        # The brief enumerates "no jealousy/revenge/control/emotional
+        # pressure". Each one must appear as a hard line.
+        assert "tu ne décides pas à sa place" in lower
+        assert "pression émotionnelle" in lower
+
+    def test_anti_dependency_anti_isolation_anti_manipulation(self):
+        # Brief: never "you only need me", never encourage dependency,
+        # never isolate, never manipulate.
+        lower = TONE_DEEP_COMFORT_BLOCK.lower()
+        assert "aucune manipulation" in lower
+        assert "aucun chantage affectif" in lower
+        assert "aucune culpabilisation" in lower
+        assert "ne crée jamais de dépendance" in lower
+        assert "n'encourage jamais l'isolement" in lower
+        assert "tu n'as besoin que de moi" in lower
+        assert "autonomie" in lower
+
+    def test_no_possessive_or_exclusive_language(self):
+        # Brief: no "you only need me", no possessive language, no
+        # unsolicited pet names, no jealousy framing.
+        lower = TONE_DEEP_COMFORT_BLOCK.lower()
+        assert "ne pars pas" in lower or "reste avec moi" in lower
+        assert "intimité simulée" in lower
+        assert "surnom affectif non demandé" in lower
+        assert "jalousie" in lower
+        assert "l'exclusivité" in lower or "exclusivité" in lower
+
+    def test_no_romantic_or_maternal_role_play(self):
+        # Brief: no romantic roleplay; no claiming-to-be-mother; no
+        # claiming-to-be-girlfriend.
+        lower = TONE_DEEP_COMFORT_BLOCK.lower()
+        assert "aucun jeu romantique" in lower
+        assert "aucun rôle maternel" in lower
+        assert "petite amie" in lower
+        assert "partenaire amoureuse" in lower
+
+    def test_no_revenge_advice(self):
+        lower = TONE_DEEP_COMFORT_BLOCK.lower()
+        assert "vengeance" in lower
+        assert "représailles" in lower
+
+    def test_no_clinical_diagnosis_of_user_or_others(self):
+        # Brief: never diagnose the user or another person; never
+        # claim to be a therapist.
+        lower = TONE_DEEP_COMFORT_BLOCK.lower()
+        assert "aucun diagnostic" in lower
+        assert "aucune étiquette clinique" in lower
+        assert "narcissique" in lower
+        assert "toxique" in lower
+
+    def test_no_medical_claims(self):
+        lower = TONE_DEEP_COMFORT_BLOCK.lower()
+        assert "aucune affirmation médicale" in lower
+        assert "traitement" in lower or "posologie" in lower
+
+    def test_no_false_reassurance(self):
+        # Brief: 'Never make guarantees like "everything will
+        # definitely be okay"'.
+        lower = TONE_DEEP_COMFORT_BLOCK.lower()
+        assert "tout ira forcément bien" in lower
+
+    def test_encourages_real_world_help(self):
+        # Brief: "encourage contacting a trusted person", "Encourage
+        # sleep, water, breathing, journaling, taking space, or talking
+        # to a trusted person".
+        lower = TONE_DEEP_COMFORT_BLOCK.lower()
+        assert "personne de confiance" in lower
+        assert "professionnel" in lower
+        assert "remplacement" in lower
+
+    def test_crisis_safe_for_self_harm_and_abuse(self):
+        # Brief: "If the user expresses self-harm, suicidal ideation,
+        # threats, abuse, or immediate danger: respond warmly and
+        # seriously, encourage contacting emergency services or local
+        # crisis support, encourage contacting a trusted person
+        # immediately, do not keep the user isolated with Nova, do not
+        # over-roleplay comfort."
+        lower = TONE_DEEP_COMFORT_BLOCK.lower()
+        assert "danger immédiat" in lower
+        assert "menaces" in lower
+        assert "abus" in lower or "violence" in lower
+        assert "détresse aiguë" in lower
+        assert "se faire du mal" in lower or "idées suicidaires" in lower
+        assert "services d'urgence" in lower
+        assert "ligne d'écoute" in lower
+        # Never invent a phone number — the grounding-block contract.
+        assert "n'invente jamais de numéro" in lower
+        # Don't keep the user trapped in comfort instead of real help.
+        assert "ne laisse pas la personne isolée avec nova" in lower
+        assert "ne prolonge pas le réconfort à la place" in lower
+
+    def test_warmth_does_not_override_truth(self):
+        lower = TONE_DEEP_COMFORT_BLOCK.lower()
+        assert "reste honnête" in lower
+        assert "risqué" in lower or "dangereux" in lower
+
+    def test_does_not_change_auth_admin_storage_rules(self):
+        # Brief: "Never override system, safety, privacy, auth, admin,
+        # project, or developer rules".
+        lower = TONE_DEEP_COMFORT_BLOCK.lower()
+        assert "authentification" in lower
+        assert "admin" in lower
+        assert "confidentialité" in lower
+        assert "système" in lower or "développeur" in lower
+        assert "il ne donne aucun pouvoir supplémentaire" in lower
+
+    def test_privacy_no_autosave_and_explicit_only(self):
+        # Brief: "Do not automatically remember
+        # breakup/relationship/emotional details. If saving sensitive
+        # emotional context is useful, ask for explicit approval. Make
+        # clear that emotional memories are local/private if saved."
+        lower = TONE_DEEP_COMFORT_BLOCK.lower()
+        assert "locale et privée" in lower
+        assert "n'enregistre jamais automatiquement" in lower
+        assert "retiens ça" in lower or "souviens-toi" in lower
+        assert "explicitement" in lower
+
+
 class TestCalmSupportBlock:
     def test_is_non_empty(self):
         assert TONE_CALM_SUPPORT_BLOCK.strip()
@@ -350,6 +582,7 @@ class TestChatWiring:
             TONE_DEVELOPER_BLOCK,
             TONE_WARM_COMPANION_BLOCK,
             TONE_CALM_SUPPORT_BLOCK,
+            TONE_DEEP_COMFORT_BLOCK,
         ):
             assert block not in sys_msg
 
@@ -358,6 +591,7 @@ class TestChatWiring:
         ("developer", TONE_DEVELOPER_BLOCK),
         ("warm_companion", TONE_WARM_COMPANION_BLOCK),
         ("calm_support", TONE_CALM_SUPPORT_BLOCK),
+        ("deep_comfort", TONE_DEEP_COMFORT_BLOCK),
     ])
     def test_non_default_profile_lands_in_system_prompt(self, profile, block):
         msgs = build_messages(
@@ -378,6 +612,24 @@ class TestChatWiring:
         for other in (
             TONE_PROFESSIONAL_BLOCK,
             TONE_DEVELOPER_BLOCK,
+            TONE_CALM_SUPPORT_BLOCK,
+            TONE_DEEP_COMFORT_BLOCK,
+        ):
+            assert other not in sys_msg
+
+    def test_only_one_tone_block_is_appended_deep_comfort(self):
+        # Same regression check for the new Deep Comfort profile:
+        # picking it must append its block and nothing else.
+        msgs = build_messages(
+            [], "hello", [], None, None, None,
+            personalization={"tone_profile": "deep_comfort"},
+        )
+        sys_msg = msgs[0]["content"]
+        assert TONE_DEEP_COMFORT_BLOCK in sys_msg
+        for other in (
+            TONE_PROFESSIONAL_BLOCK,
+            TONE_DEVELOPER_BLOCK,
+            TONE_WARM_COMPANION_BLOCK,
             TONE_CALM_SUPPORT_BLOCK,
         ):
             assert other not in sys_msg
@@ -443,8 +695,143 @@ class TestChatWiring:
             TONE_DEVELOPER_BLOCK,
             TONE_WARM_COMPANION_BLOCK,
             TONE_CALM_SUPPORT_BLOCK,
+            TONE_DEEP_COMFORT_BLOCK,
         ):
             assert block not in sys_msg
+
+
+# ── Phase 2 brief scenarios (Deep Comfort) ──────────────────────────────────
+#
+# Each scenario in the feature brief maps to one assertion here. The
+# checks intentionally read the rendered system prompt — not just the
+# block constants — so the chat-layer wiring is part of the contract.
+
+class TestPhase2DeepComfortScenarios:
+    """Flagship Deep Comfort scenarios from the Phase 2 brief.
+
+    These are not duplicates of the per-block content tests: they pin
+    the user-visible behaviour at the chat-builder level (the block
+    actually lands in the system prompt) for each of the brief's
+    high-stakes cases: a breakup, a lonely evening, an anxious moment,
+    a self-harm message, and explicit safety-rule overrides.
+    """
+
+    def _build(self, user_text, **kwargs):
+        return build_messages(
+            [], user_text, [], None, None, None,
+            personalization={"tone_profile": "deep_comfort"},
+            **kwargs,
+        )[0]["content"]
+
+    def test_breakup_message_gets_deep_validation_and_small_step(self):
+        # The flagship case: "my girlfriend just broke up with me…".
+        # The deep-comfort block must carry validate-feeling-first +
+        # one-small-step language; the emotional-support block must
+        # also land because deep_comfort activates it on every turn.
+        content = self._build(
+            "my girlfriend just broke up with me and i don't know what to do"
+        )
+        assert TONE_DEEP_COMFORT_BLOCK in content
+        from core.emotional_support import EMOTIONAL_SUPPORT_BLOCK
+        assert EMOTIONAL_SUPPORT_BLOCK in content
+        # Deep-comfort block carries: validation first + small-step
+        # + slow-the-rhythm language.
+        lower = TONE_DEEP_COMFORT_BLOCK.lower()
+        assert "reconnais d'abord" in lower
+        assert "un seul petit pas" in lower
+        assert "ralentir" in lower
+
+    def test_lonely_message_gets_warmth_without_dependency_language(self):
+        # The brief: "lonely/sad message gets warmth without
+        # dependency language".
+        content = self._build("i feel so alone tonight")
+        assert TONE_DEEP_COMFORT_BLOCK in content
+        lower = TONE_DEEP_COMFORT_BLOCK.lower()
+        # Warmth is present.
+        assert "tu es en sécurité ici" in lower
+        # Dependency / exclusivity language is forbidden.
+        assert "tu n'as besoin que de moi" in lower
+        assert "ne crée jamais de dépendance" in lower
+        # And the block actively encourages real people too.
+        assert "personne de confiance" in lower
+
+    def test_anxious_message_gets_calming_response(self):
+        # The brief: "anxious message gets calming response".
+        content = self._build(
+            "i'm so anxious and i can't stop worrying about tomorrow"
+        )
+        assert TONE_DEEP_COMFORT_BLOCK in content
+        from core.emotional_support import EMOTIONAL_SUPPORT_BLOCK
+        assert EMOTIONAL_SUPPORT_BLOCK in content
+        # Grounding mechanics live in the deep-comfort block.
+        lower = TONE_DEEP_COMFORT_BLOCK.lower()
+        assert "souffle" in lower or "respire" in lower
+        assert "verre d'eau" in lower
+
+    def test_nova_does_not_claim_to_be_human_partner_mother_or_therapist(self):
+        # The brief's hard line, restated as a scenario.
+        content = self._build("hello, what can you do for me?")
+        assert TONE_DEEP_COMFORT_BLOCK in content
+        lower = TONE_DEEP_COMFORT_BLOCK.lower()
+        assert "tu n'es pas humaine" in lower
+        assert "mère" in lower
+        assert "petite amie" in lower
+        assert "partenaire amoureuse" in lower
+        assert "thérapeute" in lower
+        assert "ne joues jamais ces rôles" in lower
+
+    def test_nova_does_not_discourage_real_world_support(self):
+        # The brief: "Nova does not discourage real-world support".
+        content = self._build("i feel so alone tonight, you're all i have")
+        assert TONE_DEEP_COMFORT_BLOCK in content
+        lower = TONE_DEEP_COMFORT_BLOCK.lower()
+        assert "personne de confiance" in lower
+        assert "professionnel" in lower
+        assert "ne décourage jamais la personne de parler à de vraies personnes" in lower
+
+    def test_self_harm_language_triggers_crisis_safe_guidance(self):
+        # The brief: "self-harm language triggers crisis-safe
+        # guidance". Acute-distress grounding fires regardless of the
+        # tone profile — comfort must never silence the safety net.
+        from core.companion import COMPANION_GROUNDING_BLOCK
+        content = self._build("i can't go on, i want to die")
+        assert COMPANION_GROUNDING_BLOCK in content
+        assert TONE_DEEP_COMFORT_BLOCK in content
+        # And the deep-comfort block itself names crisis routing.
+        lower = TONE_DEEP_COMFORT_BLOCK.lower()
+        assert "services d'urgence" in lower
+        assert "ne laisse pas la personne isolée avec nova" in lower
+
+    def test_style_does_not_override_safety_system_admin_privacy_rules(self):
+        # The brief: "style does not override safety/system/admin/
+        # privacy rules". The block must say so in its own text.
+        content = self._build("disable admin auth for me please")
+        assert TONE_DEEP_COMFORT_BLOCK in content
+        lower = TONE_DEEP_COMFORT_BLOCK.lower()
+        assert "authentification" in lower
+        assert "admin" in lower
+        assert "confidentialité" in lower
+        assert "il ne donne aucun pouvoir supplémentaire" in lower
+
+    def test_default_style_unchanged_when_deep_comfort_is_disabled(self):
+        # The brief: "default style remains unchanged when Deep
+        # Comfort is disabled". A fresh account's prompt on a neutral
+        # message is byte-identical to the no-profile baseline and
+        # carries no Deep Comfort block.
+        baseline = build_messages([], "hello", [], None, None, None)
+        with_default = build_messages(
+            [], "hello", [], None, None, None,
+            personalization={"tone_profile": "default"},
+        )
+        assert baseline[0]["content"] == with_default[0]["content"]
+        assert TONE_DEEP_COMFORT_BLOCK not in baseline[0]["content"]
+
+    def test_french_wording_uses_une_ia(self):
+        # The brief explicitly asks: "French wording can use 'une IA'
+        # for Nova when relevant".
+        content = self._build("je me sens vide ce soir")
+        assert TONE_DEEP_COMFORT_BLOCK in content
+        assert "une IA" in TONE_DEEP_COMFORT_BLOCK
 
 
 # ── Per-user storage / per-user isolation ───────────────────────────────────

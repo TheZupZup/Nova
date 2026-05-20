@@ -40,10 +40,11 @@ The block is appended to the system prompt **either**:
 1. when a conservative bilingual detector spots emotionally-sensitive
    first-person wording in the user's message (a breakup, a wave of
    sadness, a lonely evening, an anxious / overwhelmed moment), **or**
-2. when the user has picked `warm_companion` or `calm_support` as
-   their *Tone profile* (see [`docs/tone-profile.md`](tone-profile.md))
-   — the warm registers carry consistent emotional grounding even on
-   otherwise-neutral chit-chat.
+2. when the user has picked `warm_companion`, `calm_support`, or
+   `deep_comfort` as their *Tone profile* (see
+   [`docs/tone-profile.md`](tone-profile.md)) — the warm registers
+   carry consistent emotional grounding even on otherwise-neutral
+   chit-chat.
 
 A fresh account with no warm tone profile selected and no
 emotionally-sensitive wording pays **zero token cost** and behaves
@@ -206,9 +207,12 @@ chat:
 - **Pick a sober tone profile.** Settings → Personalization →
   *Tone profile* → **Default** / **Professional** / **Developer**. On
   neutral messages those profiles do not auto-add the Emotional
-  Support Layer. On a genuinely emotional message it still activates
-  — the safety contract is intentionally not behind the toggle, so
-  the warm framing cannot be traded against a sober register.
+  Support Layer. The three warm profiles (**Warm Companion**, **Calm
+  Support**, **Deep Comfort**) do auto-add it on every turn, by
+  design. On a genuinely emotional message the layer still activates
+  regardless of the chosen profile — the safety contract is
+  intentionally not behind the toggle, so the warm framing cannot be
+  traded against a sober register.
 - **Phrase requests neutrally.** "Help me draft a difficult email"
   is treated as a writing task; "I'm heartbroken about this email I
   have to send" activates the layer.
@@ -226,7 +230,7 @@ identity and safety always win:
 | --- | --- | --- |
 | Identity contract (`core/nova_contract.py`) | Always | Names Nova, forbids cloud-identity claims, sets the immutable safety / honesty rules. Appears first. |
 | Personalization (`core/nova_contract.py`) | When the user changed response-style / warmth / enthusiasm / emoji / custom instructions | Shapes verbosity and emoji density. Never overrides identity. |
-| Tone profile (`core/tone_profile.py`) | When the user picked `professional` / `developer` / `warm_companion` / `calm_support` | Shapes register. Warm registers also activate the Emotional Support Layer. |
+| Tone profile (`core/tone_profile.py`) | When the user picked `professional` / `developer` / `warm_companion` / `calm_support` / `deep_comfort` | Shapes register. Warm registers (`warm_companion` / `calm_support` / `deep_comfort`) also activate the Emotional Support Layer. |
 | Relationship Situation Coach (`core/relationship_coach.py`) | Conservative detector on relationship-specific multi-word phrases | Non-clinical method for answering a sensitive partner message. |
 | **Emotional Support Layer (this doc)** | Conservative detector on first-person emotional wording OR warm tone profile | Warm validation, slow-down / breathe, one small step, encourage real-world help. |
 | Companion Mode (`core/companion.py`) | Per-user opt-in toggle | A calm, steady presence layer for emotionally heavy moments. |
@@ -297,13 +301,15 @@ relaxes none of them, so it does **not** edit the contract itself):
   no-autosave / explicit-only clause.
 - `core.chat.build_messages` wiring: block injected when the user
   message is emotionally sensitive OR when the tone profile is
-  `warm_companion` / `calm_support`; not injected on a neutral
-  message with a sober tone profile (`default` / `professional` /
-  `developer`); still injected on a genuinely emotional message
-  regardless of the tone profile; identity contract always sits
-  above the block; coexists with the relationship-coach,
-  warm-companion / calm-support tone, companion-mode, and
-  acute-distress grounding blocks; also applies in the search /
+  `warm_companion` / `calm_support` / `deep_comfort`; not injected
+  on a neutral message with a sober tone profile (`default` /
+  `professional` / `developer`); still injected on a genuinely
+  emotional message regardless of the tone profile; identity
+  contract always sits above the block; coexists with the
+  relationship-coach, warm-companion / calm-support / deep-comfort
+  tone, companion-mode, and acute-distress grounding blocks
+  (the Deep Comfort tone also does not silence the acute-distress
+  safety net on self-harm wording); also applies in the search /
   weather / security branches; warm-companion tone still appends
   only one tone block (regression).
 - `_autosave_allowed`: blocks autosave for the breakup, sadness,
