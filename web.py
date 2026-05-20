@@ -453,6 +453,7 @@ class SettingsUpdateRequest(BaseModel):
     warmth_level: str | None = None
     enthusiasm_level: str | None = None
     emoji_level: str | None = None
+    tone_profile: str | None = None
     custom_instructions: str | None = None
 
     @field_validator("ram_budget")
@@ -476,7 +477,8 @@ class SettingsUpdateRequest(BaseModel):
         return v
 
     @field_validator(
-        "response_style", "warmth_level", "enthusiasm_level", "emoji_level"
+        "response_style", "warmth_level", "enthusiasm_level", "emoji_level",
+        "tone_profile",
     )
     @classmethod
     def validate_personalization_enum(cls, v, info):
@@ -1487,6 +1489,7 @@ def update_settings(
         "warmth_level",
         "enthusiasm_level",
         "emoji_level",
+        "tone_profile",
         "custom_instructions",
     ):
         value = getattr(data, key)

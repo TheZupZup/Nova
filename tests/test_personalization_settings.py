@@ -82,6 +82,7 @@ ALL_FIELDS = {
     "warmth_level": "high",
     "enthusiasm_level": "low",
     "emoji_level": "medium",
+    "tone_profile": "warm_companion",
     "custom_instructions": "Prefer short answers.",
 }
 
@@ -116,7 +117,7 @@ class TestPersonalizationConstants:
     def test_defaults_cover_every_field(self):
         expected = {
             "response_style", "warmth_level", "enthusiasm_level",
-            "emoji_level", "custom_instructions",
+            "emoji_level", "tone_profile", "custom_instructions",
         }
         assert set(core_settings.PERSONALIZATION_DEFAULTS) == expected
 
@@ -247,10 +248,11 @@ class TestSettingsPost:
             assert b_body[key] == core_settings.PERSONALIZATION_DEFAULTS[key]
 
         # The DB row exists only for Alice.
+        placeholders = ", ".join("?" * len(ALL_FIELDS))
         with sqlite3.connect(db_path) as conn:
             rows = conn.execute(
                 "SELECT user_id, key FROM user_settings "
-                "WHERE key IN (?, ?, ?, ?, ?)",
+                f"WHERE key IN ({placeholders})",
                 tuple(ALL_FIELDS.keys()),
             ).fetchall()
         assert all(r[0] == a for r in rows)
@@ -273,6 +275,7 @@ class TestSettingsPost:
         assert body["response_style"] == ALL_FIELDS["response_style"]
         assert body["warmth_level"] == ALL_FIELDS["warmth_level"]
         assert body["enthusiasm_level"] == ALL_FIELDS["enthusiasm_level"]
+        assert body["tone_profile"] == ALL_FIELDS["tone_profile"]
         assert body["custom_instructions"] == ALL_FIELDS["custom_instructions"]
 
     @pytest.mark.parametrize("key,value", [
@@ -280,6 +283,7 @@ class TestSettingsPost:
         ("warmth_level", "extreme"),
         ("enthusiasm_level", ""),
         ("emoji_level", "all"),
+        ("tone_profile", "girlfriend"),
     ])
     def test_invalid_enum_value_is_rejected(self, db_path, web_client, key, value):
         a = _make_user(db_path, "alice")
@@ -402,6 +406,6 @@ class TestSettingsAuthorization:
         raw_names = {v for v in MODELS.values()}
         for key in (
             "response_style", "warmth_level", "enthusiasm_level",
-            "emoji_level", "custom_instructions",
+            "emoji_level", "tone_profile", "custom_instructions",
         ):
             assert body[key] not in raw_names
