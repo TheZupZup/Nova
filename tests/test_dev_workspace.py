@@ -1116,3 +1116,318 @@ class TestPatchProposalEndpoint:
             headers=_h(tok),
         )
         assert resp.status_code == 422
+
+
+# ════════════════════════════════════════════════════════════════════
+# Phase 2 — title, warnings alias, binary rejection, transient stamps
+# ════════════════════════════════════════════════════════════════════
+#
+# These cover the additive surface on top of the original Phase 2 PR:
+# a ``title`` field, ``warnings`` accepted as a synonym for ``risks``,
+# binary content refused (NUL byte in either side of a change), and the
+# transient ``id`` + ``created_at`` stamps every built proposal carries.
+# A second alias endpoint (``POST .../patch-proposals/validate``) shares
+# the same per-project / per-user scoping as the original path.
+
+
+@_needs_git
+class TestProposalTitleAndWarnings:
+    def test_title_is_optional_and_defaults_empty(self, real_repo):
+        repo, root = real_repo
+        prop = dw.build_patch_proposal(
+            str(repo), _safe_proposal(), roots=[root]
+        )
+        d = prop.as_dict()
+        assert d["title"] == ""
+
+    def test_title_is_collapsed_and_capped(self, real_repo):
+        repo, root = real_repo
+        spec = _safe_proposal()
+        spec["title"] = "  Add\n\n  greet()  helper   "
+        prop = dw.build_patch_proposal(str(repo), spec, roots=[root])
+        # Whitespace collapsed to one safe line.
+        assert prop.title == "Add greet() helper"
+
+        spec["title"] = "x" * (dw._MAX_PROPOSAL_TITLE_CHARS + 50)
+        prop = dw.build_patch_proposal(str(repo), spec, roots=[root])
+        assert len(prop.title) == dw._MAX_PROPOSAL_TITLE_CHARS
+
+    def test_non_string_title_rejected(self, real_repo):
+        repo, root = real_repo
+        spec = _safe_proposal()
+        spec["title"] = 42
+        with pytest.raises(dw.PatchProposalError, match="title"):
+            dw.build_patch_proposal(str(repo), spec, roots=[root])
+
+    def test_warnings_accepted_as_synonym_for_risks(self, real_repo):
+        repo, root = real_repo
+        spec = _safe_proposal()
+        spec.pop("risks", None)
+        spec["warnings"] = ["touches auth", "review carefully"]
+        prop = dw.build_patch_proposal(str(repo), spec, roots=[root])
+        # Lands in the risks field (and is mirrored to ``warnings`` in
+        # the JSON for downstream UI / spec readers).
+        assert list(prop.risks) == ["touches auth", "review carefully"]
+        d = prop.as_dict()
+        assert d["risks"] == d["warnings"] == [
+            "touches auth", "review carefully"
+        ]
+
+    def test_risks_field_wins_over_warnings_alias(self, real_repo):
+        # If a model fills both, ``risks`` is the canonical Phase 2
+        # field and the alias is ignored. (The endpoint forbids unknown
+        # fields elsewhere; both are recognised here.)
+        repo, root = real_repo
+        spec = _safe_proposal()
+        spec["risks"] = ["primary risk"]
+        spec["warnings"] = ["should be ignored"]
+        prop = dw.build_patch_proposal(str(repo), spec, roots=[root])
+        assert list(prop.risks) == ["primary risk"]
+
+    def test_proposal_is_stamped_with_id_and_timestamp(self, real_repo):
+        repo, root = real_repo
+        a = dw.build_patch_proposal(
+            str(repo), _safe_proposal(), roots=[root]
+        )
+        b = dw.build_patch_proposal(
+            str(repo), _safe_proposal(), roots=[root]
+        )
+        # Two separate builds get two separate ids.
+        assert a.id and b.id and a.id != b.id
+        # UUID4 hex is 32 chars.
+        assert len(a.id) == 32 and all(c in "0123456789abcdef" for c in a.id)
+        # ISO timestamp ends with Z (UTC).
+        assert a.created_at.endswith("Z")
+        # Same in the serialised payload.
+        d = a.as_dict()
+        assert d["id"] == a.id
+        assert d["created_at"] == a.created_at
+
+
+@_needs_git
+class TestBinaryPatchRejection:
+    def test_nul_in_new_content_rejected(self, real_repo):
+        repo, root = real_repo
+        bad = {
+            "changes": [
+                {
+                    "path": "blob.bin",
+                    "action": "add",
+                    "new_content": "binary\x00data\n",
+                }
+            ]
+        }
+        with pytest.raises(dw.PatchProposalError, match="binary"):
+            dw.build_patch_proposal(str(repo), bad, roots=[root])
+
+    def test_nul_in_old_content_rejected(self, real_repo):
+        repo, root = real_repo
+        bad = {
+            "changes": [
+                {
+                    "path": "blob.bin",
+                    "action": "modify",
+                    "old_content": "before\x00trail\n",
+                    "new_content": "after\n",
+                }
+            ]
+        }
+        with pytest.raises(dw.PatchProposalError, match="binary"):
+            dw.build_patch_proposal(str(repo), bad, roots=[root])
+
+    def test_delete_of_binary_old_content_rejected(self, real_repo):
+        repo, root = real_repo
+        bad = {
+            "changes": [
+                {
+                    "path": "blob.bin",
+                    "action": "delete",
+                    "old_content": "\x89PNG\r\n\x1a\n\x00fake-png",
+                }
+            ]
+        }
+        with pytest.raises(dw.PatchProposalError, match="binary"):
+            dw.build_patch_proposal(str(repo), bad, roots=[root])
+
+    def test_pure_text_with_high_unicode_still_allowed(self, real_repo):
+        # Defence against a too-aggressive heuristic: emoji / CJK / RTL
+        # text contains no NUL and must remain valid as a text patch.
+        repo, root = real_repo
+        spec = {
+            "changes": [
+                {
+                    "path": "README.md",
+                    "action": "modify",
+                    "old_content": "hello\n",
+                    "new_content": "hello 🌟 مرحبا 你好\n",
+                }
+            ]
+        }
+        prop = dw.build_patch_proposal(str(repo), spec, roots=[root])
+        assert prop.files
+
+
+@_needs_git
+class TestPatchProposalValidateEndpoint:
+    """``POST /projects/{id}/patch-proposals/validate`` (spec alias)."""
+
+    def test_full_link_then_validate(
+        self, db_path, web_client, real_repo, monkeypatch
+    ):
+        repo, root = real_repo
+        monkeypatch.setenv(dw.ENV_ROOTS, str(root))
+        _make_user(db_path, "alice")
+        tok = _login(web_client, "alice")
+        pid = web_client.post(
+            "/projects", json={"name": "Nova"}, headers=_h(tok)
+        ).json()["id"]
+        web_client.put(
+            f"/projects/{pid}/repo",
+            json={"path": str(repo)},
+            headers=_h(tok),
+        )
+        before = _tree_snapshot(repo)
+        resp = web_client.post(
+            f"/projects/{pid}/patch-proposals/validate",
+            json=_safe_proposal(),
+            headers=_h(tok),
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["review_only"] is True
+        assert body["applied"] is False
+        assert {f["path"] for f in body["files"]} == {
+            "core/greet.py",
+            "README.md",
+        }
+        assert body["id"] and body["created_at"].endswith("Z")
+        # Validation must be read-only on the working tree.
+        assert _tree_snapshot(repo) == before
+
+    def test_validate_accepts_title_and_warnings(
+        self, db_path, web_client, real_repo, monkeypatch
+    ):
+        repo, root = real_repo
+        monkeypatch.setenv(dw.ENV_ROOTS, str(root))
+        _make_user(db_path, "alice")
+        tok = _login(web_client, "alice")
+        pid = web_client.post(
+            "/projects", json={"name": "Nova"}, headers=_h(tok)
+        ).json()["id"]
+        web_client.put(
+            f"/projects/{pid}/repo",
+            json={"path": str(repo)},
+            headers=_h(tok),
+        )
+        spec = _safe_proposal()
+        spec["title"] = "Add greet helper"
+        spec.pop("risks", None)
+        spec["warnings"] = ["new public helper"]
+        resp = web_client.post(
+            f"/projects/{pid}/patch-proposals/validate",
+            json=spec,
+            headers=_h(tok),
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["title"] == "Add greet helper"
+        assert body["risks"] == ["new public helper"]
+        assert body["warnings"] == ["new public helper"]
+
+    def test_validate_rejects_binary_content(
+        self, db_path, web_client, real_repo, monkeypatch
+    ):
+        repo, root = real_repo
+        monkeypatch.setenv(dw.ENV_ROOTS, str(root))
+        _make_user(db_path, "alice")
+        tok = _login(web_client, "alice")
+        pid = web_client.post(
+            "/projects", json={"name": "Nova"}, headers=_h(tok)
+        ).json()["id"]
+        web_client.put(
+            f"/projects/{pid}/repo",
+            json={"path": str(repo)},
+            headers=_h(tok),
+        )
+        resp = web_client.post(
+            f"/projects/{pid}/patch-proposals/validate",
+            json={
+                "changes": [
+                    {
+                        "path": "blob.bin",
+                        "action": "add",
+                        "new_content": "x\x00y",
+                    }
+                ]
+            },
+            headers=_h(tok),
+        )
+        assert resp.status_code == 400
+        assert "binary" in resp.json()["detail"]
+
+    def test_validate_foreign_project_is_404(
+        self, db_path, web_client
+    ):
+        _make_user(db_path, "alice")
+        _make_user(db_path, "bob")
+        a = _login(web_client, "alice")
+        b = _login(web_client, "bob")
+        pid = web_client.post(
+            "/projects", json={"name": "Priv"}, headers=_h(a)
+        ).json()["id"]
+        resp = web_client.post(
+            f"/projects/{pid}/patch-proposals/validate",
+            json={
+                "changes": [
+                    {"path": "a.py", "action": "add", "new_content": "x\n"}
+                ]
+            },
+            headers=_h(b),
+        )
+        assert resp.status_code == 404
+
+    def test_validate_unlinked_project_is_400(self, db_path, web_client):
+        _make_user(db_path, "alice")
+        tok = _login(web_client, "alice")
+        pid = web_client.post(
+            "/projects", json={"name": "Nova"}, headers=_h(tok)
+        ).json()["id"]
+        resp = web_client.post(
+            f"/projects/{pid}/patch-proposals/validate",
+            json={
+                "changes": [
+                    {"path": "a.py", "action": "add", "new_content": "x\n"}
+                ]
+            },
+            headers=_h(tok),
+        )
+        assert resp.status_code == 400
+
+    def test_validate_unauthorised_is_401(self, db_path, web_client):
+        resp = web_client.post(
+            "/projects/1/patch-proposals/validate",
+            json={
+                "changes": [
+                    {"path": "a.py", "action": "add", "new_content": "x\n"}
+                ]
+            },
+        )
+        assert resp.status_code == 401
+
+    def test_validate_extra_field_is_422(self, db_path, web_client):
+        _make_user(db_path, "alice")
+        tok = _login(web_client, "alice")
+        pid = web_client.post(
+            "/projects", json={"name": "Nova"}, headers=_h(tok)
+        ).json()["id"]
+        resp = web_client.post(
+            f"/projects/{pid}/patch-proposals/validate",
+            json={
+                "changes": [
+                    {"path": "a.py", "action": "add", "new_content": "x\n"}
+                ],
+                "apply": True,
+            },
+            headers=_h(tok),
+        )
+        assert resp.status_code == 422
