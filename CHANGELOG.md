@@ -2,6 +2,25 @@
 
 ## Unreleased
 ### Added
+- Dev Workspace Phase 2 — control-character hardening for the patch
+  proposal preview. The text-only refusal in `core.dev_workspace`
+  (previously NUL-only) now also refuses any C0 byte other than tab /
+  newline / carriage return — BEL (`\x07`), ESC (`\x1b`), backspace,
+  DEL, and the rest of the C0 range — in both `old_content` and
+  `new_content`, since those bytes would survive into the diff preview
+  and the clipboard via **Copy patch** and beep, colorise, or rewrite a
+  real terminal on paste. Model-supplied display strings (title,
+  summary, plan steps, suggested tests, risks / warnings) are stripped
+  of the same unsafe controls before they leave the builder, so a
+  **Copy test plan** payload is plain text too. Tab / newline / CR
+  remain valid in proposed content (Python indentation, CRLF line
+  endings); emoji / CJK / RTL text was already unaffected. The UI also
+  clamps the file-action CSS class to the known `{modify, add, delete}`
+  set so a future schema change cannot widen the class surface. New
+  tests cover BEL / ESC / backspace / DEL refusal in `new_content` and
+  `old_content`, the tab+CR/LF allow-list, and stripping across title /
+  summary / plan / tests / warnings (including a control-only title
+  collapsing to empty); 163 dev-workspace tests pass.
 - Dev Workspace Phase 2 — patch proposal preview surface (review-only):
   the Dev Workspace panel (`⎇`) gains a "Patch proposal preview"
   section that appears whenever a project's linked repo is in the

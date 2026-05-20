@@ -62,8 +62,14 @@ calls, **no** file writes, and **no** subprocess work — it never
 applies, stages, commits, pushes, or branches anything. Every proposed
 path is validated to be repo-relative, traversal-free, non-secret, and
 contained inside the linked repo, and any file whose content carries a
-NUL byte is refused as binary (no readable text diff possible).
-Applying a reviewed patch is a deliberately separate, later phase.
+NUL byte or any other unsafe C0 / DEL control character (ANSI escapes,
+BEL, backspace, …) is refused as binary — those bytes would survive
+into the diff preview and the clipboard payload of "Copy patch" and
+beep, colorise, or rewrite a real terminal on paste. Model-supplied
+display strings (title, summary, plan steps, suggested tests, risks /
+warnings) are stripped of the same unsafe controls before they leave
+the builder. Applying a reviewed patch is a deliberately separate,
+later phase.
 
 See ``docs/dev-workspace.md`` for the operator walkthrough, the
 explicit non-goals, and the Phase 2-6 roadmap.
@@ -747,16 +753,54 @@ _PROPOSAL_SAFETY_NOTES = (
 )
 
 
+# C0 control characters (and DEL) that real source files never carry as
+# bytes. Tab / newline / carriage return are the only whitespace controls
+# that legitimately appear in text; everything else (NUL, BEL, ESC, …) is
+# either a binary signal or a terminal-escape vector that would *survive*
+# a "Copy patch" into a real terminal. Refusing them keeps the text
+# preview honest and the clipboard payload safe to paste.
+_UNSAFE_CONTROL_CHARS = frozenset(
+    chr(c) for c in range(0x20) if chr(c) not in ("\t", "\n", "\r")
+) | {"\x7f"}
+
+
 def _looks_binary(content: str) -> bool:
     """True when ``content`` is not safe to preview as a text patch.
 
-    A real text source file never contains a NUL byte, so a NUL is the
-    cheapest, most reliable binary signal — and the same heuristic git
-    itself uses to flag a file as "Binary". The diff preview is pure
-    text, so a binary blob is refused outright in this phase rather than
-    surfacing a broken or huge diff. Empty content is trivially text.
+    A real text source file never contains a NUL byte (git's own "Binary"
+    heuristic), and the broader C0 / DEL range (BEL, ESC, …) does not
+    appear in well-formed text either — those bytes would survive into
+    the diff preview, and from there into the user's clipboard, where
+    pasting them into a terminal could colorise output, beep, or run an
+    escape-driven trick. Tab / newline / carriage return are the only
+    whitespace controls that legitimately appear in source; everything
+    else 0x00–0x1f plus 0x7f is treated as binary. Empty content is
+    trivially text.
     """
-    return "\x00" in content
+    if not content:
+        return False
+    for ch in _UNSAFE_CONTROL_CHARS:
+        if ch in content:
+            return True
+    return False
+
+
+def _strip_controls(text: str) -> str:
+    """Drop C0 / DEL controls (keeping tab/newline/CR) from a metadata string.
+
+    Used on model-supplied display text — title, summary, plan steps,
+    suggested tests, risk/warning items. The Phase 2 preview renders
+    these directly, and they also ride along in the clipboard payload
+    via "Copy test plan"; stripping unsafe controls keeps that output
+    plain text even when the model misbehaves. ``_truncate`` and the
+    whitespace-collapse step still run afterwards, so the visible cap is
+    unchanged.
+    """
+    if not text:
+        return text
+    if not any(ch in text for ch in _UNSAFE_CONTROL_CHARS):
+        return text
+    return "".join(ch for ch in text if ch not in _UNSAFE_CONTROL_CHARS)
 
 
 def _is_secret_path(rel_posix: str) -> bool:
@@ -959,7 +1003,9 @@ def _string_list(value: object, cap: int) -> tuple[str, ...]:
     for item in value:
         if not isinstance(item, str):
             raise PatchProposalError("list items must be strings")
-        cleaned = item.strip()
+        # Strip C0/DEL controls before trimming so a sneaky model cannot
+        # smuggle BEL/ESC bytes into the clipboard via "Copy test plan".
+        cleaned = _strip_controls(item).strip()
         if not cleaned:
             continue
         out.append(_truncate(cleaned))
@@ -1051,14 +1097,19 @@ def build_patch_proposal(
     title_raw = proposal.get("title") or ""
     if not isinstance(title_raw, str):
         raise PatchProposalError("title must be a string")
-    # Collapse whitespace so the title stays a single safe line.
-    title = " ".join(title_raw.split())[:_MAX_PROPOSAL_TITLE_CHARS]
+    # Drop C0/DEL controls (BEL/ESC/…) then collapse whitespace so the
+    # title stays a single safe line that is also safe to copy.
+    title = " ".join(
+        _strip_controls(title_raw).split()
+    )[:_MAX_PROPOSAL_TITLE_CHARS]
 
     summary_raw = proposal.get("summary") or ""
     if not isinstance(summary_raw, str):
         raise PatchProposalError("summary must be a string")
-    # Collapse whitespace so the summary stays a single safe line.
-    summary = " ".join(summary_raw.split())[:_MAX_PROPOSAL_SUMMARY_CHARS]
+    # Same hardening for the one-line summary.
+    summary = " ".join(
+        _strip_controls(summary_raw).split()
+    )[:_MAX_PROPOSAL_SUMMARY_CHARS]
 
     plan = _string_list(proposal.get("plan"), _MAX_PROPOSAL_PLAN_STEPS)
     tests = _string_list(proposal.get("tests"), _MAX_PROPOSAL_TESTS)
