@@ -2,6 +2,89 @@
 
 ## Unreleased
 ### Added
+- Emotional Support Layer (Phase 1, local-first, response-guidance only):
+  a new `core/emotional_support.py` adds a deterministic French prompt
+  block that helps Nova respond gently when the user is going through
+  sadness, loneliness, anxiety, heartbreak, or general emotional
+  difficulty (a breakup, a lonely evening, an overwhelmed moment).
+  The layer activates either when a conservative bilingual
+  first-person-anchored detector (`is_emotional_support_appropriate`)
+  spots emotionally-sensitive wording in the user's message, or when
+  the user has picked `warm_companion` / `calm_support` as their tone
+  profile — the warm registers carry consistent emotional grounding
+  even on otherwise-neutral chit-chat. A fresh account with no warm
+  tone profile selected and no emotionally-sensitive wording pays
+  zero token cost and behaves byte-identically to a Nova install
+  without the feature. The block is a fixed deterministic constant
+  (no LLM, no I/O, never raises) appended *below* `IDENTITY_CONTRACT`,
+  the system prompt, the personalization block, the tone-profile
+  block, the feedback block, the time / security blocks, and the
+  relationship-coach block in `build_messages` — ordering guarantees
+  it can never override identity, safety, capability, auth, admin,
+  privacy, or project rules. The block is explicitly **not** an
+  "AI girlfriend" / "AI partner" system and is built so it cannot
+  become one: it restates that Nova is *une IA* — a local AI
+  assistant, never human, never the user's girlfriend / boyfriend /
+  partner, never a therapist, never a substitute for real people —
+  asks Nova to validate the feeling first (no minimising, no
+  judgement), slow the rhythm and invite a calm breath, separate
+  facts from harsh self-thoughts of the moment, offer a single small
+  next step rather than a long task list, and gently encourage
+  real-world support (a trusted person, a friend, a professional
+  where appropriate). Hard safety rails inside the block: no
+  clinical diagnosis of the user or of anyone else (no "narcissistic",
+  "toxic", "bipolar" labels for an ex), no medical claims / no
+  treatment / no dosage, no revenge advice or punitive power play,
+  no jealousy framing, no possessive or exclusive language ("only I
+  understand you", "don't go", "I'll miss you", "you only need me"),
+  no simulated intimacy, no unsolicited pet names, no isolation /
+  dependency / manipulation / emotional blackmail / guilt-tripping,
+  no prolonging-the-conversation, no false reassurance like
+  "everything will definitely be okay", and a warmth-never-overrides-
+  truth clause (risky / wrong / dangerous things are still said
+  plainly). Danger / abuse / acute distress wording in the user
+  message is escalated to real human / professional / emergency help
+  — pointed at the user's local emergency services or a recognised
+  helpline generically, without inventing a phone number. Privacy:
+  emotional turns are excluded from automatic memory by the
+  `_autosave_allowed` gate (both the user message and the assistant
+  reply are checked, so the LLM-extraction path can't leak context
+  the assistant restated on a follow-up turn); durable storage stays
+  user-approved only via the explicit `Retiens ça :` /
+  `Souviens-toi :` command. The existing acute-distress grounding
+  safety net in `core/companion.py` is unchanged and remains always
+  on — both blocks may coexist with each other, with the
+  relationship-coach block, with the warm tone-profile blocks, and
+  with Companion Mode, with the identity contract above every block.
+  Adds `tests/test_emotional_support.py` (64 tests: bilingual
+  conservative detection covering sadness / loneliness / heartbreak
+  / anxiety / overwhelm / pain, idiom-safe, first-person-anchored,
+  third-person-safe, non-string-safe; every per-block safety-language
+  commitment from the feature brief — including the "une IA" honest
+  identity clause, the not-human / not-partner / not-therapist
+  clause, the no-clinical-diagnosis / no-medical-claims clauses, the
+  no-revenge-advice / no-jealousy clauses, the slow-down / breathing
+  / grounding clause, the separate-facts-from-interpretation clause,
+  the no-panic-escalation clause, the one-small-step / not-a-long-list
+  clause, the no-cold-or-robotic-replies clause, the
+  encourage-real-world-support clause, the danger / abuse escalation
+  clause with the never-invent-a-phone-number contract, the
+  anti-dependency / anti-isolation / anti-manipulation clauses, the
+  no-possessive-language / no-pet-names clauses, the
+  no-false-reassurance clause, the privacy no-autosave / explicit-only
+  clause; chat-wiring including ordering, coexistence with the
+  relationship-coach / warm-companion-tone / calm-support-tone /
+  companion-mode / acute-distress-grounding blocks, the
+  not-on-neutral-message contract for sober tone profiles, the
+  still-activates-on-emotional-message contract for sober tone
+  profiles, and the search-context branch; auto-save gate including
+  the assistant-reply path, the policy-memory-disabled path,
+  None-safety, and the existing-relationship / existing-severe-
+  emotional gate regressions) and `docs/emotional-support.md` (what
+  it is and is not, the breakup example, detection scope table,
+  wiring table, privacy, how to disable, relationship to the other
+  prompt-block layers and to the Safety and Trust Contract,
+  test summary, explicit non-goals).
 - Tone Profile (foundation, opt-in, local-first): a new
   `core/tone_profile.py` adds a small per-user setting that picks the
   *register* Nova speaks in across normal conversations — a steady

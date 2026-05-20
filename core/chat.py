@@ -23,6 +23,10 @@ from core.companion import (
     is_acute_distress,
     is_sensitive_emotional_content,
 )
+from core.emotional_support import (
+    build_emotional_support_block,
+    is_emotional_support_appropriate,
+)
 from core.tone_profile import build_tone_profile_block
 from core.settings import get_personalization, get_user_setting
 from core.router import route
@@ -165,11 +169,14 @@ def _autosave_allowed(
     """Whether this turn may be auto-mined for memory.
 
     Automatic extraction is skipped when *either* the user message or
-    the assistant reply carries sensitive relationship detail **or**
-    sensitive emotional / mental-state detail: Nova must never silently
+    the assistant reply carries sensitive relationship detail, sensitive
+    emotional / mental-state detail, **or** broader
+    emotional-support-appropriate wording: Nova must never silently
     persist who the user is dating, fighting with, or breaking up with,
-    nor that the user was distressed, depressed, grieving, or in crisis.
-    The reply is checked too because the LLM autosave path
+    that the user was distressed, depressed, grieving, or in crisis,
+    nor the softer emotional turns (sadness, loneliness, anxiety,
+    heartbreak) that the Emotional Support Layer is designed for. The
+    reply is checked too because the LLM autosave path
     (``extract_and_save_memory``) builds its extraction prompt from
     *both* the user text and the assistant answer — gating on the user
     message alone would leak context the assistant restated on an
@@ -189,7 +196,11 @@ def _autosave_allowed(
         return False
     if is_sensitive_emotional_content(user_text):
         return False
-    return not is_sensitive_emotional_content(reply_text)
+    if is_sensitive_emotional_content(reply_text):
+        return False
+    if is_emotional_support_appropriate(user_text):
+        return False
+    return not is_emotional_support_appropriate(reply_text)
 
 
 def build_messages(
@@ -224,6 +235,16 @@ def build_messages(
     net. Both blocks sit *below* the identity/safety contract for the
     same reason every other tone block does — ordering guarantees they
     can never override identity, safety, or capability bounds.
+
+    The Emotional Support Layer block (`core.emotional_support`) is
+    appended whenever the user message carries emotionally-sensitive
+    first-person wording (a breakup, sadness, loneliness, anxiety,
+    overwhelm) OR the tone profile is ``warm_companion`` /
+    ``calm_support``, so the warm registers carry consistent emotional
+    grounding even on otherwise-neutral chit-chat. Like every other
+    tone-shaping block, it sits below the identity/safety contract and
+    grants no new capability — it only shapes how Nova answers an
+    emotional turn.
     """
     if context_type == "weather":
         system_prompt = WEATHER_SYSTEM_PROMPT.format(weather_data=extra_context)
@@ -277,6 +298,27 @@ def build_messages(
     # rules; it only shapes how Nova answers this one topic.
     if is_relationship_coach_query(user_input):
         parts.append(build_relationship_coach_block())
+
+    # Emotional Support Layer — appended either when the user message
+    # carries clearly emotionally-sensitive wording (a breakup, a wave
+    # of sadness, loneliness, an anxious / overwhelmed moment) OR when
+    # the user has picked ``warm_companion`` / ``calm_support`` as
+    # their tone profile, so the warm registers carry consistent
+    # emotional grounding even on otherwise-neutral chit-chat. Sits
+    # below IDENTITY_CONTRACT and the safety blocks for the same
+    # reason every other tone block does — ordering is what makes the
+    # warmth subordinate to the safety / identity contract. Its own
+    # text forbids manipulation, dependency, isolation, jealousy play,
+    # diagnosing the user or anyone else, revenge advice, and false
+    # promises, and restates that Nova is *une IA* — never human,
+    # never a partner, never a therapist, never a substitute for real
+    # people.
+    tone_value = (personalization or {}).get("tone_profile")
+    if (
+        is_emotional_support_appropriate(user_input)
+        or tone_value in ("warm_companion", "calm_support")
+    ):
+        parts.append(build_emotional_support_block())
 
     # Companion Mode — opt-in calm presence. Only when the user has
     # explicitly enabled it in Settings; a fresh install pays zero token
