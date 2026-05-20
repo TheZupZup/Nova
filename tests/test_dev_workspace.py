@@ -1266,6 +1266,119 @@ class TestBinaryPatchRejection:
         prop = dw.build_patch_proposal(str(repo), spec, roots=[root])
         assert prop.files
 
+    @pytest.mark.parametrize(
+        "ctrl",
+        [
+            "\x07",   # BEL — beeps a real terminal on paste
+            "\x1b",   # ESC — root of the ANSI escape attack family
+            "\x1b[31m",  # ANSI red, full sequence
+            "\x08",   # backspace — can rewrite displayed paths
+            "\x7f",   # DEL — another non-text byte
+        ],
+    )
+    def test_unsafe_controls_in_new_content_rejected(self, real_repo, ctrl):
+        # Tightens the existing NUL-only refusal: any C0 / DEL byte in
+        # proposed content would survive into the diff preview (and the
+        # clipboard via "Copy patch") and is treated as binary.
+        repo, root = real_repo
+        bad = {
+            "changes": [
+                {
+                    "path": "core/foo.py",
+                    "action": "add",
+                    "new_content": f"alert{ctrl}here\n",
+                }
+            ]
+        }
+        with pytest.raises(dw.PatchProposalError, match="binary"):
+            dw.build_patch_proposal(str(repo), bad, roots=[root])
+
+    def test_unsafe_controls_in_old_content_rejected(self, real_repo):
+        repo, root = real_repo
+        bad = {
+            "changes": [
+                {
+                    "path": "README.md",
+                    "action": "modify",
+                    "old_content": "hello\x1b[2J\n",
+                    "new_content": "hello\n",
+                }
+            ]
+        }
+        with pytest.raises(dw.PatchProposalError, match="binary"):
+            dw.build_patch_proposal(str(repo), bad, roots=[root])
+
+    def test_tab_cr_and_lf_allowed_in_content(self, real_repo):
+        # Defence-in-depth that the broadened check did not over-block
+        # the only whitespace control characters that real source files
+        # legitimately carry: TAB (indent), LF (line break), CR (CRLF).
+        repo, root = real_repo
+        spec = {
+            "changes": [
+                {
+                    "path": "core/foo.py",
+                    "action": "add",
+                    "new_content": "def f():\r\n\treturn 1\r\n",
+                }
+            ]
+        }
+        prop = dw.build_patch_proposal(str(repo), spec, roots=[root])
+        assert prop.files
+        # The whitespace controls survive untouched into the diff.
+        assert "\treturn 1" in prop.files[0].diff
+
+
+@_needs_git
+class TestProposalMetadataControlStripping:
+    """Control-character hardening for model-supplied display text."""
+
+    def test_controls_stripped_from_title_and_summary(self, real_repo):
+        # A model that smuggles BEL / ESC into a title would, otherwise,
+        # ride along into the clipboard via "Copy test plan" or appear
+        # in copy-pasted log output. They must not survive the build.
+        repo, root = real_repo
+        spec = _safe_proposal()
+        spec["title"] = "Add\x07bell\x1b[31mred"
+        spec["summary"] = "Has\x07a\x1b[1mbold\x1b[0mword"
+        prop = dw.build_patch_proposal(str(repo), spec, roots=[root])
+        for ch in ("\x07", "\x1b"):
+            assert ch not in prop.title
+            assert ch not in prop.summary
+        # The visible words still survive — only the controls are gone.
+        assert "Add" in prop.title and "bell" in prop.title
+        assert "Has" in prop.summary and "bold" in prop.summary
+
+    def test_controls_stripped_from_plan_tests_and_warnings(self, real_repo):
+        repo, root = real_repo
+        spec = _safe_proposal()
+        spec["plan"] = ["step\x07one", "\x1b[31mstep two"]
+        spec["tests"] = ["pytest\x07tests/test_x.py"]
+        # ``risks`` wins over the ``warnings`` alias; drop risks first so
+        # we are clearly testing the warnings code path. (Both feed into
+        # the same ``_string_list``, so either path validates the strip.)
+        spec.pop("risks", None)
+        spec["warnings"] = ["risk\x1b[31mhere"]
+        prop = dw.build_patch_proposal(str(repo), spec, roots=[root])
+        d = prop.as_dict()
+        for field in ("plan", "suggested_tests", "warnings", "risks"):
+            joined = "".join(d[field])
+            assert "\x07" not in joined
+            assert "\x1b" not in joined
+        # Content survives, only the unsafe bytes are dropped.
+        assert any("step" in s for s in d["plan"])
+        assert any("pytest" in s for s in d["suggested_tests"])
+        assert any("risk" in s for s in d["warnings"])
+
+    def test_control_only_metadata_collapses_to_empty(self, real_repo):
+        # A title that is *entirely* control bytes has nothing left to
+        # display; it must collapse to an empty string (which the UI
+        # then hides) rather than rendering invisible bytes.
+        repo, root = real_repo
+        spec = _safe_proposal()
+        spec["title"] = "\x07\x1b\x08"
+        prop = dw.build_patch_proposal(str(repo), spec, roots=[root])
+        assert prop.title == ""
+
 
 @_needs_git
 class TestPatchProposalValidateEndpoint:

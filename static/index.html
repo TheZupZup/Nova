@@ -5461,7 +5461,14 @@
         _setListBlock("patch-files-block", "patch-files-list",
             Array.isArray(proposal.files) ? proposal.files : [],
             (li, f) => {
-                const action = (f && f.action) || "modify";
+                // The server constrains action to {modify, add, delete}
+                // (``_PATCH_ACTIONS`` in core/dev_workspace.py); clamp
+                // here too so a future schema change cannot widen the
+                // CSS-class surface, and so an unexpected value renders
+                // calmly instead of leaking through as a raw class.
+                const rawAction = (f && f.action) || "modify";
+                const action = (rawAction === "add" || rawAction === "delete")
+                    ? rawAction : "modify";
                 const tag = document.createElement("span");
                 tag.className = "repo-patch-file-action " + action;
                 tag.textContent = action;

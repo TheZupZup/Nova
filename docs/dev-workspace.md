@@ -159,9 +159,17 @@ These are enforced in `core/dev_workspace.py` and covered by
      `logs`, `.git`, `__pycache__`, `.venv`, `node_modules`);
    - the path must still resolve **inside** the linked repo (a
      symlinked subdir pointing outside it is refused);
-   - **binary content is refused** — any `old_content` /
-     `new_content` carrying a NUL byte fails validation, since there
-     is no readable text diff for a binary blob;
+   - **binary / non-text content is refused** — any `old_content` /
+     `new_content` carrying a NUL byte, an ANSI escape (`ESC`,
+     `\x1b[…m`), a BEL (`\x07`), or any other C0 / DEL control byte
+     other than `\t` / `\n` / `\r` fails validation. The diff preview
+     is plain text that the user may copy into a terminal via
+     **Copy patch**, so terminal-escape vectors must not survive into
+     it; reviewing binary changes is a deliberately later phase.
+     Model-supplied display strings (title, summary, plan steps,
+     suggested tests, risks / warnings) are stripped of the same
+     unsafe controls before they are returned, so a **Copy test plan**
+     payload is plain text too;
    - the diff is built locally with `difflib` from the model-supplied
      before/after text — **no git, no subprocess, no file I/O, no
      network**; nothing is applied, staged, committed, pushed, or
