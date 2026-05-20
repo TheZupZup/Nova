@@ -3511,6 +3511,18 @@
                             onchange="savePersonalizationField('custom_instructions', this.value)"
                             placeholder="e.g. Prefer short answers. Avoid headings unless asked."></textarea>
                     </div>
+
+                    <div class="settings-row">
+                        <div class="settings-row-head">
+                            <div class="settings-row-label">
+                                <span class="settings-row-title" id="pers-companion-title">Companion mode</span>
+                                <span class="settings-row-hint" id="pers-companion-hint">An optional calm, steady presence for emotionally heavy moments. Off by default. Not a therapist or a substitute for real people — Nova still encourages real-world support.</span>
+                            </div>
+                            <label style="display:flex;align-items:center;gap:8px;white-space:nowrap;">
+                                <input type="checkbox" id="pers-companion-toggle" onchange="saveCompanionMode(this.checked)" />
+                            </label>
+                        </div>
+                    </div>
                 </section>
 
                 <!-- MEMORY -->
@@ -3927,6 +3939,8 @@
             pers_emoji_opt_expressive: "Expressif",
             pers_instr_title: "Instructions personnalisées",
             pers_instr_hint: "Une note courte que Nova garde en tête pour tes messages.",
+            pers_companion_title: "Mode compagnon",
+            pers_companion_hint: "Une présence calme et posée, optionnelle, pour les moments émotionnellement lourds. Désactivé par défaut. Ni thérapeute ni substitut à de vraies personnes — Nova encourage toujours le soutien réel.",
             coming_soon: "bientôt",
             memory_note: "Nova retient les faits que tu as partagés. Ces mémoires sont privées à ton compte.",
             mem_search_placeholder: "Rechercher dans les mémoires...",
@@ -4143,6 +4157,8 @@
             pers_emoji_opt_expressive: "Expressive",
             pers_instr_title: "Custom instructions",
             pers_instr_hint: "A short note Nova should keep in mind for your messages.",
+            pers_companion_title: "Companion mode",
+            pers_companion_hint: "An optional calm, steady presence for emotionally heavy moments. Off by default. Not a therapist or a substitute for real people — Nova still encourages real-world support.",
             coming_soon: "coming soon",
             memory_note: "Nova remembers facts you've shared. These memories are private to your account.",
             mem_search_placeholder: "Search memories...",
@@ -4333,6 +4349,8 @@
         _setText("pers-emoji-opt-expressive", t("pers_emoji_opt_expressive"));
         _setText("pers-instr-title", t("pers_instr_title"));
         _setText("pers-instr-hint", t("pers_instr_hint"));
+        _setText("pers-companion-title", t("pers_companion_title"));
+        _setText("pers-companion-hint", t("pers_companion_hint"));
 
         _setText("settings-memory-note", t("memory_note"));
         const memSearch = document.getElementById("mem-search");
@@ -7521,6 +7539,7 @@
         // what the backend will report on the summary call.
         applySilentGuardToggleUI(!!data.silentguard_enabled);
         applyPersonalizationUI(data);
+        applyCompanionModeUI(data);
     }
 
     // ── SILENTGUARD STATUS CARD ──
@@ -8227,6 +8246,29 @@
         } else if (key === "custom_instructions") {
             const el = document.getElementById(PERSONALIZATION_FIELDS[key]);
             if (el) el.value = value;
+        }
+    }
+
+    // Companion mode — a per-user opt-in boolean, deliberately separate
+    // from the personalization enums (it gates a tone block, not a
+    // style value). Mirrors savePersonalizationField's snap-back on
+    // rejection so the checkbox always reflects the persisted state.
+    function applyCompanionModeUI(data) {
+        const el = document.getElementById("pers-companion-toggle");
+        if (el) el.checked = !!data.companion_mode_enabled;
+    }
+
+    async function saveCompanionMode(enabled) {
+        const resp = await fetch("/settings", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${token}`,
+            },
+            body: JSON.stringify({ companion_mode_enabled: !!enabled }),
+        });
+        if (!resp.ok) {
+            await loadSystemSettings();
         }
     }
 

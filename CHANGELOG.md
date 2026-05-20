@@ -14,6 +14,45 @@
   `SubscriptableBaseModel` (production) shapes end-to-end.
 
 ### Added
+- Companion Mode (foundation, opt-in, local-first): a new
+  `core/companion.py` adds a deterministic "calm presence" layer for
+  emotionally heavy moments. It is **not** an "AI girlfriend" system
+  and is built so it cannot become one. Two parts. (1) An **opt-in**
+  per-user toggle (`companion_mode_enabled`, off by default; wired
+  through `core/settings.py`, `GET/POST /settings`, and the
+  Personalization pane) that appends a fixed French prompt block
+  (`build_companion_mode_block`, no LLM, no I/O, never raises): warm
+  and emotionally attuned, but it explicitly never simulates feelings,
+  attachment, or consciousness (restating, never relaxing, the identity
+  contract), never manipulates, guilt-trips, or uses possessive /
+  exclusive language, never fosters dependency or isolation, and
+  actively encourages real-world connection and self-care. (2) An
+  **always-on** acute-distress safety net: a conservative, bilingual
+  (FR/EN), idiom-safe detector (`is_acute_distress` — "this bug is
+  killing me" / "costs are spiralling" never trip it) appends a fixed
+  grounding block (`build_companion_grounding_block`) — stay warm and
+  present, offer brief grounding, and gently point toward a trusted
+  person, a professional, or local emergency services / a helpline,
+  **never an invented phone number** — regardless of the toggle, so
+  turning a comfort feature off cannot turn the safety net off.
+  `core/chat.py` appends both in `build_messages` *after*
+  `IDENTITY_CONTRACT` and the safety/security blocks, so they can never
+  override identity or safety rules. Privacy: emotional state is
+  **never** auto-saved — `_autosave_allowed` skips extraction for any
+  turn whose user message or assistant reply carries sensitive
+  emotional detail, and `memory/policy.py` independently rejects it
+  from the durable store using a person-agnostic predicate so the
+  extractor's third-person phrasing cannot slip past; a fact is stored
+  only via the explicit manual memory command. New
+  `tests/test_companion.py` covers detection, the gate (incl.
+  third-person and no-over-block), both blocks, the policy hardening,
+  the chat wiring, the autosave guard, and the setting key;
+  `docs/companion-mode.md` documents the foundation, the contract
+  boundaries it sits inside, and the roadmap (persistent emotional
+  memory, calm TTS profiles, comfort themes, daily check-ins) with the
+  boundary each deferred item must satisfy. Nothing here grants Nova a
+  new capability, contacts the network, or changes storage/Ollama
+  behaviour.
 - Dev Workspace Phase 2 — patch proposal mode (review-only): a linked
   project can now ask Nova to *propose* a code change without any of it
   being applied. `core/dev_workspace.build_patch_proposal` turns a

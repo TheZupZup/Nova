@@ -17,7 +17,13 @@ from core.relationship_coach import (
     is_relationship_coach_query,
     is_sensitive_relationship_content,
 )
-from core.settings import get_personalization
+from core.companion import (
+    build_companion_grounding_block,
+    build_companion_mode_block,
+    is_acute_distress,
+    is_sensitive_emotional_content,
+)
+from core.settings import get_personalization, get_user_setting
 from core.router import route
 from core.search import web_search, should_search
 from core.security_feed import is_security_query
@@ -158,13 +164,15 @@ def _autosave_allowed(
     """Whether this turn may be auto-mined for memory.
 
     Automatic extraction is skipped when *either* the user message or
-    the assistant reply carries sensitive relationship detail: Nova must
-    never silently persist who the user is dating, fighting with, or
-    breaking up with. The reply is checked too because the LLM autosave
-    path (``extract_and_save_memory``) builds its extraction prompt from
+    the assistant reply carries sensitive relationship detail **or**
+    sensitive emotional / mental-state detail: Nova must never silently
+    persist who the user is dating, fighting with, or breaking up with,
+    nor that the user was distressed, depressed, grieving, or in crisis.
+    The reply is checked too because the LLM autosave path
+    (``extract_and_save_memory``) builds its extraction prompt from
     *both* the user text and the assistant answer — gating on the user
-    message alone would leak relationship context that the assistant
-    restated on an otherwise-neutral follow-up turn.
+    message alone would leak context the assistant restated on an
+    otherwise-neutral follow-up turn.
 
     The user can still save such a fact deliberately — the manual memory
     command runs in the web preflight, well before this path, so it is
@@ -172,9 +180,15 @@ def _autosave_allowed(
     """
     if not policy.memory_save_enabled:
         return False
-    if is_sensitive_relationship_content(user_message or ""):
+    user_text = user_message or ""
+    reply_text = assistant_reply or ""
+    if is_sensitive_relationship_content(user_text):
         return False
-    return not is_sensitive_relationship_content(assistant_reply or "")
+    if is_sensitive_relationship_content(reply_text):
+        return False
+    if is_sensitive_emotional_content(user_text):
+        return False
+    return not is_sensitive_emotional_content(reply_text)
 
 
 def build_messages(
@@ -186,6 +200,7 @@ def build_messages(
     natural_memories=None,
     personalization: dict | None = None,
     feedback_preferences: str | None = None,
+    companion_mode: bool = False,
 ) -> list[dict]:
     """Construit la liste de messages à envoyer à Ollama.
 
@@ -200,6 +215,14 @@ def build_messages(
     *below* the identity contract and the personalization block so it
     cannot override safety rules, identity rules, or capability bounds —
     feedback shapes style, not power.
+
+    `companion_mode` is the per-user opt-in toggle (resolved by the
+    caller from ``user_settings``). When ``True`` the deterministic
+    companion-presence block is appended. Independently of that toggle,
+    a clear acute-distress message always appends the grounding safety
+    net. Both blocks sit *below* the identity/safety contract for the
+    same reason every other tone block does — ordering guarantees they
+    can never override identity, safety, or capability bounds.
     """
     if context_type == "weather":
         system_prompt = WEATHER_SYSTEM_PROMPT.format(weather_data=extra_context)
@@ -242,6 +265,25 @@ def build_messages(
     # rules; it only shapes how Nova answers this one topic.
     if is_relationship_coach_query(user_input):
         parts.append(build_relationship_coach_block())
+
+    # Companion Mode — opt-in calm presence. Only when the user has
+    # explicitly enabled it in Settings; a fresh install pays zero token
+    # cost and behaves identically. Sits below IDENTITY_CONTRACT and the
+    # safety blocks like every other tone block, so it can never weaken
+    # identity, safety, or capability rules — it only shapes tone, and
+    # its own text forbids manipulation, dependency, and isolation.
+    if companion_mode:
+        parts.append(build_companion_mode_block())
+
+    # Acute-distress grounding — an always-on safety net. Appended
+    # whenever the user message carries clear acute-distress wording,
+    # regardless of the companion-mode toggle, so a person in genuine
+    # difficulty is met warmly and pointed toward real human /
+    # professional / emergency help. Last on purpose: it is the most
+    # important tone instruction when someone is in crisis, while still
+    # sitting below the identity/safety contract that opens the prompt.
+    if is_acute_distress(user_input):
+        parts.append(build_companion_grounding_block())
 
     messages = [{"role": "system", "content": "\n\n".join(parts)}]
     messages += history[-CHAT_HISTORY_LIMIT:]
@@ -309,6 +351,16 @@ def chat(history: list[dict], user_input: str, memories: list[dict], user_id: in
             feedback_prefs = build_feedback_preferences_block(user_id)
         except Exception:
             feedback_prefs = ""
+        # Per-user opt-in companion-mode toggle. A read failure must
+        # never block chat — a fresh DB has no row, so the default is
+        # off and behaviour is unchanged.
+        try:
+            companion_mode = (
+                get_user_setting(user_id, "companion_mode_enabled", "false")
+                == "true"
+            )
+        except Exception:
+            companion_mode = False
 
         # Weather is gated; restricted users with weather disabled fall
         # straight through to the regular chat branch.
@@ -320,7 +372,7 @@ def chat(history: list[dict], user_input: str, memories: list[dict], user_id: in
                 messages = build_messages(
                     history, user_input, memories, weather_data, "weather",
                     personalization=personalization,
-                    feedback_preferences=feedback_prefs,
+                    feedback_preferences=feedback_prefs, companion_mode=companion_mode,
                 )
                 reply = _generate(model, messages)
                 return reply, model
@@ -340,7 +392,7 @@ def chat(history: list[dict], user_input: str, memories: list[dict], user_id: in
                 messages = build_messages(
                     history, user_input, memories, security_data, "security",
                     personalization=personalization,
-                    feedback_preferences=feedback_prefs,
+                    feedback_preferences=feedback_prefs, companion_mode=companion_mode,
                 )
                 reply = _generate(model, messages)
                 return reply, model
@@ -352,7 +404,7 @@ def chat(history: list[dict], user_input: str, memories: list[dict], user_id: in
             messages = build_messages(
                 history, user_input, memories, search_results, "search",
                 personalization=personalization,
-                feedback_preferences=feedback_prefs,
+                feedback_preferences=feedback_prefs, companion_mode=companion_mode,
             )
             reply = _generate(model, messages)
             return reply, model
@@ -362,7 +414,7 @@ def chat(history: list[dict], user_input: str, memories: list[dict], user_id: in
             history, user_input, memories,
             natural_memories=natural_mems,
             personalization=personalization,
-            feedback_preferences=feedback_prefs,
+            feedback_preferences=feedback_prefs, companion_mode=companion_mode,
         )
         reply = _generate(model, messages)
 
@@ -373,7 +425,7 @@ def chat(history: list[dict], user_input: str, memories: list[dict], user_id: in
                 messages = build_messages(
                     history, user_input, memories, search_results, "search",
                     personalization=personalization,
-                    feedback_preferences=feedback_prefs,
+                    feedback_preferences=feedback_prefs, companion_mode=companion_mode,
                 )
                 reply = _generate(model, messages)
 
@@ -456,6 +508,16 @@ def chat_stream(
             feedback_prefs = build_feedback_preferences_block(user_id)
         except Exception:
             feedback_prefs = ""
+        # Per-user opt-in companion-mode toggle. A read failure must
+        # never block chat — a fresh DB has no row, so the default is
+        # off and behaviour is unchanged.
+        try:
+            companion_mode = (
+                get_user_setting(user_id, "companion_mode_enabled", "false")
+                == "true"
+            )
+        except Exception:
+            companion_mode = False
 
         # Weather branch — single short reply, stream it.
         if policy.weather_enabled:
@@ -466,7 +528,7 @@ def chat_stream(
                 messages = build_messages(
                     history, user_input, memories, weather_data,
                     "weather", personalization=personalization,
-                    feedback_preferences=feedback_prefs,
+                    feedback_preferences=feedback_prefs, companion_mode=companion_mode,
                 )
                 reply = yield from _stream_and_accumulate(model, messages)
                 yield {"type": "done", "reply": reply, "model": model}
@@ -491,7 +553,7 @@ def chat_stream(
                 messages = build_messages(
                     history, user_input, memories, security_data,
                     "security", personalization=personalization,
-                    feedback_preferences=feedback_prefs,
+                    feedback_preferences=feedback_prefs, companion_mode=companion_mode,
                 )
                 reply = yield from _stream_and_accumulate(model, messages)
                 yield {"type": "done", "reply": reply, "model": model}
@@ -503,7 +565,7 @@ def chat_stream(
             messages = build_messages(
                 history, user_input, memories, search_results,
                 "search", personalization=personalization,
-                feedback_preferences=feedback_prefs,
+                feedback_preferences=feedback_prefs, companion_mode=companion_mode,
             )
             reply = yield from _stream_and_accumulate(model, messages)
             yield {"type": "done", "reply": reply, "model": model}
@@ -513,7 +575,7 @@ def chat_stream(
         messages = build_messages(
             history, user_input, memories,
             natural_memories=natural_mems, personalization=personalization,
-            feedback_preferences=feedback_prefs,
+            feedback_preferences=feedback_prefs, companion_mode=companion_mode,
         )
         reply = yield from _stream_and_accumulate(model, messages)
 
@@ -528,7 +590,7 @@ def chat_stream(
                 messages = build_messages(
                     history, user_input, memories, search_results,
                     "search", personalization=personalization,
-                    feedback_preferences=feedback_prefs,
+                    feedback_preferences=feedback_prefs, companion_mode=companion_mode,
                 )
                 reply = yield from _stream_and_accumulate(model, messages)
 

@@ -437,6 +437,7 @@ class SettingsUpdateRequest(BaseModel):
     silentguard_enabled: bool | None = None
     nexanote_enabled: bool | None = None
     nexanote_write_enabled: bool | None = None
+    companion_mode_enabled: bool | None = None
 
     # Personalization preferences (per-user). Enum fields are validated
     # against PERSONALIZATION_ENUMS so the DB never carries a value the
@@ -1370,6 +1371,9 @@ def get_settings(user: CurrentUser = Depends(get_current_user)):
         "nexanote_write_enabled": (
             get_user_setting(user.id, "nexanote_write_enabled", "false") == "true"
         ),
+        "companion_mode_enabled": (
+            get_user_setting(user.id, "companion_mode_enabled", "false") == "true"
+        ),
     }
     # Personalization is read for the caller and merged in flat; the
     # client renders one control per key without checking for missing
@@ -1428,6 +1432,12 @@ def update_settings(
             user.id,
             "nexanote_write_enabled",
             "true" if data.nexanote_write_enabled else "false",
+        )
+    if data.companion_mode_enabled is not None:
+        save_user_setting(
+            user.id,
+            "companion_mode_enabled",
+            "true" if data.companion_mode_enabled else "false",
         )
     # Personalization. Pydantic has already validated each field; the
     # second pass through validate_personalization_value is the canonical
