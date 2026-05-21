@@ -1,18 +1,22 @@
 # Tone Profile (Warm Companion / Calm Support / Deep Comfort / Professional / Developer)
 
-> **Status: shipped (foundation + Phase 2 Deep Comfort), opt-in,
-> local-first.** This document describes the deterministic
-> *tone-profile* prompt layer that lets a user pick the **register**
-> Nova speaks in across normal conversations: a steady professional
-> voice, a sober developer voice, a warm and encouraging voice (*Warm
-> Companion*), a particularly soft and reassuring one (*Calm Support*),
-> or a deeply tender, "you are safe here" voice for difficult moments
-> (*Deep Comfort*). It lives strictly inside the boundaries set by
-> [`docs/nova-safety-and-trust-contract.md`](nova-safety-and-trust-contract.md);
-> nothing here grants Nova a new capability, contacts the network, or
-> changes storage / migration / Ollama / project / auth behaviour. It
-> is **not** an "AI girlfriend" / "AI partner" / "AI mother" system
-> and is built so it cannot become one.
+> **Status: internal-only.** The Tone Profile selector is **no longer
+> exposed in the Settings UI.** Nova is warm, patient, and emotionally
+> aware **by default** — there is no setting the user needs to
+> configure to receive a kind, supportive assistant. The deterministic
+> prompt fragments (`TONE_PROFESSIONAL_BLOCK`, `TONE_DEVELOPER_BLOCK`,
+> `TONE_WARM_COMPANION_BLOCK`, `TONE_CALM_SUPPORT_BLOCK`,
+> `TONE_DEEP_COMFORT_BLOCK`) and the `tone_profile` field stay in
+> `core/tone_profile.py`, `core/settings.py`, `web.py`, and `core/chat.py`
+> so any previously-saved per-user values still load cleanly and the
+> existing storage / export / restore paths are unchanged. Stronger
+> emotional behaviour is handled automatically (the Emotional Support
+> Layer activates on emotionally-sensitive wording, the always-on
+> acute-distress grounding net runs regardless of any setting) or
+> through future focused features — never through a user-facing
+> register dropdown. The remainder of this document describes the
+> still-present prompt layer for completeness and for the API /
+> backward-compatibility surface.
 
 ## Nova is warm by default
 
@@ -46,12 +50,14 @@ isolation, or overrides identity, safety, auth, admin, privacy,
 system, developer, project, or Dev Workspace rules.
 
 **Users do not need to configure a tone profile to get a kind, useful
-assistant.** Tone profiles only become useful when the user wants the
-register dialled in one direction or the other: drier and more formal
-(Professional), maintainer-focused and concise (Developer), warmer and
-more present (Warm Companion), softer and more grounding (Calm
-Support), or deeply tender for difficult emotional moments (Deep
-Comfort).
+assistant.** Because the warm baseline is sufficient on its own, the
+tone-profile dropdown has been removed from the Settings UI. The
+register values (Professional, Developer, Warm Companion, Calm Support,
+Deep Comfort) remain available internally in `core/tone_profile.py`,
+and the `tone_profile` field still flows through the `user_settings`
+table and the `/settings` API so any previously-saved value loads
+without error — but normal users no longer pick a register; they get
+the warm default.
 
 ## What it is
 
@@ -143,9 +149,9 @@ said you were warm…" follow-up.
 
 | Concern | Where |
 | --- | --- |
-| Setting (storage) | `core/settings.py` → `PERSONALIZATION_ENUMS["tone_profile"]`, `PERSONALIZATION_DEFAULTS["tone_profile"]` |
-| Setting (API) | `web.py` → `SettingsUpdateRequest.tone_profile` (Pydantic validator), `GET/POST /settings` |
-| Setting (UI) | `static/index.html` → Personalization pane, `<select id="pers-tone-profile">` |
+| Setting (storage) | `core/settings.py` → `PERSONALIZATION_ENUMS["tone_profile"]`, `PERSONALIZATION_DEFAULTS["tone_profile"]` (kept for backward-compatibility loading of older saved values) |
+| Setting (API) | `web.py` → `SettingsUpdateRequest.tone_profile` (Pydantic validator), `GET/POST /settings` (kept for backward compatibility; the UI no longer sends it) |
+| Setting (UI) | **Removed.** The Personalization pane no longer renders a tone-profile selector. The warm baseline in `RESPONSE_STYLE_BLOCK` already gives a fresh user a kind, supportive Nova. |
 | Allowed values | `core/tone_profile.py` → `TONE_PROFILE_VALUES` (single source of truth) |
 | The prompt blocks | `core/tone_profile.py` → `TONE_PROFESSIONAL_BLOCK`, `TONE_DEVELOPER_BLOCK`, `TONE_WARM_COMPANION_BLOCK`, `TONE_CALM_SUPPORT_BLOCK`, `TONE_DEEP_COMFORT_BLOCK` |
 | Resolver | `core/tone_profile.py` → `build_tone_profile_block(profile)` |
@@ -191,14 +197,17 @@ relationship-coach, and companion-mode blocks.
 
 The setting is **off by default**: a fresh account has `tone_profile`
 unset and `get_personalization` returns `"default"`, which produces no
-prompt block.
+prompt block. The Settings UI no longer exposes the selector, so a
+fresh user never picks a register — they get the warm baseline.
 
-To turn it off after enabling it:
+Users who had previously selected a non-default tone profile keep
+that value in their `user_settings` row; it is read by the prompt
+builder exactly as before. To reset it back to the warm baseline:
 
-- **In the UI.** Settings → Personalization → *Tone profile* →
-  select **Default**. The change is saved immediately.
 - **Via API.** `POST /settings` with `{"tone_profile": "default"}`
-  (auth-gated, scoped to the calling user).
+  (auth-gated, scoped to the calling user). The endpoint still
+  accepts every previously-valid value, including `default`, so
+  older clients keep working.
 - **Via SQL (manual).** `DELETE FROM user_settings WHERE user_id = ?
   AND key = 'tone_profile'` removes the row entirely; the next read
   falls back to `"default"`.
