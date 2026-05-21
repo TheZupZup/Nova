@@ -30,7 +30,6 @@ tiny dummy file stands in for one.
 
 from __future__ import annotations
 
-import sqlite3
 import sys
 from unittest.mock import MagicMock
 
