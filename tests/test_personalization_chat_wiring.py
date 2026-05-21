@@ -116,6 +116,67 @@ class TestBuildMessagesPersonalization:
         )
         assert "PRÉFÉRENCES UTILISATEUR" not in msgs[0]["content"]
 
+    def test_baseline_warmth_lands_in_system_prompt_for_default_user(self):
+        # The "Nova is warm by default" contract: even with no
+        # personalization and no tone profile, the rendered system
+        # prompt must carry the baseline warmth directives, so a fresh
+        # user gets a kind, emotionally-aware assistant out of the box.
+        msgs = build_messages([], "hi", [], None, None, None)
+        sys_msg = msgs[0]["content"].lower()
+        # Warmth keywords from the new baseline.
+        assert "chaleureuse" in sys_msg
+        assert "patiente" in sys_msg
+        assert "par défaut" in sys_msg
+        # Anti-cold / anti-robotic clause.
+        assert "froide" in sys_msg or "robotique" in sys_msg
+        # Light feeling-validation clause.
+        assert "valide" in sys_msg
+        # Small-wins celebration clause.
+        assert "petits progrès" in sys_msg or "bonnes décisions" in sys_msg
+
+    def test_baseline_warmth_lands_with_default_tone_profile(self):
+        # tone_profile="default" must not strip the baseline warmth.
+        # The default-personalization payload must still ship a warm
+        # system prompt, not a cold one.
+        msgs = build_messages(
+            [], "hi", [], None, None, None,
+            personalization=dict(core_settings.PERSONALIZATION_DEFAULTS),
+        )
+        sys_msg = msgs[0]["content"].lower()
+        assert "chaleureuse" in sys_msg
+        assert "patiente" in sys_msg
+
+    def test_baseline_warmth_pins_no_partner_no_mother_no_therapist(self):
+        # Even on the default-user path, the rendered prompt must
+        # carry the "not a romantic partner / mother / therapist"
+        # clauses so a role-play prompt cannot talk the warm default
+        # past its identity boundary.
+        msgs = build_messages([], "hi", [], None, None, None)
+        sys_msg = msgs[0]["content"].lower()
+        assert "partenaire amoureuse" in sys_msg
+        assert "petite amie" in sys_msg
+        assert "mère" in sys_msg
+        assert "thérapeute" in sys_msg
+
+    def test_baseline_warmth_pins_no_dependency_no_isolation(self):
+        # Same for the dependency / isolation rails — they must land
+        # in the system prompt even when no tone profile is selected.
+        msgs = build_messages([], "hi", [], None, None, None)
+        sys_msg = msgs[0]["content"].lower()
+        assert "ne crée jamais de dépendance" in sys_msg
+        assert "n'encourage jamais l'isolement" in sys_msg
+
+    def test_baseline_warmth_pins_safety_admin_privacy_boundary(self):
+        # The "default warmth does not override safety/admin/privacy
+        # rules" clause must land in the live system prompt so a
+        # "you said you were warm…" follow-up cannot weaken it.
+        msgs = build_messages([], "hi", [], None, None, None)
+        sys_msg = msgs[0]["content"].lower()
+        assert "authentification" in sys_msg
+        assert "admin" in sys_msg
+        assert "confidentialité" in sys_msg
+        assert "aucun pouvoir supplémentaire" in sys_msg
+
     def test_concise_style_appears_in_system_prompt(self):
         msgs = build_messages(
             [], "hi", [], None, None, None,
