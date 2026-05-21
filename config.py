@@ -56,8 +56,11 @@ if NOVA_GGUF_GPU_LAYERS < 0:
 # GGUF settings surface (Settings → Models → "Local GGUF model") only
 # accepts a model path that resolves *inside* this directory, which
 # defeats path traversal and keeps Nova from ever being pointed at an
-# arbitrary file. Nova never lists, scans, or browses it — it only
-# validates the one path an admin configures. Default is the recommended
+# arbitrary file. Admins may also browse a read-only, bounded listing of
+# the .gguf files in this directory (the Phase-3 model library) and pick
+# one; the listing is confined to this directory, skips hidden entries,
+# never follows a symlink out of it, and only ever surfaces .gguf files —
+# Nova never scans the wider filesystem. Default is the recommended
 # out-of-checkout location; override with NOVA_MODEL_DIR.
 NOVA_MODEL_DIR = (
     os.getenv("NOVA_MODEL_DIR", "/mnt/archive/nova-models").strip()

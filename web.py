@@ -3308,6 +3308,66 @@ def provider_gguf_test_endpoint(_: CurrentUser = Depends(require_admin)):
     return _gguf_settings.test_gguf_provider()
 
 
+# ── ADMIN: LOCAL GGUF MODEL LIBRARY (GGUF provider, Phase 3) ──────────
+# Lets an admin discover the ``.gguf`` files already inside NOVA_MODEL_DIR
+# and pick one as the model path without typing it. Both endpoints are
+# ``require_admin``. Safety, enforced in ``core.gguf_settings``:
+#
+#   * the listing is read-only and confined to NOVA_MODEL_DIR — a bounded,
+#     non-recursive-beyond-a-cap walk that never touches the wider
+#     filesystem, never follows symlinks out of the directory, skips
+#     hidden/system entries, only reports ``.gguf`` files, and returns
+#     relative paths + safe metadata (no unrelated absolute paths);
+#   * selecting reuses the Phase-2 write boundary: the chosen relative
+#     path is joined to NOVA_MODEL_DIR and re-validated (containment,
+#     ``.gguf``, readable regular file, no ``..``) before the single
+#     host-wide setting is persisted — a bad selection is a sanitised 400
+#     and nothing is written;
+#   * no shell, no download, no deletion, no overwrite; Ollama is
+#     untouched and stays the default.
+
+
+@app.get("/admin/provider/gguf/models")
+def provider_gguf_models_endpoint(_: CurrentUser = Depends(require_admin)):
+    """Read-only listing of local ``.gguf`` models inside NOVA_MODEL_DIR.
+
+    Returns ``{model_dir, model_dir_exists, models, count, truncated,
+    warnings}`` where each model carries its ``name``, ``relative_path``,
+    ``size_bytes``, ``modified_at`` (ISO-8601 UTC) and whether it is the
+    currently ``selected`` model. The scan is bounded and confined to the
+    one allowed directory; a missing directory is a calm 200 with an empty
+    list and a warning, never a 500. Nothing is scanned outside
+    NOVA_MODEL_DIR, downloaded, or modified.
+    """
+    return _gguf_settings.list_local_models()
+
+
+class SelectGgufModelRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    relative_path: str = Field(min_length=1, max_length=_gguf_settings.MAX_PATH_LEN)
+
+
+@app.post("/admin/provider/gguf/select")
+def provider_gguf_select_endpoint(
+    req: SelectGgufModelRequest,
+    _: CurrentUser = Depends(require_admin),
+):
+    """Select a listed local model (by ``relative_path``) as the GGUF model.
+
+    The relative path is resolved against NOVA_MODEL_DIR and re-validated
+    through the same Phase-2 boundary as a pasted path before the
+    host-wide setting is persisted and the cached provider dropped. On
+    success the new GGUF status is returned. A path that is absolute,
+    contains ``..``, escapes the model directory, is not a readable
+    ``.gguf`` file, or does not exist is a 400 with a short, sanitised
+    message and **nothing is written**.
+    """
+    try:
+        return _gguf_settings.select_local_model(req.relative_path)
+    except _gguf_settings.GgufModelPathError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
 @app.get("/channel")
 def get_channel():
     return {"channel": NOVA_CHANNEL, "branch": NOVA_BRANCH}

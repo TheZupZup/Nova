@@ -1,12 +1,14 @@
 # Running Nova with a local GGUF model (llama.cpp)
 
-> **Status: shipped (Phase 1 + Phase 2, optional, local-first).**
+> **Status: shipped (Phase 1 + Phase 2 + Phase 3, optional, local-first).**
 > This document describes the optional `llamacpp` model provider, which
 > lets Nova generate text from a local `.gguf` model **without Ollama**.
 > Phase 1 added the provider itself; **Phase 2 adds a small admin-only UI
 > for setting and validating the model path** (Settings → Models → "Local
-> GGUF model") so you no longer have to edit `.env` by hand. It lives
-> inside the boundaries set by
+> GGUF model") so you no longer have to edit `.env` by hand; **Phase 3
+> adds a read-only model library** that discovers the `.gguf` files
+> already inside the model directory so an admin can pick one instead of
+> typing its full path. It lives inside the boundaries set by
 > [`docs/nova-safety-and-trust-contract.md`](nova-safety-and-trust-contract.md)
 > and complements [`docs/model-providers.md`](model-providers.md), which
 > explains the provider seam itself. **Ollama remains Nova's default and
@@ -28,8 +30,11 @@ What this provider deliberately does **not** do:
 - it does **not** remove or replace Ollama (still the default),
 - it does **not** download, fetch, or auto-convert any model,
 - it does **not** add a cloud provider, an API key, or a model-download manager,
-- it does **not** add a filesystem browser — the Phase-2 UI validates the
-  one path you paste, it never lists or scans a directory,
+- it does **not** add a general filesystem browser — the Phase-3 model
+  library is a **read-only**, **bounded** listing confined to the one
+  configured model directory (`NOVA_MODEL_DIR`); it lists only `.gguf`
+  files, never the wider filesystem, never follows symlinks out of the
+  directory, and never browses an arbitrary path,
 - it does **not** delete or overwrite any model file,
 - it does **not** change memory, projects, storage, export/restore, or
   the Dev Workspace.
@@ -155,11 +160,52 @@ refused with a short, sanitised reason and nothing is written:
 - the file **exists**, is a **regular file** (not a directory), and is
   **readable** by the Nova service user.
 
-There is **no file browser**: Nova validates exactly the one path you
-paste and never lists or scans the directory. The setting is host-wide
-(an operator decision, like the default model), admin-only, and never
-reachable through the per-user settings path. It never downloads,
-deletes, or overwrites a model.
+The setting is host-wide (an operator decision, like the default model),
+admin-only, and never reachable through the per-user settings path. It
+never downloads, deletes, or overwrites a model.
+
+## Picking a model from the library (no path typing) — Phase 3
+
+Pasting a full path works, but Phase 3 makes it optional. As an admin,
+open **Settings → Models → "Local GGUF model"** and, under **Local model
+library**, click **List local models**. Nova lists the `.gguf` files it
+finds inside `NOVA_MODEL_DIR`, each with its:
+
+- **file name** and **relative path** (relative to the model directory —
+  never an absolute path),
+- **size** and **last-modified** time,
+- whether it is the **currently selected** model.
+
+Click **Use this model** next to any entry to make it the configured GGUF
+model. Selecting is the same validated, persisted action as pasting the
+path: the chosen relative path is joined to `NOVA_MODEL_DIR` and
+re-validated (it must resolve inside the directory, be a readable regular
+`.gguf` file, contain no `..`) before the host-wide setting is written and
+the provider is rebuilt on the next message. A model only appears in the
+library if it would also pass the paste-a-path validation, so **the listed
+set is exactly the selectable set**.
+
+The listing is deliberately conservative — this is *not* a general file
+browser:
+
+- it is **read-only**: nothing is created, moved, downloaded, deleted, or
+  overwritten, and no shell is ever invoked;
+- it is **confined to `NOVA_MODEL_DIR`**: the wider filesystem is never
+  scanned, and no caller-supplied path is ever listed;
+- the recursion is **bounded**: it descends a limited number of levels,
+  visits a capped number of directories, and returns a capped number of
+  files (hitting a bound is reported as a `truncated` flag plus a
+  warning), so it can never become a filesystem-wide walk;
+- it **skips hidden / dot files and directories** and **never follows a
+  symlink out of the model directory** (symlinked directories are not
+  descended; a symlinked file whose target escapes the directory is
+  omitted);
+- it lists **only `.gguf` files** and returns **only relative paths +
+  safe metadata**, so no unrelated filesystem layout is exposed.
+
+The relevant admin-only endpoints are `GET /admin/provider/gguf/models`
+(the listing) and `POST /admin/provider/gguf/select` (pick one by its
+relative path). Both require the admin role; non-admins never see the card.
 
 ## How model selection interacts
 
@@ -201,9 +247,12 @@ load fails with a sanitised error and chat falls back to the standard
   defeating path traversal and arbitrary-file exposure. Symlinks are
   resolved before the containment check, so a link that escapes the
   directory is refused.
-- **No file browser, no scan.** The UI validates exactly the one path you
-  paste — it never lists, scans, or walks the directory, and the provider
-  never runs a shell command.
+- **No general file browser.** The Phase-3 model library is a read-only,
+  bounded listing confined to `NOVA_MODEL_DIR`: it lists only `.gguf`
+  files, never the wider filesystem, skips hidden/system entries, never
+  follows a symlink out of the directory, caps its depth / breadth /
+  result count, and returns only relative paths and safe metadata. The
+  provider never runs a shell command.
 - **No deletion, no overwrite.** Configuring a path only records *which*
   file to use; Nova never removes or replaces a model file.
 - **Admin-only, host-wide.** The model path is an operator decision (a

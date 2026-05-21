@@ -51,6 +51,7 @@ from __future__ import annotations
 
 import logging
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -69,6 +70,17 @@ MAX_PATH_LEN = 4096
 #: The backend label this surface configures. The GGUF provider is always
 #: ``llamacpp`` regardless of which provider is currently the default.
 PROVIDER_NAME = "llamacpp"
+
+#: Bounds on the read-only model-library scan of ``NOVA_MODEL_DIR`` (Phase
+#: 3). The scan is recursive but *strictly* bounded so it can never become
+#: a filesystem-wide walk: it descends at most ``MAX_SCAN_DEPTH`` levels
+#: below the model directory, visits at most ``MAX_DIRS_SCANNED``
+#: directories, and returns at most ``MAX_LIBRARY_MODELS`` files. Hidden /
+#: dot directories are pruned and symlinked directories are never followed
+#: (see :func:`list_local_models`).
+MAX_SCAN_DEPTH = 5
+MAX_DIRS_SCANNED = 2000
+MAX_LIBRARY_MODELS = 500
 
 # Fixed, non-sensitive operator-facing message reused by status + test so
 # the wording never drifts.
@@ -356,6 +368,256 @@ def set_gguf_model_path(path) -> dict:
     return gguf_status()
 
 
+# ── Model library: read-only listing + select (Phase 3) ──────────────
+
+
+def _iso_utc(timestamp: float) -> str:
+    """Format a POSIX mtime as an ISO-8601 UTC string (second precision).
+
+    Returns ``""`` for an unrepresentable timestamp rather than raising,
+    so one odd file never breaks the whole listing.
+    """
+    try:
+        return datetime.fromtimestamp(timestamp, tz=timezone.utc).strftime(
+            "%Y-%m-%dT%H:%M:%SZ"
+        )
+    except (OverflowError, OSError, ValueError):
+        return ""
+
+
+def _selected_resolved_path(model_dir: str) -> str:
+    """The resolved path of the currently-configured model, or ``""``.
+
+    Resolves the configured GGUF path the same way a listed entry is
+    resolved (through :func:`validate_gguf_model_path`) so the ``selected``
+    flag is a like-for-like comparison of canonical paths. A missing /
+    invalid configured path simply means "nothing selected" — never an
+    error.
+    """
+    configured = resolve_gguf_model_path()
+    if not configured:
+        return ""
+    try:
+        return validate_gguf_model_path(configured, model_dir)
+    except GgufModelPathError:
+        return ""
+
+
+def list_local_models() -> dict:
+    """Read-only listing of local ``.gguf`` models inside ``NOVA_MODEL_DIR``.
+
+    Returns a JSON-serialisable dict the admin UI renders verbatim::
+
+        {
+          "model_dir": str,          # NOVA_MODEL_DIR (the one allowed dir)
+          "model_dir_exists": bool,
+          "models": [
+            {
+              "name": str,           # file basename, e.g. "model.gguf"
+              "relative_path": str,  # path relative to model_dir
+              "size_bytes": int,
+              "modified_at": str,    # ISO-8601 UTC, e.g. "2026-05-21T12:00:00Z"
+              "selected": bool,      # is this the configured model?
+            },
+            ...
+          ],
+          "count": int,
+          "truncated": bool,         # a bound was hit; not every file shown
+          "warnings": [str],         # calm, non-sensitive notes
+        }
+
+    Safety (the whole point of this surface):
+
+    * **Confined to the one allowed directory.** Only ``NOVA_MODEL_DIR``
+      is scanned — never the wider filesystem, never a caller-supplied
+      path. The directory itself is the only absolute path returned;
+      every model is reported by *relative* path + basename so no
+      unrelated filesystem layout leaks.
+    * **Bounded recursion.** The walk descends at most
+      :data:`MAX_SCAN_DEPTH` levels, visits at most
+      :data:`MAX_DIRS_SCANNED` directories, and returns at most
+      :data:`MAX_LIBRARY_MODELS` files; hitting any bound sets
+      ``truncated`` and stops — it can never become a filesystem-wide
+      scan.
+    * **No hidden/system entries, no symlink escape.** Dot directories
+      and dot files are skipped, symlinked directories are never
+      descended (``followlinks=False``), and every candidate file is
+      re-validated with :func:`validate_gguf_model_path` so a symlinked
+      file whose target escapes the model directory (or is unreadable, or
+      is not a regular ``.gguf`` file) is silently omitted — the listed
+      set is exactly the selectable set.
+    * **Read-only.** Nothing is created, downloaded, moved, deleted, or
+      overwritten and no shell is invoked. Never raises — any problem
+      degrades to an empty list with a sanitised warning.
+    """
+    model_dir = resolve_model_dir()
+    warnings: list[str] = []
+
+    def _result(exists: bool, models: list[dict], truncated: bool) -> dict:
+        return {
+            "model_dir": model_dir,
+            "model_dir_exists": exists,
+            "models": models,
+            "count": len(models),
+            "truncated": truncated,
+            "warnings": warnings,
+        }
+
+    raw = (model_dir or "").strip()
+    if not raw:
+        warnings.append("No model directory is configured. Set NOVA_MODEL_DIR.")
+        return _result(False, [], False)
+
+    try:
+        base = Path(raw).resolve()
+    except (OSError, RuntimeError, ValueError):
+        warnings.append("The configured model directory could not be resolved.")
+        return _result(False, [], False)
+
+    try:
+        if not base.exists():
+            warnings.append(
+                "The model directory does not exist yet. Create it (or set "
+                "NOVA_MODEL_DIR) and place your .gguf files inside it."
+            )
+            return _result(False, [], False)
+        if not base.is_dir():
+            warnings.append("The configured model directory is not a directory.")
+            return _result(True, [], False)
+    except OSError:
+        warnings.append("The model directory could not be read.")
+        return _result(False, [], False)
+
+    selected = _selected_resolved_path(model_dir)
+    base_str = str(base)
+
+    models: list[dict] = []
+    truncated = False
+    dirs_scanned = 0
+
+    for dirpath, dirnames, filenames in os.walk(base_str, followlinks=False):
+        dirs_scanned += 1
+        if dirs_scanned > MAX_DIRS_SCANNED:
+            truncated = True
+            break
+
+        rel_dir = os.path.relpath(dirpath, base_str)
+        depth = 0 if rel_dir in (".", "") else len(rel_dir.split(os.sep))
+        # Prune hidden/system dirs in-place and stop descending past the
+        # depth cap. Sorting makes truncation deterministic.
+        if depth >= MAX_SCAN_DEPTH:
+            dirnames[:] = []
+        else:
+            dirnames[:] = sorted(d for d in dirnames if not d.startswith("."))
+
+        for filename in sorted(filenames):
+            if filename.startswith("."):
+                continue
+            if not filename.lower().endswith(".gguf"):
+                continue
+            abs_path = os.path.join(dirpath, filename)
+            try:
+                resolved = validate_gguf_model_path(abs_path, model_dir)
+            except GgufModelPathError:
+                # Symlink escaping the dir, unreadable, not a regular file,
+                # etc. — not selectable, so deliberately not listed.
+                continue
+            try:
+                st = os.stat(resolved)
+            except OSError:
+                continue
+            try:
+                rel = str(Path(resolved).relative_to(base))
+            except ValueError:
+                rel = os.path.basename(resolved)
+            models.append(
+                {
+                    "name": os.path.basename(resolved),
+                    "relative_path": rel,
+                    "size_bytes": int(st.st_size),
+                    "modified_at": _iso_utc(st.st_mtime),
+                    "selected": bool(selected) and resolved == selected,
+                }
+            )
+            if len(models) >= MAX_LIBRARY_MODELS:
+                truncated = True
+                break
+        if truncated:
+            break
+
+    models.sort(key=lambda m: m["relative_path"].lower())
+
+    if truncated:
+        warnings.append(
+            "The model directory has more files than can be listed at once; "
+            "only the first results are shown."
+        )
+    elif not models:
+        warnings.append("No .gguf model files were found in the model directory.")
+
+    return _result(True, models, truncated)
+
+
+def select_local_model(relative_path) -> dict:
+    """Select a listed local model (by its ``relative_path``) as the GGUF model.
+
+    Resolves ``relative_path`` against ``NOVA_MODEL_DIR`` and hands the
+    joined path to :func:`set_gguf_model_path`, which performs the full
+    Phase-2 validation (``.gguf`` extension, containment inside the model
+    directory with symlinks resolved, existing readable regular file, no
+    ``..``) before persisting it as the single host-wide setting and
+    invalidating the cached provider. Returns the new :func:`gguf_status`.
+
+    ``relative_path`` must be a clean *relative* path (exactly as returned
+    by :func:`list_local_models`): an absolute path, a ``..`` segment, a
+    ``~``, NUL/newline bytes, or an over-long value is refused up front
+    with a sanitised :class:`GgufModelPathError` and **nothing is written**
+    — the containment guarantee never depends on the caller being honest.
+    """
+    if relative_path is None or isinstance(relative_path, bool):
+        raise GgufModelPathError("A model is required.")
+    try:
+        text = os.fspath(relative_path)
+    except TypeError:
+        raise GgufModelPathError("The model selection must be a string.")
+    if not isinstance(text, str):
+        raise GgufModelPathError("The model selection must be a string.")
+    text = text.strip()
+    if not text:
+        raise GgufModelPathError("A model is required.")
+    if len(text) > MAX_PATH_LEN:
+        raise GgufModelPathError("That model selection is too long.")
+    if "\x00" in text or "\n" in text or "\r" in text:
+        raise GgufModelPathError(
+            "That model selection contains invalid characters."
+        )
+    if "~" in text:
+        raise GgufModelPathError("Choose a model from the listed local models.")
+
+    candidate = Path(text)
+    if candidate.is_absolute():
+        raise GgufModelPathError(
+            "Choose a model from the listed local models (use its relative "
+            "path), not an absolute path."
+        )
+    if ".." in candidate.parts:
+        raise GgufModelPathError("The model path must not contain '..'.")
+
+    model_dir = resolve_model_dir()
+    raw_dir = (model_dir or "").strip()
+    if not raw_dir:
+        raise GgufModelPathError(
+            "No model directory is configured. Set NOVA_MODEL_DIR."
+        )
+
+    # Join, then re-validate-and-persist through the Phase-2 boundary:
+    # set_gguf_model_path resolves symlinks and re-checks containment, so
+    # selection inherits exactly the same safety guarantees as a pasted
+    # path — there is no second, weaker code path.
+    full = os.path.join(raw_dir, text)
+    return set_gguf_model_path(full)
+
+
 # ── Test / health (read-only, never loads the model) ─────────────────
 
 
@@ -434,11 +696,16 @@ __all__ = [
     "GGUF_MODEL_PATH_SETTING_KEY",
     "MAX_PATH_LEN",
     "PROVIDER_NAME",
+    "MAX_SCAN_DEPTH",
+    "MAX_DIRS_SCANNED",
+    "MAX_LIBRARY_MODELS",
     "GgufModelPathError",
     "resolve_model_dir",
     "resolve_gguf_model_path",
     "validate_gguf_model_path",
     "gguf_status",
     "set_gguf_model_path",
+    "list_local_models",
+    "select_local_model",
     "test_gguf_provider",
 ]

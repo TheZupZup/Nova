@@ -3820,6 +3820,25 @@
                                 <button class="memory-btn" id="settings-gguf-test-btn" onclick="testGgufProvider()" style="white-space:nowrap;">Test GGUF provider</button>
                             </div>
                         </div>
+                        <!--
+                          Local model library (admin-only, read-only). Lists
+                          the .gguf files Nova found inside the model
+                          directory so an admin can pick one instead of
+                          typing its full path. The listing is server-side,
+                          confined to NOVA_MODEL_DIR, never recurses without
+                          bound, never follows symlinks out of it, and never
+                          downloads, deletes, or overwrites anything. "Use"
+                          selects a model through the same validated path the
+                          paste field uses.
+                        -->
+                        <div id="settings-gguf-library" style="margin-top:12px;display:none;flex-direction:column;gap:6px;">
+                            <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">
+                                <span class="settings-row-title" style="font-size:0.84rem;">Local model library</span>
+                                <button class="memory-btn" id="settings-gguf-list-btn" onclick="loadGgufModels()" style="white-space:nowrap;">List local models</button>
+                            </div>
+                            <span class="settings-row-hint" id="settings-gguf-library-hint">Read-only listing of .gguf files inside the model directory. Pick one to set it as the model path. Nothing is downloaded, deleted, or overwritten.</span>
+                            <div id="settings-gguf-models" style="margin-top:4px;"></div>
+                        </div>
                         <div id="settings-gguf-error" style="color:var(--danger);font-size:0.78rem;margin-top:6px;min-height:0;"></div>
                         <div id="settings-gguf-ok" style="color:var(--text-dim);font-size:0.78rem;margin-top:6px;min-height:0;"></div>
                         <div id="settings-gguf-test-result" style="margin-top:8px;"></div>
@@ -10892,9 +10911,11 @@
         const errEl = document.getElementById("settings-gguf-error");
         const okEl = document.getElementById("settings-gguf-ok");
         const resEl = document.getElementById("settings-gguf-test-result");
+        const modelsEl = document.getElementById("settings-gguf-models");
         if (errEl) errEl.textContent = "";
         if (okEl) okEl.textContent = "";
         if (resEl) resEl.innerHTML = "";
+        if (modelsEl) modelsEl.innerHTML = "";
         if (summary) summary.innerHTML = '<div class="admin-empty">Loading…</div>';
         try {
             const res = await fetch("/admin/provider/gguf", {
@@ -10995,6 +11016,8 @@
             input.value = status.configured_path || "";
         }
         if (editor) editor.style.display = "flex";
+        const library = document.getElementById("settings-gguf-library");
+        if (library) library.style.display = "flex";
     }
 
     async function saveGgufModelPath() {
@@ -11108,6 +11131,140 @@
         } finally {
             btn.disabled = false;
             btn.textContent = original;
+        }
+    }
+
+    // ── Settings → Models: local GGUF model library (admin-only) ──
+    //
+    // Lists the .gguf files Nova found inside NOVA_MODEL_DIR (read-only,
+    // server-side, bounded, no symlink escape) so an admin can pick one
+    // instead of typing its full path. "Use" selects a model through the
+    // same validated path the paste field uses — nothing is downloaded,
+    // deleted, or overwritten.
+    async function loadGgufModels() {
+        const isAdmin = !!(currentUser && currentUser.role === "admin");
+        if (!isAdmin) return;
+        const btn = document.getElementById("settings-gguf-list-btn");
+        const modelsEl = document.getElementById("settings-gguf-models");
+        if (!modelsEl) return;
+        const original = btn ? btn.textContent : "";
+        if (btn) { btn.disabled = true; btn.textContent = "Listing…"; }
+        modelsEl.innerHTML = '<div class="admin-empty">Loading…</div>';
+        try {
+            const res = await fetch("/admin/provider/gguf/models", {
+                headers: { "Authorization": `Bearer ${token}` }
+            });
+            if (res.status === 401) { logout(); return; }
+            if (res.status === 403) { modelsEl.innerHTML = ""; return; }
+            if (!res.ok) {
+                modelsEl.innerHTML = '<div class="admin-empty">Failed to list local models.</div>';
+                return;
+            }
+            renderGgufModels(await res.json());
+        } catch (e) {
+            modelsEl.innerHTML = '<div class="admin-empty">Failed to list local models.</div>';
+        } finally {
+            if (btn) { btn.disabled = false; btn.textContent = original || "List local models"; }
+        }
+    }
+
+    function renderGgufModels(body) {
+        const modelsEl = document.getElementById("settings-gguf-models");
+        if (!modelsEl) return;
+        const models = Array.isArray(body.models) ? body.models : [];
+        const parts = [];
+        (body.warnings || []).forEach((w) => {
+            parts.push(
+                `<div class="admin-warning info">` +
+                `<span class="admin-warning-level">info</span>` +
+                `<span class="admin-warning-msg">${escapeHtml(String(w))}</span>` +
+                `</div>`
+            );
+        });
+        if (!models.length) {
+            if (!parts.length) {
+                parts.push('<div class="admin-empty">No .gguf models found in the model directory.</div>');
+            }
+            modelsEl.innerHTML = parts.join("");
+            return;
+        }
+        models.forEach((m) => {
+            const name = escapeHtml(String(m.name || ""));
+            const rel = escapeHtml(String(m.relative_path || ""));
+            const size = (typeof m.size_bytes === "number") ? formatBytes(m.size_bytes) : "—";
+            const when = m.modified_at ? escapeHtml(String(m.modified_at)) : "—";
+            const selected = m.selected === true;
+            const tag = selected
+                ? `<span class="admin-tag installed">selected</span>`
+                : "";
+            // The relative path (never an absolute path) is carried in a
+            // data attribute and read back via getAttribute on click, so a
+            // filename containing quotes / angle brackets can never break
+            // out of an inline handler. Escape & < > " for the attribute.
+            const relAttr = escapeHtml(String(m.relative_path || "")).replace(/"/g, "&quot;");
+            const action = selected
+                ? `<button class="memory-btn" disabled style="white-space:nowrap;opacity:0.6;">In use</button>`
+                : `<button class="memory-btn gguf-use-btn" data-rel="${relAttr}" style="white-space:nowrap;">Use this model</button>`;
+            parts.push(
+                `<div class="admin-model-row">` +
+                `<div class="admin-model-head">` +
+                `<span class="admin-model-display">${name}</span>` +
+                tag +
+                `</div>` +
+                `<div class="admin-model-name">${rel}</div>` +
+                `<div class="admin-progress-meta">size: <code>${size}</code> · modified: <code>${when}</code></div>` +
+                `<div style="margin-top:6px;">${action}</div>` +
+                `</div>`
+            );
+        });
+        modelsEl.innerHTML = parts.join("");
+        modelsEl.querySelectorAll(".gguf-use-btn").forEach((b) => {
+            b.addEventListener("click", () => selectGgufModel(b.getAttribute("data-rel"), b));
+        });
+    }
+
+    async function selectGgufModel(relativePath, btn) {
+        const errEl = document.getElementById("settings-gguf-error");
+        const okEl = document.getElementById("settings-gguf-ok");
+        const resEl = document.getElementById("settings-gguf-test-result");
+        if (errEl) errEl.textContent = "";
+        if (okEl) okEl.textContent = "";
+        if (resEl) resEl.innerHTML = "";
+        if (!relativePath) return;
+        const original = btn ? btn.textContent : "";
+        if (btn) { btn.disabled = true; btn.textContent = "Selecting…"; }
+        try {
+            const res = await fetch("/admin/provider/gguf/select", {
+                method: "POST",
+                headers: {
+                    "Authorization": `Bearer ${token}`,
+                    "Content-Type": "application/json",
+                },
+                body: JSON.stringify({ relative_path: relativePath }),
+            });
+            if (res.status === 401) { logout(); return; }
+            if (res.status === 403) {
+                if (errEl) errEl.textContent = "Access denied.";
+                return;
+            }
+            if (!res.ok) {
+                let detail = `Failed (${res.status})`;
+                try {
+                    const b = await res.json();
+                    if (b && b.detail) detail = b.detail;
+                } catch (_) { /* ignore */ }
+                if (errEl) errEl.textContent = detail;
+                return;
+            }
+            const body = await res.json();
+            if (okEl) okEl.textContent = `Saved. Nova will use ${body.filename || "this model"} when the GGUF provider is active.`;
+            renderGgufCard(body);
+            // Refresh the library so the selected badge moves to the new pick.
+            loadGgufModels().catch(() => {});
+        } catch (e) {
+            if (errEl) errEl.textContent = "Network error while selecting the model.";
+        } finally {
+            if (btn) { btn.disabled = false; btn.textContent = original || "Use this model"; }
         }
     }
 

@@ -55,6 +55,30 @@
   relate to the baseline.
 
 ### Added
+- **Local GGUF model library — Phase 3, admin-only, read-only.** Lets an
+  admin discover and pick a local `.gguf` model instead of typing its full
+  path. `core/gguf_settings.py` gains `list_local_models()`, a read-only
+  listing **confined to `NOVA_MODEL_DIR`**: a bounded walk (capped depth,
+  directory count, and result count — `MAX_SCAN_DEPTH` / `MAX_DIRS_SCANNED`
+  / `MAX_LIBRARY_MODELS`) that skips hidden/system entries, never follows a
+  symlink out of the directory (`followlinks=False`; symlinked files whose
+  target escapes are omitted), lists only `.gguf` files, and returns only
+  relative paths plus safe metadata (`name`, `relative_path`, `size_bytes`,
+  ISO-8601 UTC `modified_at`, `selected`) — never an unrelated absolute
+  path. Each candidate is re-validated through the Phase-2
+  `validate_gguf_model_path`, so **the listed set is exactly the selectable
+  set**. `select_local_model()` resolves a *relative* path against
+  `NOVA_MODEL_DIR` and persists it through the same Phase-2 write boundary
+  (`set_gguf_model_path`), refusing an absolute path, `..`, a missing file,
+  or a non-`.gguf` file with a sanitised error and writing nothing. Two
+  admin-only endpoints back a "Local model library" panel on the existing
+  Settings → Models card: `GET /admin/provider/gguf/models` (the listing; a
+  missing directory is a calm 200 with an empty list + warning) and `POST
+  /admin/provider/gguf/select` (pick one by relative path). No filesystem
+  browser, no recursion without bound, no shell, no download, no deletion,
+  no overwrite; the panel is hidden for non-admins. **Ollama remains the
+  default and is untouched.** Tests: `tests/test_gguf_library.py`. See
+  [docs/local-gguf.md](docs/local-gguf.md).
 - **Local GGUF model path UI + model directory — Phase 2, admin-only.**
   Makes the optional `llamacpp` provider configurable without editing
   `.env`. A new `core/gguf_settings.py` adds a directory-confined path

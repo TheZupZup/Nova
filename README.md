@@ -969,7 +969,7 @@ All configuration is read from `.env` at startup. Key variables:
 | `NOVA_DEV_WORKSPACE_ROOTS` | — | OS-path-separator- or comma-separated absolute directories that may contain repos a Project can link (read-only Phase 1). Blank = the Dev Workspace feature is off. Never set to `/`, `/home`, or a broad system path. See [`docs/dev-workspace.md`](docs/dev-workspace.md). |
 | `OLLAMA_HOST` | `http://localhost:11434` | Ollama API base URL |
 | `NOVA_MODEL_PROVIDER` | `ollama` | Model backend: `ollama` (default) or `llamacpp` (local GGUF, no Ollama). See [`docs/local-gguf.md`](docs/local-gguf.md). |
-| `NOVA_MODEL_DIR` | `/mnt/archive/nova-models` | Directory local `.gguf` files must live inside. Admins can set the model path from Settings → Models; only paths inside this directory are accepted (no traversal, no arbitrary files). |
+| `NOVA_MODEL_DIR` | `/mnt/archive/nova-models` | Directory local `.gguf` files must live inside. Admins can set the model path from Settings → Models, or pick from a read-only, bounded listing of the `.gguf` files in this directory (the model library); only paths inside this directory are accepted (no traversal, no arbitrary files, no symlink escape). |
 | `NOVA_GGUF_MODEL_PATH` | — | Absolute path to a local `.gguf` model file (only used when `NOVA_MODEL_PROVIDER=llamacpp`). Nova never downloads it. Blank = provider unconfigured. An admin-set path (Settings → Models) takes precedence. |
 | `NOVA_GGUF_CONTEXT_SIZE` | `4096` | GGUF context window (`n_ctx`) |
 | `NOVA_GGUF_THREADS` | `0` | GGUF CPU threads (`n_threads`); `0` = auto |
