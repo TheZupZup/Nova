@@ -78,13 +78,12 @@ Shipped today:
   admin-managed user list, per-user settings, and an optional
   family-controls layer for restricted roles.
 - **Personalization preferences.** Response length, warmth,
-  enthusiasm, emoji density (none / low / medium / expressive), tone
-  profile (default / professional / developer / warm companion / calm
-  support), and free-text custom instructions are stored per user and
-  shape Nova's tone without leaking into other accounts. Technical /
-  code / PR / security replies stay sober regardless of the emoji
-  level — the preference shapes casual chat only and never overrides
-  the Nova Safety and Trust Contract.
+  enthusiasm, emoji density (none / low / medium / expressive), and
+  free-text custom instructions are stored per user and shape Nova's
+  tone without leaking into other accounts. Technical / code / PR /
+  security replies stay sober regardless of the emoji level — the
+  preference shapes casual chat only and never overrides the Nova
+  Safety and Trust Contract.
 - **Warm-by-default response style.** The baseline Nova style — what a
   fresh user gets with no settings configured — already includes a
   balanced amount of warmth, patience, and emotional awareness. Nova
@@ -98,25 +97,20 @@ Shipped today:
   overrides identity, safety, auth, admin, privacy, system, developer,
   project, or Dev Workspace rules. Users do not need to configure a
   tone profile to receive a kind, useful assistant.
-- **Tone profile (foundation, opt-in, local).** A small per-user
-  setting that picks the *register* Nova speaks in across normal
-  conversations — an optional refinement on top of the warm baseline,
-  not the only place where warmth lives. Pick a steady **professional**
-  voice for a more formal/direct register, a sober **developer** voice
-  for maintainer-focused technical work, a warmer **warm companion**
-  voice, a particularly soft **calm support** voice, or a deeply
-  tender **deep comfort** voice for difficult emotional moments.
-  `default` produces no extra prompt block — Nova still inherits the
-  baseline warmth, so a fresh account already feels friendly and
-  supportive at zero extra token cost. The warm profiles are
-  explicitly **not** an "AI girlfriend" / "AI partner" system: each
-  block restates — never relaxes — the identity contract's rules
-  (no claim to be human, no claim to be the user's partner, no
-  simulated feelings as facts, no manipulation, no dependency, no
-  isolation, warmth never overrides truth) and the auth / admin /
-  privacy boundary (the tone profile changes wording, not permissions,
-  facts, or project rules). The block (no LLM, no network) sits
-  *below* the identity / safety contract and never overrides it. See
+- **Tone profile (internal-only).** The tone-profile selector is **no
+  longer exposed in the Settings UI** — Nova is warm, patient, and
+  emotionally aware by default, and the user does not need to pick a
+  register to receive a kind, useful assistant. The deterministic
+  prompt fragments (professional / developer / warm companion / calm
+  support / deep comfort) and the `tone_profile` field remain in
+  `core/tone_profile.py`, `core/settings.py`, `web.py`, and
+  `core/chat.py` so any previously-saved per-user value still loads
+  cleanly and the storage / export / restore paths are unchanged.
+  Stronger emotional behaviour is handled automatically — the
+  Emotional Support Layer activates on emotionally-sensitive wording,
+  and the always-on acute-distress grounding net runs regardless of
+  any setting — or through future focused features, never through a
+  user-facing register dropdown. See
   [docs/tone-profile.md](docs/tone-profile.md).
 - **Local response feedback.** Thumbs up / thumbs down under each
   assistant message records a per-user preference signal in the local
@@ -239,8 +233,10 @@ core/
   feedback.py         Local response feedback (thumbs up/down) → preference block
   relationship_coach.py  Non-clinical situation-coach prompt block (local)
   companion.py        Opt-in calm-presence + acute-distress grounding blocks (local)
-  tone_profile.py     Opt-in per-user tone-profile prompt blocks (professional /
-                      developer / warm companion / calm support; local)
+  tone_profile.py     Internal-only tone-profile prompt blocks (professional /
+                      developer / warm companion / calm support / deep comfort).
+                      No longer exposed in the Settings UI; Nova is warm by
+                      default and the warm baseline lives in nova_contract.py.
   emotional_support.py  Emotional-support layer prompt block + detector (local)
   identity.py         Identity contract constant
   auth.py             JWT creation and verification

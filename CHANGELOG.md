@@ -2,6 +2,34 @@
 
 ## Unreleased
 ### Changed
+- **Removed the Tone Profile selector from the Settings UI.** Because
+  Nova is now warm, patient, and emotionally aware by default (the
+  baseline `RESPONSE_STYLE_BLOCK` in `core/nova_contract.py` already
+  carries that warmth), the visible "Tone profile / Profil de ton"
+  card in Personalization is unnecessary user-facing complexity and
+  has been removed. The `<select id="pers-tone-profile">` card, its
+  explanatory paragraph, its FR/EN translation strings, the
+  `_setText` calls that re-rendered them on language switch, and the
+  `tone_profile` entry in the `PERSONALIZATION_FIELDS` JS map are all
+  gone from `static/index.html`. The deterministic prompt fragments
+  (`TONE_PROFESSIONAL_BLOCK`, `TONE_DEVELOPER_BLOCK`,
+  `TONE_WARM_COMPANION_BLOCK`, `TONE_CALM_SUPPORT_BLOCK`,
+  `TONE_DEEP_COMFORT_BLOCK`), `TONE_PROFILE_VALUES`,
+  `is_valid_tone_profile`, `build_tone_profile_block`, the
+  `tone_profile` key in `PERSONALIZATION_ENUMS` /
+  `PERSONALIZATION_DEFAULTS` / `USER_SETTING_KEYS`, and the
+  Pydantic / `/settings` API field stay in place so any
+  previously-saved per-user value still loads cleanly, the
+  `user_settings` rows are not deleted, and the storage / export /
+  restore / model-provider / Dev Workspace / project-memory paths
+  are unchanged. Stronger emotional behaviour is handled
+  automatically — the Emotional Support Layer activates on
+  emotionally-sensitive wording, and the always-on acute-distress
+  grounding net runs regardless of any setting — or through future
+  focused features, never through a user-facing register dropdown.
+  Nova still never claims to be human, a girlfriend, a mother, or a
+  replacement for real people. See
+  [docs/tone-profile.md](docs/tone-profile.md).
 - Default response style is now **warm by default**: the baseline
   `RESPONSE_STYLE_BLOCK` in `core/nova_contract.py` already carries a
   balanced amount of warmth, patience, and emotional awareness, so a

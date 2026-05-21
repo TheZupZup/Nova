@@ -204,15 +204,18 @@ message carries emotionally-sensitive wording, regardless of the
 toggle state. To consistently *avoid* the warm framing on neutral
 chat:
 
-- **Pick a sober tone profile.** Settings → Personalization →
-  *Tone profile* → **Default** / **Professional** / **Developer**. On
-  neutral messages those profiles do not auto-add the Emotional
-  Support Layer. The three warm profiles (**Warm Companion**, **Calm
-  Support**, **Deep Comfort**) do auto-add it on every turn, by
-  design. On a genuinely emotional message the layer still activates
-  regardless of the chosen profile — the safety contract is
-  intentionally not behind the toggle, so the warm framing cannot be
-  traded against a sober register.
+- **The tone profile selector has been removed from the Settings UI.**
+  A fresh user lands on `tone_profile = "default"`, which does not
+  auto-add the Emotional Support Layer on neutral messages. Any
+  previously-saved per-user value (the warm profiles **Warm
+  Companion**, **Calm Support**, **Deep Comfort**) still loads and is
+  still honoured by the chat layer if it was selected before the UI
+  removal; to reset it back to the warm baseline, `POST /settings`
+  with `{"tone_profile": "default"}` or remove the row directly. On
+  a genuinely emotional message the layer still activates regardless
+  of the stored profile — the safety contract is intentionally not
+  behind any toggle, so the warm framing cannot be traded against a
+  sober register.
 - **Phrase requests neutrally.** "Help me draft a difficult email"
   is treated as a writing task; "I'm heartbroken about this email I
   have to send" activates the layer.
