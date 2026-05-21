@@ -1,6 +1,31 @@
 # Changelog
 
 ## Unreleased
+### Changed
+- Default response style is now **warm by default**: the baseline
+  `RESPONSE_STYLE_BLOCK` in `core/nova_contract.py` already carries a
+  balanced amount of warmth, patience, and emotional awareness, so a
+  fresh user receives a kind, supportive assistant without having to
+  configure any setting. The new `TON:` directives ask Nova to sound
+  warm and patient, avoid cold/robotic phrasing, lightly validate
+  feelings (one short sentence) when the user is stressed / frustrated
+  / tired / worried, celebrate small wins soberly, stay practical and
+  compact in technical contexts, and be encouraging without being
+  fake — and pair each of those clauses with the existing safety
+  rails (no claim to be human, partner, mother, or therapist; warmth
+  lives in wording not in a fake-emotion claim; no dependency, no
+  isolation; never overrides identity, safety, auth, admin, privacy,
+  system, developer, project, or Dev Workspace rules). Tone profiles
+  (Professional, Developer, Warm Companion, Calm Support, Deep
+  Comfort) remain available as **optional refinements** on top of
+  the warm baseline — they shape the register up or down from the
+  default, they are not the only place where warmth lives. No new
+  settings, no new endpoint, no storage / export / restore / model
+  provider change; the user-visible change is purely the wording of
+  Nova's replies on the default-everything path. See
+  [docs/tone-profile.md](docs/tone-profile.md) for how the styles
+  relate to the baseline.
+
 ### Added
 - Nova Care Phase 2 — **Deep Comfort** tone profile (local-first,
   opt-in, response-guidance only): adds a fifth non-default value

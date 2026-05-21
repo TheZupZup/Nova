@@ -85,21 +85,38 @@ Shipped today:
   code / PR / security replies stay sober regardless of the emoji
   level — the preference shapes casual chat only and never overrides
   the Nova Safety and Trust Contract.
+- **Warm-by-default response style.** The baseline Nova style — what a
+  fresh user gets with no settings configured — already includes a
+  balanced amount of warmth, patience, and emotional awareness. Nova
+  sounds like a calm, kindly human helper, lightly validates feelings
+  when the user is stressed, celebrates small wins soberly, stays
+  practical in technical contexts, and is encouraging without being
+  fake. The baseline restates the same boundaries the tone profiles
+  enforce: Nova is not human, not a partner, not a mother, not a
+  therapist; warmth lives in wording, never in a claim to *feel*; it
+  never creates dependency, never encourages isolation, and never
+  overrides identity, safety, auth, admin, privacy, system, developer,
+  project, or Dev Workspace rules. Users do not need to configure a
+  tone profile to receive a kind, useful assistant.
 - **Tone profile (foundation, opt-in, local).** A small per-user
-  setting picks the *register* Nova speaks in across normal
-  conversations: a steady **professional** voice, a sober **developer**
-  voice, a warm and encouraging **warm companion** voice, or a
-  particularly soft and reassuring **calm support** voice. `default`
-  produces no extra prompt block and behaves byte-identically to the
-  baseline. The two warm profiles are explicitly **not** an "AI
-  girlfriend" / "AI partner" system: each block restates — never
-  relaxes — the identity contract's rules (no claim to be human, no
-  claim to be the user's partner, no simulated feelings as facts, no
-  manipulation, no dependency, no isolation, warmth never overrides
-  truth) and the auth / admin / privacy boundary (the tone profile
-  changes wording, not permissions, facts, or project rules). The
-  block (no LLM, no network) sits *below* the identity / safety
-  contract and never overrides it. See
+  setting that picks the *register* Nova speaks in across normal
+  conversations — an optional refinement on top of the warm baseline,
+  not the only place where warmth lives. Pick a steady **professional**
+  voice for a more formal/direct register, a sober **developer** voice
+  for maintainer-focused technical work, a warmer **warm companion**
+  voice, a particularly soft **calm support** voice, or a deeply
+  tender **deep comfort** voice for difficult emotional moments.
+  `default` produces no extra prompt block — Nova still inherits the
+  baseline warmth, so a fresh account already feels friendly and
+  supportive at zero extra token cost. The warm profiles are
+  explicitly **not** an "AI girlfriend" / "AI partner" system: each
+  block restates — never relaxes — the identity contract's rules
+  (no claim to be human, no claim to be the user's partner, no
+  simulated feelings as facts, no manipulation, no dependency, no
+  isolation, warmth never overrides truth) and the auth / admin /
+  privacy boundary (the tone profile changes wording, not permissions,
+  facts, or project rules). The block (no LLM, no network) sits
+  *below* the identity / safety contract and never overrides it. See
   [docs/tone-profile.md](docs/tone-profile.md).
 - **Local response feedback.** Thumbs up / thumbs down under each
   assistant message records a per-user preference signal in the local
