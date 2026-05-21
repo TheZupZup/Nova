@@ -41,8 +41,8 @@ Nova Core  (identity · memory · projects · context · safety · routing · se
    ▼
 Model Provider Interface          core/model_providers/base.py
    ├── OllamaProvider   (default)  core/model_providers/ollama.py
+   ├── LlamaCppProvider (opt-in)   core/model_providers/llamacpp.py
    ├── MockProvider     (tests)    core/model_providers/mock.py
-   ├── future LlamaCppProvider
    ├── future TransformersProvider
    └── future NovaModelProvider
 ```
@@ -232,15 +232,56 @@ admin-only on the server.
 - **No downloads, no new runtime.** Listing is read-only; nothing here
   pulls, imports, or runs a model. `MockProvider` stays test-only.
 
+## Running without Ollama: the local GGUF provider (opt-in)
+
+`LlamaCppProvider` (`core/model_providers/llamacpp.py`, registered as
+`llamacpp`) is the first provider that lets Nova generate text **without
+Ollama**. It loads a single local `.gguf` model file through the optional
+[`llama-cpp-python`](https://github.com/abetlen/llama-cpp-python) wheel
+and serves it behind the same `generate()` / `stream()` / `health()`
+contract. This makes Ollama *no longer architecturally required* — but
+**Ollama remains the default**; the GGUF provider is used only when you
+set `NOVA_MODEL_PROVIDER=llamacpp`.
+
+Phase-1 behaviour and guardrails:
+
+- **Optional dependency, graceful absence.** `llama_cpp` is imported
+  lazily inside the methods that need it — never at module import — so
+  the registry imports cleanly on a host without the wheel. When it is
+  missing, `health()` reports a clear `ok=false` and `generate()` /
+  `stream()` raise `ModelProviderError` (the usual "backend unreachable"
+  reply), never an `ImportError` and never a crash.
+- **No downloads.** Nova never fetches a model. The operator points
+  `NOVA_GGUF_MODEL_PATH` at a `.gguf` file they already have.
+- **Safe path validation.** The path is accepted only if it is a
+  readable regular `.gguf` file — no globbing, no directory walk, no
+  filesystem scan, no shell.
+- **Cheap construction, lazy load.** Constructing the provider only
+  validates config and the path; the model is loaded on first use and
+  cached, so the registry stays cheap and the first reply after a restart
+  is the only slow one.
+- **Sanitised errors.** Operator-facing messages name the relevant env
+  var and the problem; they never echo the absolute model path or a raw
+  backend exception. `health()` reports only the model's *basename* so it
+  is selectable in the default-model surface without leaking the
+  directory layout.
+- **Non-streaming and streaming.** Both `generate()` and a simple
+  token-by-token `stream()` are implemented; access to the single,
+  non-concurrent llama.cpp handle is serialised with a lock.
+
+Configuration (`NOVA_GGUF_MODEL_PATH`, `NOVA_GGUF_CONTEXT_SIZE`,
+`NOVA_GGUF_THREADS`, `NOVA_GGUF_GPU_LAYERS`), the recommended model
+directory, and hardware expectations are documented in
+[`docs/local-gguf.md`](local-gguf.md).
+
 ## Future providers
 
-New **local** runtimes can be added cleanly in later phases — for
-example a `LlamaCppProvider` (GGUF via llama.cpp), a
-`TransformersProvider` (Hugging Face Transformers), or a Nova-owned
-runtime (`NovaModelProvider`). Each only implements `generate()`,
-`stream()`, and `health()` and registers a name. **This phase adds none
-of them**, performs no model downloads, and adds no cloud providers and
-no API keys — those are explicitly out of scope.
+More **local** runtimes can be added cleanly in later phases — for
+example a `TransformersProvider` (Hugging Face Transformers) or a
+Nova-owned runtime (`NovaModelProvider`). Each only implements
+`generate()`, `stream()`, and `health()` and registers a name. **This
+phase adds neither of those**, performs no model downloads, and adds no
+cloud providers and no API keys — those are explicitly out of scope.
 
 The default-model surface needs **no per-provider code** to support a
 future backend: model listing flows through the same `health()` the
@@ -309,3 +350,15 @@ persists). The existing chat / streaming / routing / model-access /
 registry / pull suites continue to pass unchanged — with nothing
 persisted, every default-model lookup returns the same
 `config.MODELS["default"]` as before.
+
+The opt-in GGUF provider has its own suite,
+`tests/test_llamacpp_provider.py`, which pins the contract without the
+real wheel or real weights (a fake `Llama` class is injected and a tiny
+dummy `.gguf` file stands in): the provider implements the base
+interface; a missing `llama-cpp-python` dependency is a clean health
+failure and raises `ModelProviderError` (never `ImportError`); a
+missing / wrong-extension / not-found model path is a clean failure; the
+model is loaded lazily and cached; config knobs reach the backend;
+generation and streaming return content; load and backend errors are
+sanitised (no path / raw-exception leakage); and the registry can select
+`llamacpp` while Ollama stays the default.

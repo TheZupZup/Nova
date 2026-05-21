@@ -13,6 +13,45 @@ OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
 # name here without Nova core changing.
 MODEL_PROVIDER = os.getenv("NOVA_MODEL_PROVIDER", "ollama").strip() or "ollama"
 
+# ── Optional local GGUF backend (llama.cpp via llama-cpp-python) ──────
+# A direct local model provider so Nova can run a `.gguf` model without
+# Ollama. Opt-in: it is only used when NOVA_MODEL_PROVIDER=llamacpp.
+# Ollama remains the default. Nova never downloads a model — the
+# operator points NOVA_GGUF_MODEL_PATH at a file they already have, and
+# the provider validates it is a readable .gguf before loading. The
+# optional `llama-cpp-python` wheel is imported lazily; when it is
+# missing the provider fails gracefully (see core/model_providers/llamacpp.py).
+#
+#   NOVA_GGUF_MODEL_PATH    — absolute path to a local .gguf model file.
+#                             Empty leaves the provider unconfigured (a
+#                             clean health failure, never a crash).
+#   NOVA_GGUF_CONTEXT_SIZE  — context window (n_ctx). Default 4096; a
+#                             non-positive / unparseable value falls back
+#                             to 4096.
+#   NOVA_GGUF_THREADS       — CPU threads (n_threads). 0 (default) lets
+#                             llama.cpp pick.
+#   NOVA_GGUF_GPU_LAYERS    — layers to offload to GPU (n_gpu_layers).
+#                             0 (default) keeps inference on CPU.
+NOVA_GGUF_MODEL_PATH = os.getenv("NOVA_GGUF_MODEL_PATH", "").strip()
+try:
+    NOVA_GGUF_CONTEXT_SIZE = int(os.getenv("NOVA_GGUF_CONTEXT_SIZE", "4096"))
+except ValueError:
+    NOVA_GGUF_CONTEXT_SIZE = 4096
+if NOVA_GGUF_CONTEXT_SIZE <= 0:
+    NOVA_GGUF_CONTEXT_SIZE = 4096
+try:
+    NOVA_GGUF_THREADS = int(os.getenv("NOVA_GGUF_THREADS", "0"))
+except ValueError:
+    NOVA_GGUF_THREADS = 0
+if NOVA_GGUF_THREADS < 0:
+    NOVA_GGUF_THREADS = 0
+try:
+    NOVA_GGUF_GPU_LAYERS = int(os.getenv("NOVA_GGUF_GPU_LAYERS", "0"))
+except ValueError:
+    NOVA_GGUF_GPU_LAYERS = 0
+if NOVA_GGUF_GPU_LAYERS < 0:
+    NOVA_GGUF_GPU_LAYERS = 0
+
 _raw_channel = os.getenv("NOVA_CHANNEL", "stable").lower()
 NOVA_CHANNEL = _raw_channel if _raw_channel in ("stable", "beta", "alpha") else "stable"
 NOVA_BRANCH = os.getenv("NOVA_BRANCH", "main")

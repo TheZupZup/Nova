@@ -24,6 +24,7 @@ import threading
 from typing import Callable, Dict, Iterator, Optional
 
 from .base import ModelProvider, ModelProviderError
+from .llamacpp import get_llamacpp_provider
 from .mock import MockProvider
 from .ollama import get_ollama_provider
 
@@ -32,6 +33,7 @@ ProviderFactory = Callable[[], ModelProvider]
 _lock = threading.Lock()
 _factories: Dict[str, ProviderFactory] = {
     "ollama": get_ollama_provider,
+    "llamacpp": get_llamacpp_provider,
     "mock": MockProvider,
 }
 _instances: Dict[str, ModelProvider] = {}

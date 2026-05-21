@@ -18,6 +18,7 @@ from .base import (
     ModelResponse,
     ProviderHealth,
 )
+from .llamacpp import GGUFProvider, LlamaCppProvider, get_llamacpp_provider
 from .mock import MockProvider
 from .ollama import OllamaProvider, get_ollama_provider
 from .registry import (
@@ -38,6 +39,9 @@ __all__ = [
     "ProviderHealth",
     "OllamaProvider",
     "get_ollama_provider",
+    "LlamaCppProvider",
+    "GGUFProvider",
+    "get_llamacpp_provider",
     "MockProvider",
     "get_provider",
     "register_provider",

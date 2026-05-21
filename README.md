@@ -851,7 +851,9 @@ feature exists.
 
 - Linux (tested on Fedora).
 - Python 3.11+.
-- [Ollama](https://ollama.com) installed and running.
+- [Ollama](https://ollama.com) installed and running. (Optional
+  alternative: run a local `.gguf` model directly via llama.cpp with no
+  Ollama — see [`docs/local-gguf.md`](docs/local-gguf.md).)
 - AMD GPU with ROCm (optional — falls back to CPU).
 
 ### 1. Clone the repository
@@ -966,6 +968,11 @@ All configuration is read from `.env` at startup. Key variables:
 | `NOVA_DATA_DIR` | — | Optional absolute path that holds `nova.db`, backups, and reserved subdirectories. Blank = legacy layout (DB next to the checkout). See [`docs/data-directory.md`](docs/data-directory.md), or [`docs/portable-workspace.md`](docs/portable-workspace.md) for a self-contained parent layout that works for both systemd and Docker. |
 | `NOVA_DEV_WORKSPACE_ROOTS` | — | OS-path-separator- or comma-separated absolute directories that may contain repos a Project can link (read-only Phase 1). Blank = the Dev Workspace feature is off. Never set to `/`, `/home`, or a broad system path. See [`docs/dev-workspace.md`](docs/dev-workspace.md). |
 | `OLLAMA_HOST` | `http://localhost:11434` | Ollama API base URL |
+| `NOVA_MODEL_PROVIDER` | `ollama` | Model backend: `ollama` (default) or `llamacpp` (local GGUF, no Ollama). See [`docs/local-gguf.md`](docs/local-gguf.md). |
+| `NOVA_GGUF_MODEL_PATH` | — | Absolute path to a local `.gguf` model file (only used when `NOVA_MODEL_PROVIDER=llamacpp`). Nova never downloads it. Blank = provider unconfigured. |
+| `NOVA_GGUF_CONTEXT_SIZE` | `4096` | GGUF context window (`n_ctx`) |
+| `NOVA_GGUF_THREADS` | `0` | GGUF CPU threads (`n_threads`); `0` = auto |
+| `NOVA_GGUF_GPU_LAYERS` | `0` | GGUF layers offloaded to GPU (`n_gpu_layers`); `0` = CPU only |
 | `NOVA_AUTO_WEB_LEARNING` | `false` | Enable background RSS/web learning |
 | `LOGIN_RATE_LIMIT_MAX` | `5` | Max login attempts per window |
 | `LOGIN_RATE_LIMIT_WINDOW` | `60` | Rate limit window in seconds (sliding) |

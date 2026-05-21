@@ -55,6 +55,31 @@
   relate to the baseline.
 
 ### Added
+- **Local GGUF model provider (llama.cpp) — Phase 1, opt-in.** Adds
+  `LlamaCppProvider` (`core/model_providers/llamacpp.py`, registered as
+  `llamacpp`, with a `GGUFProvider` alias) so Nova can generate text from
+  a local `.gguf` model directly via the optional `llama-cpp-python`
+  wheel, **without Ollama** — making Ollama no longer architecturally
+  required. **Ollama remains the default and is unchanged**; the new
+  backend is used only when `NOVA_MODEL_PROVIDER=llamacpp`. The provider
+  implements the existing `generate()` / `stream()` / `health()` contract
+  (non-streaming and a simple serialised token stream), imports
+  `llama_cpp` lazily so the registry still loads cleanly when the wheel
+  is absent, and degrades gracefully: a missing dependency or a
+  missing/invalid model path is a clean `ModelProviderError` / health
+  failure, never a crash. It never downloads a model, never runs a shell
+  command, never scans the filesystem, and validates exactly the one
+  configured path (a readable regular `.gguf` file); operator-facing
+  errors are sanitised (no absolute path or raw backend exception, and
+  `health()` surfaces only the model basename). New config:
+  `NOVA_GGUF_MODEL_PATH`, `NOVA_GGUF_CONTEXT_SIZE` (default 4096),
+  `NOVA_GGUF_THREADS` (0 = auto), `NOVA_GGUF_GPU_LAYERS` (0 = CPU). The
+  provider appears automatically in the read-only provider-status /
+  default-model surfaces (no new endpoint, no model-manager UI). New
+  suite `tests/test_llamacpp_provider.py`; memory / projects / storage /
+  export / restore / Dev Workspace paths are untouched. See
+  [docs/local-gguf.md](docs/local-gguf.md) and
+  [docs/model-providers.md](docs/model-providers.md).
 - Nova Care Phase 2 — **Deep Comfort** tone profile (local-first,
   opt-in, response-guidance only): adds a fifth non-default value
   `deep_comfort` to the existing Tone Profile enum so the user can
