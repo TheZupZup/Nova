@@ -72,6 +72,7 @@ from core import maintenance as _maintenance
 from core import storage_status as _storage_status
 from core import provider_status as _provider_status
 from core import model_settings as _model_settings
+from core import gguf_settings as _gguf_settings
 from core import data_export as _data_export
 from core import voice as _voice
 import sqlite3 as _sqlite3
@@ -3234,6 +3235,77 @@ def provider_set_default_model_endpoint(
         return _model_settings.set_default_model(req.model)
     except _model_settings.DefaultModelError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+
+
+# ── ADMIN: LOCAL GGUF MODEL PATH (GGUF provider, Phase 2) ─────────────
+# Lets an admin configure the local ``.gguf`` model the optional
+# ``llamacpp`` provider serves, without editing ``.env``. All three
+# endpoints are ``require_admin``. Safety, enforced in
+# ``core.gguf_settings``:
+#
+#   * status + test are read-only and never load the (multi-GB) model;
+#   * a pasted path is accepted only when it resolves (symlinks included)
+#     **inside** NOVA_MODEL_DIR, is an existing readable ``.gguf`` file,
+#     and contains no ``..`` traversal — anything else is a sanitised 400
+#     and nothing is written;
+#   * the value is a single host-wide ``settings`` row, never per-user,
+#     and never reachable through the generic ``/settings`` path;
+#   * no filesystem browsing, no shell, no download, no deletion, no
+#     overwrite — Nova validates exactly the one path supplied;
+#   * Ollama is untouched: configuring a GGUF path is harmless while
+#     ``ollama`` stays the active provider.
+
+
+@app.get("/admin/provider/gguf")
+def provider_gguf_status_endpoint(_: CurrentUser = Depends(require_admin)):
+    """Read-only snapshot of the local-GGUF configuration.
+
+    Returns the configured provider, the model directory (and whether it
+    exists), the configured model path, where it came from
+    (custom/env/unset), and whether it currently passes validation.
+    Never loads a model, never reaches the network.
+    """
+    return _gguf_settings.gguf_status()
+
+
+class SetGgufModelPathRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    path: str = Field(min_length=1, max_length=_gguf_settings.MAX_PATH_LEN)
+
+
+@app.post("/admin/provider/gguf/model-path")
+def provider_gguf_set_path_endpoint(
+    req: SetGgufModelPathRequest,
+    _: CurrentUser = Depends(require_admin),
+):
+    """Validate the pasted path against NOVA_MODEL_DIR, then persist it.
+
+    The path must resolve inside the configured model directory and be an
+    existing readable ``.gguf`` file. On success the host-wide setting is
+    updated, the cached GGUF provider is dropped so the change takes
+    effect on the next message, and the new status is returned. A refusal
+    (wrong extension, missing file, directory, outside the model dir, or
+    ``..`` traversal) is a 400 with a short, sanitised message and
+    **nothing is written**.
+    """
+    try:
+        return _gguf_settings.set_gguf_model_path(req.path)
+    except _gguf_settings.GgufModelPathError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.post("/admin/provider/gguf/test")
+def provider_gguf_test_endpoint(_: CurrentUser = Depends(require_admin)):
+    """Check the configured GGUF model is valid enough to attempt loading.
+
+    Confirms a path is configured, that it passes the directory-confined
+    validation, and that the ``llama-cpp-python`` backend is installed —
+    without loading the weights. Always a calm 200 with a stable
+    ``{ok, provider, detail, filename, path_valid}`` shape; a missing
+    dependency or an invalid path is reported as ``ok=false`` with a
+    sanitised detail, never a 500.
+    """
+    return _gguf_settings.test_gguf_provider()
 
 
 @app.get("/channel")

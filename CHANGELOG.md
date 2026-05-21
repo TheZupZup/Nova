@@ -55,6 +55,34 @@
   relate to the baseline.
 
 ### Added
+- **Local GGUF model path UI + model directory — Phase 2, admin-only.**
+  Makes the optional `llamacpp` provider configurable without editing
+  `.env`. A new `core/gguf_settings.py` adds a directory-confined path
+  validator (`validate_gguf_model_path`): a model path is accepted only
+  when it is an absolute, traversal-free (`..`/`~`-rejected) `.gguf` file
+  that resolves — symlinks included — **inside** the allowed model
+  directory `NOVA_MODEL_DIR` (new config, default
+  `/mnt/archive/nova-models`), exists, is a regular readable file. The
+  chosen path is persisted host-wide via `save_system_setting`
+  (`gguf_model_path`, deliberately outside `USER_SETTING_KEYS` /
+  `ALLOWED_SETTINGS`), takes precedence over `NOVA_GGUF_MODEL_PATH`, and
+  takes effect without a restart — `set_gguf_model_path` drops the cached
+  provider via the new `evict_provider` (registry) and
+  `reset_llamacpp_provider`, and the factory now resolves its path from
+  the persisted setting (falling back to env). Three admin-only endpoints
+  back a "Local GGUF model" card in **Settings → Models**: `GET
+  /admin/provider/gguf` (status: provider, model dir + existence,
+  configured path + source + validity), `POST
+  /admin/provider/gguf/model-path` (validate then persist; a refusal is a
+  sanitised 400 that writes nothing), and `POST /admin/provider/gguf/test`
+  (checks the path is valid *and* `llama-cpp-python` is installed —
+  "valid enough to attempt loading" — without loading the multi-GB
+  weights). No filesystem browser, no scan, no shell, no download, no
+  deletion, no overwrite; errors are sanitised and the card is hidden for
+  non-admins. **Ollama remains the default and is untouched** — a GGUF
+  path is harmless until `NOVA_MODEL_PROVIDER=llamacpp`. Tests:
+  `tests/test_gguf_settings.py`, `tests/test_gguf_endpoints.py`. See
+  [docs/local-gguf.md](docs/local-gguf.md).
 - **Local GGUF model provider (llama.cpp) — Phase 1, opt-in.** Adds
   `LlamaCppProvider` (`core/model_providers/llamacpp.py`, registered as
   `llamacpp`, with a `GGUFProvider` alias) so Nova can generate text from

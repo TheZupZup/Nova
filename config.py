@@ -52,6 +52,18 @@ except ValueError:
 if NOVA_GGUF_GPU_LAYERS < 0:
     NOVA_GGUF_GPU_LAYERS = 0
 
+# Directory that local GGUF model files must live inside. The admin-only
+# GGUF settings surface (Settings → Models → "Local GGUF model") only
+# accepts a model path that resolves *inside* this directory, which
+# defeats path traversal and keeps Nova from ever being pointed at an
+# arbitrary file. Nova never lists, scans, or browses it — it only
+# validates the one path an admin configures. Default is the recommended
+# out-of-checkout location; override with NOVA_MODEL_DIR.
+NOVA_MODEL_DIR = (
+    os.getenv("NOVA_MODEL_DIR", "/mnt/archive/nova-models").strip()
+    or "/mnt/archive/nova-models"
+)
+
 _raw_channel = os.getenv("NOVA_CHANNEL", "stable").lower()
 NOVA_CHANNEL = _raw_channel if _raw_channel in ("stable", "beta", "alpha") else "stable"
 NOVA_BRANCH = os.getenv("NOVA_BRANCH", "main")

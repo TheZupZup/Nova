@@ -18,11 +18,17 @@ from .base import (
     ModelResponse,
     ProviderHealth,
 )
-from .llamacpp import GGUFProvider, LlamaCppProvider, get_llamacpp_provider
+from .llamacpp import (
+    GGUFProvider,
+    LlamaCppProvider,
+    get_llamacpp_provider,
+    reset_llamacpp_provider,
+)
 from .mock import MockProvider
 from .ollama import OllamaProvider, get_ollama_provider
 from .registry import (
     available_providers,
+    evict_provider,
     get_provider,
     register_provider,
     reset,
@@ -42,10 +48,12 @@ __all__ = [
     "LlamaCppProvider",
     "GGUFProvider",
     "get_llamacpp_provider",
+    "reset_llamacpp_provider",
     "MockProvider",
     "get_provider",
     "register_provider",
     "available_providers",
+    "evict_provider",
     "use_provider",
     "set_override",
     "reset",

@@ -97,6 +97,21 @@ def get_provider(name: Optional[str] = None) -> ModelProvider:
         return instance
 
 
+def evict_provider(name: str) -> None:
+    """Drop the cached instance for ``name`` so the next resolve rebuilds it.
+
+    Used when a provider's *resolved configuration* changes at runtime —
+    e.g. an admin updates the GGUF model path — so the change takes effect
+    on the next :func:`get_provider` without a process restart. Unknown /
+    blank names are a no-op; the factory itself is left registered.
+    """
+    key = (name or "").strip().lower()
+    if not key:
+        return
+    with _lock:
+        _instances.pop(key, None)
+
+
 def set_override(provider: Optional[ModelProvider]) -> None:
     """Force :func:`get_provider` to return ``provider`` (tests only).
 

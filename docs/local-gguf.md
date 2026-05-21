@@ -1,9 +1,12 @@
 # Running Nova with a local GGUF model (llama.cpp)
 
-> **Status: shipped (Phase 1, optional, local-first).**
+> **Status: shipped (Phase 1 + Phase 2, optional, local-first).**
 > This document describes the optional `llamacpp` model provider, which
 > lets Nova generate text from a local `.gguf` model **without Ollama**.
-> It lives inside the boundaries set by
+> Phase 1 added the provider itself; **Phase 2 adds a small admin-only UI
+> for setting and validating the model path** (Settings → Models → "Local
+> GGUF model") so you no longer have to edit `.env` by hand. It lives
+> inside the boundaries set by
 > [`docs/nova-safety-and-trust-contract.md`](nova-safety-and-trust-contract.md)
 > and complements [`docs/model-providers.md`](model-providers.md), which
 > explains the provider seam itself. **Ollama remains Nova's default and
@@ -20,11 +23,14 @@ bindings for [llama.cpp](https://github.com/ggml-org/llama.cpp)). This
 makes Ollama **no longer architecturally required**: you can run Nova on
 a host that has only a model file and the `llama-cpp-python` wheel.
 
-What this phase deliberately does **not** do:
+What this provider deliberately does **not** do:
 
 - it does **not** remove or replace Ollama (still the default),
 - it does **not** download, fetch, or auto-convert any model,
-- it does **not** add a cloud provider, an API key, or a model-manager UI,
+- it does **not** add a cloud provider, an API key, or a model-download manager,
+- it does **not** add a filesystem browser — the Phase-2 UI validates the
+  one path you paste, it never lists or scans a directory,
+- it does **not** delete or overwrite any model file,
 - it does **not** change memory, projects, storage, export/restore, or
   the Dev Workspace.
 
@@ -62,7 +68,17 @@ data is migrated and nothing is deleted.
 ### Recommended model directory
 
 Keep models out of the Nova checkout and the data directory, on storage
-with room to spare:
+with room to spare. Create the directory and drop your `.gguf` file in:
+
+```bash
+# Create the recommended directory (or set NOVA_MODEL_DIR to your own).
+sudo mkdir -p /mnt/archive/nova-models
+# Make it readable by the user Nova runs as (adjust the user/group).
+sudo chown "$USER" /mnt/archive/nova-models
+
+# Place a .gguf model you already have inside it (Nova never downloads one).
+cp ~/Downloads/mistral-7b-instruct-v0.2.Q4_K_M.gguf /mnt/archive/nova-models/
+```
 
 ```
 /mnt/archive/nova-models/
@@ -71,9 +87,15 @@ with room to spare:
 
 Use a stable mount path defined in `/etc/fstab` (not a transient
 `/run/media/...` desktop mount) so a long-running service can always
-find the file. This directory is **only** read by the GGUF provider when
-you point `NOVA_GGUF_MODEL_PATH` at a file inside it; Nova never lists,
-scans, or browses it, and never exposes its contents through the UI.
+find the file. Override the location with `NOVA_MODEL_DIR` if
+`/mnt/archive/nova-models` does not suit your host.
+
+This directory is the **allowed model directory**: the admin UI (and the
+configured path) only accept a model file that resolves *inside* it. Nova
+never lists, scans, browses, or downloads into it, and never exposes its
+contents through the UI — it validates exactly the one path you point it
+at. Putting your model here is what makes the Phase-2 "set the path from
+Settings" flow work.
 
 ## Configuration
 
@@ -83,7 +105,8 @@ Nova's config). Only `NOVA_GGUF_MODEL_PATH` is required.
 | Variable | Default | Description |
 |---|---|---|
 | `NOVA_MODEL_PROVIDER` | `ollama` | Set to `llamacpp` to use this provider. Any other value (or unset) keeps Ollama. |
-| `NOVA_GGUF_MODEL_PATH` | — | Absolute path to a local `.gguf` model file. Empty leaves the provider unconfigured (a clean health failure, never a crash). |
+| `NOVA_MODEL_DIR` | `/mnt/archive/nova-models` | Directory local `.gguf` files must live inside. The admin UI only accepts a model path that resolves inside this directory (no arbitrary files, no path traversal). |
+| `NOVA_GGUF_MODEL_PATH` | — | Absolute path to a local `.gguf` model file. Empty leaves the provider unconfigured (a clean health failure, never a crash). An admin-set path (below) takes precedence over this. |
 | `NOVA_GGUF_CONTEXT_SIZE` | `4096` | Context window (`n_ctx`). A non-positive or unparseable value falls back to `4096`. |
 | `NOVA_GGUF_THREADS` | `0` | CPU threads (`n_threads`). `0` lets llama.cpp choose. |
 | `NOVA_GGUF_GPU_LAYERS` | `0` | Layers to offload to GPU (`n_gpu_layers`). `0` keeps inference on CPU. Requires a GPU-enabled `llama-cpp-python` build. |
@@ -92,6 +115,7 @@ Example `.env`:
 
 ```bash
 NOVA_MODEL_PROVIDER=llamacpp
+NOVA_MODEL_DIR=/mnt/archive/nova-models
 NOVA_GGUF_MODEL_PATH=/mnt/archive/nova-models/mistral-7b-instruct-v0.2.Q4_K_M.gguf
 NOVA_GGUF_CONTEXT_SIZE=4096
 # NOVA_GGUF_THREADS=8         # optional; 0 = auto
@@ -103,6 +127,39 @@ After editing `.env`, restart Nova. To confirm the backend, open
 cheap, read-only liveness probe. With the GGUF provider configured the
 probe reports the model's filename when the dependency and path are in
 place, or a clear reason when either is missing.
+
+## Setting the model path from the UI (no `.env` edit) — Phase 2
+
+You do not have to edit `.env` to point Nova at a model. As an admin,
+open **Settings → Models → "Local GGUF model"**. The card shows:
+
+- the **configured provider** (and whether the GGUF provider is active),
+- the **model directory** (`NOVA_MODEL_DIR`) and whether it exists,
+- the **configured model path**, where it came from (saved here, from the
+  environment, or not set), and whether it currently passes validation.
+
+Paste an absolute path to a `.gguf` file **inside the model directory**
+and click **Validate & save path**. The server validates the path before
+storing it; the saved value is kept in Nova's database and **takes
+precedence** over `NOVA_GGUF_MODEL_PATH`, taking effect on the next
+message without a restart. Click **Test GGUF provider** to check the
+model is valid enough to attempt loading (path is valid *and*
+`llama-cpp-python` is installed) — it never loads the multi-GB weights.
+
+A path is accepted only when **all** of these hold; otherwise the save is
+refused with a short, sanitised reason and nothing is written:
+
+- it is an **absolute** path containing no `..` and no `~`,
+- it ends in **`.gguf`**,
+- it resolves (symlinks included) **inside** `NOVA_MODEL_DIR`,
+- the file **exists**, is a **regular file** (not a directory), and is
+  **readable** by the Nova service user.
+
+There is **no file browser**: Nova validates exactly the one path you
+paste and never lists or scans the directory. The setting is host-wide
+(an operator decision, like the default model), admin-only, and never
+reachable through the per-user settings path. It never downloads,
+deletes, or overwrites a model.
 
 ## How model selection interacts
 
@@ -138,11 +195,20 @@ load fails with a sanitised error and chat falls back to the standard
 
 ## Safety notes
 
-- **No downloads.** Nova never fetches a model in this phase. You provide
-  the file.
-- **No shell, no scan.** The provider never runs a shell command and
-  never walks the filesystem. It validates exactly the one path you
-  configured (readable regular `.gguf` file) and refuses anything else.
+- **No downloads.** Nova never fetches a model. You provide the file.
+- **Directory-confined paths.** The admin UI (and the validation behind
+  it) only accepts a model path that resolves inside `NOVA_MODEL_DIR`,
+  defeating path traversal and arbitrary-file exposure. Symlinks are
+  resolved before the containment check, so a link that escapes the
+  directory is refused.
+- **No file browser, no scan.** The UI validates exactly the one path you
+  paste — it never lists, scans, or walks the directory, and the provider
+  never runs a shell command.
+- **No deletion, no overwrite.** Configuring a path only records *which*
+  file to use; Nova never removes or replaces a model file.
+- **Admin-only, host-wide.** The model path is an operator decision (a
+  single global setting), gated to admins, and never reachable through
+  the per-user settings path.
 - **Sanitised errors.** Operator-facing messages name the relevant
   environment variable and the problem; they never echo the absolute
   model path or a raw backend exception. Full detail is in the server
@@ -161,8 +227,10 @@ load fails with a sanitised error and chat falls back to the standard
 | Symptom (Test connection / chat) | Likely cause | Fix |
 |---|---|---|
 | "llama-cpp-python is not installed" | The optional wheel is missing | `pip install llama-cpp-python` in Nova's environment |
-| "No GGUF model configured" | `NOVA_GGUF_MODEL_PATH` is empty | Set it to your `.gguf` file |
-| "must point at a .gguf model file" | Wrong extension | Point at the actual `.gguf` file, not a directory or other format |
-| "GGUF model file not found" | Path typo / file moved / disk not mounted | Check the path; confirm the mount is up |
-| "model file is not readable" | Permissions | Make the file readable by the Nova service user |
-| "Failed to load the GGUF model" | Corrupt file or not enough memory | Re-download the model out of band; try a smaller quant; check free RAM |
+| "No GGUF model configured" / "No GGUF model is configured" | No path set (env or UI) | Set `NOVA_GGUF_MODEL_PATH`, or paste a path in Settings → Models |
+| "must be a .gguf file" / "must point at a .gguf model file" | Wrong extension | Point at the actual `.gguf` file, not a directory or other format |
+| "must be inside the configured model directory" | Path is outside `NOVA_MODEL_DIR` | Move the model into the model directory, or set `NOVA_MODEL_DIR` to where it lives |
+| "must not contain '..'" / "must be an absolute path" | Relative or traversal path pasted in the UI | Paste a full absolute path inside the model directory |
+| "No file exists at that path" / "GGUF model file not found" | Path typo / file moved / disk not mounted | Check the path; confirm the mount is up |
+| "not readable" | Permissions | Make the file readable by the Nova service user |
+| "Failed to load the GGUF model" | Corrupt file or not enough memory | Replace the model out of band; try a smaller quant; check free RAM |

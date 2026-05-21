@@ -3786,6 +3786,44 @@
                         <div id="settings-default-model-error" style="color:var(--danger);font-size:0.78rem;margin-top:6px;min-height:0;"></div>
                         <div id="settings-default-model-ok" style="color:var(--text-dim);font-size:0.78rem;margin-top:6px;min-height:0;"></div>
                     </div>
+
+                    <!--
+                      Local GGUF model (admin-only). Configures the .gguf
+                      model the optional llama.cpp provider serves, without
+                      editing .env. The pasted path is validated on the
+                      server — it must resolve inside the configured model
+                      directory (NOVA_MODEL_DIR) and be an existing readable
+                      .gguf file — before anything is persisted. Nothing is
+                      downloaded, scanned, deleted, or overwritten, and no
+                      file browser is exposed: Nova validates exactly the one
+                      path. Ollama stays the default; this only takes effect
+                      when NOVA_MODEL_PROVIDER=llamacpp. Hidden for non-admins
+                      (the endpoints are admin-only and would 403).
+                    -->
+                    <div class="settings-row" id="settings-gguf-row" style="display:none;">
+                        <div class="settings-row-head">
+                            <div class="settings-row-label">
+                                <span class="settings-row-title" id="settings-gguf-title">Local GGUF model</span>
+                                <span class="settings-row-hint" id="settings-gguf-hint">Point the local llama.cpp provider at a .gguf file inside the model directory. Validated · admin-only.</span>
+                            </div>
+                            <button class="memory-btn" id="settings-gguf-refresh-btn" onclick="loadGgufCard()" style="white-space:nowrap;">Refresh</button>
+                        </div>
+                        <div id="settings-gguf-summary" style="margin-top:10px;">
+                            <div class="admin-empty">Loading…</div>
+                        </div>
+                        <div id="settings-gguf-editor" style="margin-top:10px;display:none;flex-direction:column;gap:8px;">
+                            <input id="settings-gguf-path-input" type="text" placeholder="/mnt/archive/nova-models/model.gguf"
+                                style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:monospace;font-size:0.8rem;padding:6px 10px;outline:none;box-sizing:border-box;"
+                                onkeydown="if(event.key==='Enter')saveGgufModelPath()" />
+                            <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;">
+                                <button class="memory-btn" id="settings-gguf-save-btn" onclick="saveGgufModelPath()" style="white-space:nowrap;">Validate &amp; save path</button>
+                                <button class="memory-btn" id="settings-gguf-test-btn" onclick="testGgufProvider()" style="white-space:nowrap;">Test GGUF provider</button>
+                            </div>
+                        </div>
+                        <div id="settings-gguf-error" style="color:var(--danger);font-size:0.78rem;margin-top:6px;min-height:0;"></div>
+                        <div id="settings-gguf-ok" style="color:var(--text-dim);font-size:0.78rem;margin-top:6px;min-height:0;"></div>
+                        <div id="settings-gguf-test-result" style="margin-top:8px;"></div>
+                    </div>
                 </section>
 
                 <!-- ADMIN (admin-only) -->
@@ -8816,6 +8854,7 @@
         if (pane === "models") {
             loadModelsProviderCard().catch(() => {});
             loadDefaultModelCard().catch(() => {});
+            loadGgufCard().catch(() => {});
         }
     }
 
@@ -10828,6 +10867,244 @@
             loadDefaultModelCard().catch(() => {});
         } catch (e) {
             if (errEl) errEl.textContent = "Network error while saving the default model.";
+        } finally {
+            btn.disabled = false;
+            btn.textContent = original;
+        }
+    }
+
+    // ── Settings → Models: local GGUF model path (admin-only) ─────
+    //
+    // Configures the .gguf model the optional llama.cpp provider serves
+    // without editing .env. Admin-gated on the client (the row is hidden
+    // for non-admins) and on the server (the endpoints are
+    // require_admin). The pasted path is validated on the server — it
+    // must resolve inside NOVA_MODEL_DIR and be an existing readable
+    // .gguf file — before it is persisted. Nothing is downloaded,
+    // scanned, deleted, or overwritten; there is no file browser.
+    async function loadGgufCard() {
+        const row = document.getElementById("settings-gguf-row");
+        if (!row) return;
+        const isAdmin = !!(currentUser && currentUser.role === "admin");
+        if (!isAdmin) { row.style.display = "none"; return; }
+        row.style.display = "";
+        const summary = document.getElementById("settings-gguf-summary");
+        const errEl = document.getElementById("settings-gguf-error");
+        const okEl = document.getElementById("settings-gguf-ok");
+        const resEl = document.getElementById("settings-gguf-test-result");
+        if (errEl) errEl.textContent = "";
+        if (okEl) okEl.textContent = "";
+        if (resEl) resEl.innerHTML = "";
+        if (summary) summary.innerHTML = '<div class="admin-empty">Loading…</div>';
+        try {
+            const res = await fetch("/admin/provider/gguf", {
+                headers: { "Authorization": `Bearer ${token}` }
+            });
+            if (res.status === 401) { logout(); return; }
+            if (res.status === 403) { row.style.display = "none"; return; }
+            if (!res.ok) {
+                if (summary) summary.innerHTML = '<div class="admin-empty">Failed to load GGUF settings.</div>';
+                return;
+            }
+            renderGgufCard(await res.json());
+        } catch (e) {
+            if (summary) summary.innerHTML = '<div class="admin-empty">Failed to load GGUF settings.</div>';
+        }
+    }
+
+    function renderGgufCard(status) {
+        const summary = document.getElementById("settings-gguf-summary");
+        const editor = document.getElementById("settings-gguf-editor");
+        const input = document.getElementById("settings-gguf-path-input");
+        if (!summary) return;
+        const provider = escapeHtml(status.provider || "ollama");
+        const providerTag = status.is_llamacpp
+            ? `<span class="admin-tag installed">active</span>`
+            : `<span class="admin-tag">inactive</span>`;
+        const dirTag = status.model_dir_is_dir
+            ? `<span class="admin-tag installed">present</span>`
+            : `<span class="admin-tag error">missing</span>`;
+        const pathStr = status.configured_path
+            ? escapeHtml(status.configured_path) : "—";
+        const sourceLabel = ({ custom: "saved here", env: "from environment", unset: "not set" })[status.path_source] || status.path_source || "";
+        let pathTag;
+        if (status.path_source === "unset") {
+            pathTag = `<span class="admin-tag">not set</span>`;
+        } else if (status.path_valid) {
+            pathTag = `<span class="admin-tag installed">valid</span>`;
+        } else {
+            pathTag = `<span class="admin-tag error">invalid</span>`;
+        }
+        const parts = [];
+        parts.push(
+            `<div class="admin-model-row">` +
+            `<div class="admin-model-head">` +
+            `<span class="admin-model-display">GGUF provider (llama.cpp)</span>` +
+            providerTag +
+            `</div>` +
+            `<div class="admin-progress-meta">configured provider: <code>${provider}</code> · default: <code>${escapeHtml(status.default_provider || "ollama")}</code></div>` +
+            `</div>`
+        );
+        parts.push(
+            `<div class="admin-model-row">` +
+            `<div class="admin-model-head">` +
+            `<span class="admin-model-display">model directory</span>` +
+            dirTag +
+            `</div>` +
+            `<div class="admin-model-name">${escapeHtml(status.model_dir || "—")}</div>` +
+            `</div>`
+        );
+        parts.push(
+            `<div class="admin-model-row">` +
+            `<div class="admin-model-head">` +
+            `<span class="admin-model-display">configured model path</span>` +
+            pathTag +
+            `</div>` +
+            `<div class="admin-model-name">${pathStr}</div>` +
+            (sourceLabel ? `<div class="admin-progress-meta">source: <code>${escapeHtml(sourceLabel)}</code></div>` : "") +
+            `</div>`
+        );
+        if (!status.model_dir_is_dir) {
+            parts.push(
+                `<div class="admin-warning warning">` +
+                `<span class="admin-warning-level">warning</span>` +
+                `<span class="admin-warning-msg">The model directory does not exist yet. Create it (or set NOVA_MODEL_DIR) and place your .gguf file inside it.</span>` +
+                `</div>`
+            );
+        }
+        if (status.configured_path && !status.path_valid && status.path_detail) {
+            parts.push(
+                `<div class="admin-warning error">` +
+                `<span class="admin-warning-level">error</span>` +
+                `<span class="admin-warning-msg">${escapeHtml(status.path_detail)}</span>` +
+                `</div>`
+            );
+        }
+        if (!status.is_llamacpp) {
+            parts.push(
+                `<div class="admin-warning info">` +
+                `<span class="admin-warning-level">info</span>` +
+                `<span class="admin-warning-msg">Ollama is the active provider. This GGUF configuration takes effect when NOVA_MODEL_PROVIDER=llamacpp.</span>` +
+                `</div>`
+            );
+        }
+        summary.innerHTML = parts.join("");
+        // Pre-fill the editor with the current path so an admin can tweak
+        // it rather than retype the whole thing.
+        if (input && document.activeElement !== input) {
+            input.value = status.configured_path || "";
+        }
+        if (editor) editor.style.display = "flex";
+    }
+
+    async function saveGgufModelPath() {
+        const input = document.getElementById("settings-gguf-path-input");
+        const btn = document.getElementById("settings-gguf-save-btn");
+        const errEl = document.getElementById("settings-gguf-error");
+        const okEl = document.getElementById("settings-gguf-ok");
+        const resEl = document.getElementById("settings-gguf-test-result");
+        if (errEl) errEl.textContent = "";
+        if (okEl) okEl.textContent = "";
+        if (resEl) resEl.innerHTML = "";
+        if (!input || !btn) return;
+        const path = (input.value || "").trim();
+        if (!path) {
+            if (errEl) errEl.textContent = "Paste the path to a .gguf file inside the model directory.";
+            return;
+        }
+        const original = btn.textContent;
+        btn.disabled = true;
+        btn.textContent = "Saving…";
+        try {
+            const res = await fetch("/admin/provider/gguf/model-path", {
+                method: "POST",
+                headers: {
+                    "Authorization": `Bearer ${token}`,
+                    "Content-Type": "application/json",
+                },
+                body: JSON.stringify({ path }),
+            });
+            if (res.status === 401) { logout(); return; }
+            if (res.status === 403) {
+                if (errEl) errEl.textContent = "Access denied.";
+                return;
+            }
+            if (!res.ok) {
+                let detail = `Failed (${res.status})`;
+                try {
+                    const b = await res.json();
+                    if (b && b.detail) detail = b.detail;
+                } catch (_) { /* ignore */ }
+                if (errEl) errEl.textContent = detail;
+                return;
+            }
+            const body = await res.json();
+            if (okEl) okEl.textContent = `Saved. Nova will use ${body.filename || "this model"} when the GGUF provider is active.`;
+            renderGgufCard(body);
+        } catch (e) {
+            if (errEl) errEl.textContent = "Network error while saving the model path.";
+        } finally {
+            btn.disabled = false;
+            btn.textContent = original;
+        }
+    }
+
+    async function testGgufProvider() {
+        const btn = document.getElementById("settings-gguf-test-btn");
+        const errEl = document.getElementById("settings-gguf-error");
+        const resEl = document.getElementById("settings-gguf-test-result");
+        if (errEl) errEl.textContent = "";
+        if (resEl) resEl.innerHTML = "";
+        if (!btn) return;
+        const original = btn.textContent;
+        btn.disabled = true;
+        btn.textContent = "Testing…";
+        try {
+            const res = await fetch("/admin/provider/gguf/test", {
+                method: "POST",
+                headers: {
+                    "Authorization": `Bearer ${token}`,
+                    "Content-Type": "application/json",
+                },
+                body: "{}",
+            });
+            if (res.status === 401) { logout(); return; }
+            if (res.status === 403) {
+                if (errEl) errEl.textContent = "Access denied.";
+                return;
+            }
+            if (!res.ok) {
+                let detail = `Failed (${res.status})`;
+                try {
+                    const b = await res.json();
+                    if (b && b.detail) detail = b.detail;
+                } catch (_) { /* ignore */ }
+                if (errEl) errEl.textContent = detail;
+                return;
+            }
+            const body = await res.json();
+            const ok = body && body.ok === true;
+            const tag = ok
+                ? `<span class="admin-tag installed">ready</span>`
+                : `<span class="admin-tag error">not ready</span>`;
+            const fileLine = body.filename
+                ? `<div class="admin-progress-meta">model: <code>${escapeHtml(body.filename)}</code></div>`
+                : "";
+            const detailLine = body.detail
+                ? `<div class="admin-warning ${ok ? "info" : "error"}"><span class="admin-warning-level">${ok ? "info" : "error"}</span><span class="admin-warning-msg">${escapeHtml(body.detail)}</span></div>`
+                : "";
+            if (resEl) resEl.innerHTML =
+                `<div class="admin-section-title">GGUF provider test result</div>` +
+                `<div class="admin-model-row">` +
+                `<div class="admin-model-head">` +
+                `<span class="admin-model-display">backend: ${escapeHtml(body.provider || "llamacpp")}</span>` +
+                tag +
+                `</div>` +
+                fileLine +
+                `</div>` +
+                detailLine;
+        } catch (e) {
+            if (errEl) errEl.textContent = "Network error while testing the GGUF provider.";
         } finally {
             btn.disabled = false;
             btn.textContent = original;

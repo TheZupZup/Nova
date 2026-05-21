@@ -326,18 +326,51 @@ _default: Optional[LlamaCppProvider] = None
 _default_lock = threading.Lock()
 
 
+def _resolve_configured_path() -> Optional[str]:
+    """The model path to build the singleton with: persisted choice, else env.
+
+    The admin-configurable path (Phase 2) lives in the settings DB and
+    falls back to ``NOVA_GGUF_MODEL_PATH``. Resolved here — never raises,
+    never loads a model — so construction stays cheap. ``None`` lets
+    :class:`LlamaCppProvider` read ``config`` itself (the Phase-1
+    behaviour) if the resolver is somehow unavailable.
+    """
+    try:
+        from core.gguf_settings import resolve_gguf_model_path
+
+        return resolve_gguf_model_path()
+    except Exception as exc:  # pragma: no cover - resolver is defensive
+        logger.debug("GGUF path resolve failed; using config: %s", exc)
+        return None
+
+
 def get_llamacpp_provider() -> LlamaCppProvider:
     """Process-wide singleton factory used by the registry.
 
     Cheap: construction only validates config and the model path — the
-    model itself is loaded lazily on first generation.
+    model itself is loaded lazily on first generation. The model path is
+    resolved from the admin-persisted setting (falling back to
+    ``NOVA_GGUF_MODEL_PATH``), so an admin change takes effect once the
+    cached instance is dropped (see :func:`reset_llamacpp_provider`).
     """
     global _default
     if _default is None:
         with _default_lock:
             if _default is None:
-                _default = LlamaCppProvider()
+                _default = LlamaCppProvider(model_path=_resolve_configured_path())
     return _default
+
+
+def reset_llamacpp_provider() -> None:
+    """Drop the cached singleton so the next factory call rebuilds it.
+
+    Called after the admin updates the configured model path so the new
+    file is picked up (and the previously-loaded model released) on the
+    next generation, without a process restart.
+    """
+    global _default
+    with _default_lock:
+        _default = None
 
 
 # Friendly alias: the backend is "llama.cpp", the model format is "GGUF".
