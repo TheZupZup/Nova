@@ -6,8 +6,17 @@ runs in containers:
 
 | Container | Image | Role |
 |---|---|---|
-| `nova` | built from this repo's `Dockerfile` | Nova backend + web UI |
+| `nova` | built from this repo's `Dockerfile`, **or** pulled from GHCR | Nova backend + web UI |
 | `nova-ollama` | `ollama/ollama` | local model server |
+
+There are two ways to get the `nova` image, and both use the same volumes
+and the same operations below:
+
+- **Build from source** with `docker-compose.yml` — the default developer
+  workflow ([First-time setup](#first-time-setup)).
+- **Pull the prebuilt image** from the GitHub Container Registry with
+  `docker-compose.ghcr.yml` — deploy without cloning or building the repo
+  ([Run the prebuilt image](#run-the-prebuilt-image-no-local-build)).
 
 This is a **local / self-hosted** setup: no cloud component, no remote
 sync, no auto-deploy. It is designed for a Linux AI/project PC, a NAS
@@ -94,6 +103,84 @@ Then pull at least one model so Nova can reply — see
 
 ---
 
+## Run the prebuilt image (no local build)
+
+Don't want to build Nova yourself? A prebuilt image is published to the
+**GitHub Container Registry** on every push to `main` and every release
+tag:
+
+```
+ghcr.io/thezupzup/nova:latest      # tracks the main branch
+ghcr.io/thezupzup/nova:1.2.3        # a specific release (recommended for servers)
+ghcr.io/thezupzup/nova:sha-abc1234  # an exact commit
+```
+
+The repo ships a ready-made compose file, `docker-compose.ghcr.yml`, that
+is identical to the default stack except it **pulls** the Nova image
+instead of building it. You don't even need to clone the repository — just
+this one file and an `.env`.
+
+```bash
+# Fetch the compose file (or copy it out of the repo):
+curl -fsSLO https://raw.githubusercontent.com/TheZupZup/Nova/main/docker-compose.ghcr.yml
+
+# Create a minimal .env next to it (only credentials are required):
+cat > .env <<'EOF'
+NOVA_USERNAME=admin
+NOVA_PASSWORD=change-me-please
+EOF
+
+# Pull the image + Ollama, then start the stack:
+docker compose -f docker-compose.ghcr.yml up -d
+
+# Pull at least one model, then open http://localhost:8000
+docker compose -f docker-compose.ghcr.yml exec ollama ollama pull gemma3:1b
+```
+
+Open **http://localhost:8000** and log in. From another machine on the
+same network use **http://&lt;host-ip&gt;:8000** (see
+[Using Nova from Windows](#using-nova-from-windows-as-a-browser-client)).
+
+**Pin a version** instead of tracking `latest` by setting `NOVA_IMAGE_TAG`
+in `.env` (recommended for anything you don't want changing under you):
+
+```env
+NOVA_IMAGE_TAG=1.2.3
+```
+
+**Update the container** to the newest published image — your data and
+models are untouched:
+
+```bash
+docker compose -f docker-compose.ghcr.yml pull
+docker compose -f docker-compose.ghcr.yml up -d
+```
+
+**Switching between build and prebuilt is lossless.** Both compose files
+declare the same `nova-data` and `ollama-models` volumes in the same
+project directory, so you can move from `docker-compose.yml` (build) to
+`docker-compose.ghcr.yml` (prebuilt) — or back — and keep your database
+and models. Don't mix the two at once; pick one file per `docker compose`
+invocation. Everything in [Everyday operations](#everyday-operations),
+[Pulling models](#pulling--downloading-ollama-models), and
+[Backing up](#backing-up-persistent-data) below applies to both — just add
+`-f docker-compose.ghcr.yml` to the commands when running the prebuilt
+stack.
+
+> **Without Compose.** You can also run the image directly, but you must
+> provide an Ollama endpoint and a data volume yourself:
+> ```bash
+> docker run -d --name nova -p 8000:8000 \
+>   -e NOVA_USERNAME=admin -e NOVA_PASSWORD=change-me-please \
+>   -e OLLAMA_HOST=http://host.docker.internal:11434 \
+>   -v nova-data:/data \
+>   ghcr.io/thezupzup/nova:latest
+> ```
+> Compose is recommended because it wires up Ollama and the volumes for
+> you.
+
+---
+
 ## Everyday operations
 
 ### Starting Nova
@@ -145,9 +232,10 @@ docker compose pull ollama
 docker compose up -d
 ```
 
-> **Prefer a prebuilt image?** Edit `docker-compose.yml`: comment the
-> `build:` block and uncomment `image: ghcr.io/thezupzup/nova:latest`.
-> Then update with `docker compose pull && docker compose up -d`.
+> **Prefer a prebuilt image?** Use `docker-compose.ghcr.yml`, which pulls
+> `ghcr.io/thezupzup/nova` instead of building, and update with
+> `docker compose -f docker-compose.ghcr.yml pull && docker compose -f docker-compose.ghcr.yml up -d`.
+> See [Run the prebuilt image](#run-the-prebuilt-image-no-local-build).
 
 ### Resetting containers without deleting data
 

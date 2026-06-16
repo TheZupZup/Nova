@@ -1,33 +1,30 @@
-# Nova — full Docker Compose stack (self-hosted / local).
+# Nova — prebuilt-image Docker Compose stack (GHCR).
 #
-# Runs everything Nova needs in containers: the Nova web app and a local
-# Ollama model server. No Python, Ollama, or dependencies are installed on
-# the host. There is no cloud component and no remote sync.
+# Same stack as docker-compose.yml, but instead of building Nova from a
+# local checkout this pulls the published image from the GitHub Container
+# Registry. Use it to *deploy* Nova without cloning or building the whole
+# repository.
 #
-# Quick start (build from source — the default developer workflow):
-#   cp .env.example .env      # then edit credentials
-#   docker compose up -d
+# Quick start (no `git clone` required — just this file + an .env):
+#   # download this file and create an .env (see docs/docker.md)
+#   docker compose -f docker-compose.ghcr.yml up -d
 #   open http://localhost:8000
 #
-# Don't want to build? Deploy the prebuilt image from GHCR instead with
-# docker-compose.ghcr.yml (no checkout/build needed):
+# Update to the newest published image:
+#   docker compose -f docker-compose.ghcr.yml pull
 #   docker compose -f docker-compose.ghcr.yml up -d
 #
-# See docs/docker.md for the full guide (first-run, updates, backups,
-# pulling models, GPU, Windows browser access).
+# Your data and models live in named volumes and are NOT touched by an
+# image update. See docs/docker.md for the full guide (first-run, updates,
+# backups, pulling models, GPU, Windows browser access).
 
 services:
-  # ── Nova web application ──────────────────────────────────────────
+  # ── Nova web application (prebuilt image) ─────────────────────────
   nova:
-    # Build the image from this checkout (the default developer workflow).
-    #
-    # Prefer a prebuilt image and skip building entirely? Use the GHCR
-    # stack instead — it pulls ghcr.io/thezupzup/nova:latest:
-    #   docker compose -f docker-compose.ghcr.yml up -d
-    # (see docker-compose.ghcr.yml and docs/docker.md).
-    build:
-      context: .
-    image: nova:local
+    # Pull the published image instead of building from source. Pin a
+    # specific release by setting NOVA_IMAGE_TAG in .env (e.g.
+    # NOVA_IMAGE_TAG=1.2.3); the default `latest` tracks the main branch.
+    image: ghcr.io/thezupzup/nova:${NOVA_IMAGE_TAG:-latest}
     container_name: nova
     restart: unless-stopped
 
@@ -55,8 +52,9 @@ services:
     volumes:
       # Persistent app data: nova.db (database + memory + settings +
       # conversations) plus backups/, exports/, memory-packs/, logs/ and
-      # the auto-generated secret_key. Survives `docker compose down` and
-      # rebuilds; removed only by `docker compose down -v`.
+      # the auto-generated secret_key. Shares the same named volume as
+      # docker-compose.yml, so switching between build and prebuilt keeps
+      # your data. Removed only by `docker compose down -v`.
       - nova-data:/data
 
     depends_on:
@@ -76,8 +74,7 @@ services:
 
     # Ollama is reached by Nova over the internal compose network and does
     # not need to be published to the host. Uncomment to also expose the
-    # API on the host (e.g. to run `ollama` commands from the host or share
-    # the model server with other machines):
+    # API on the host:
     # ports:
     #   - "11434:11434"
 
@@ -91,8 +88,8 @@ services:
 
     # ── Optional NVIDIA GPU acceleration ─────────────────────────────
     # Requires the NVIDIA driver + nvidia-container-toolkit on the host.
-    # Uncomment the block below, then `docker compose up -d`. CPU-only
-    # works out of the box without this. See docs/docker.md (GPU section).
+    # Uncomment the block below, then re-run `up -d`. CPU-only works out of
+    # the box. See docs/docker.md (GPU section).
     # deploy:
     #   resources:
     #     reservations:

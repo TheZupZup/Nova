@@ -941,6 +941,23 @@ docker compose up -d
 docker compose exec ollama ollama pull gemma3:1b
 ```
 
+**Don't want to build?** A prebuilt image is published to the GitHub
+Container Registry on every push to `main` and every release tag, so you
+can deploy without cloning or building the repo. Use the bundled
+`docker-compose.ghcr.yml`, which pulls `ghcr.io/thezupzup/nova:latest`:
+
+```bash
+cp .env.example .env
+docker compose -f docker-compose.ghcr.yml up -d
+docker compose -f docker-compose.ghcr.yml exec ollama ollama pull gemma3:1b
+# update later: docker compose -f docker-compose.ghcr.yml pull && \
+#               docker compose -f docker-compose.ghcr.yml up -d
+```
+
+Pin a specific release with `NOVA_IMAGE_TAG=1.2.3` in `.env`. The same
+`nova-data` / `ollama-models` volumes are used either way, so switching
+between build and prebuilt keeps your data.
+
 Nova is reachable at `http://localhost:8000`, and from other LAN machines
 (including Windows browsers) at `http://<host-ip>:8000`. See
 [docs/docker.md](docs/docker.md) for first-run, starting/stopping, logs,
