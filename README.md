@@ -925,13 +925,27 @@ For the broader deployment story (LAN-only, VPN / Zero-Trust gateway,
 backups, and the explicit list of things Nova will never do) see
 [docs/secure-deployment.md](docs/secure-deployment.md).
 
-### Docker
+### Docker (recommended)
 
-A `Dockerfile` and `docker-compose.yml` are included. The compose
-stack persists `nova.db` in a Docker volume, keeps Ollama external
-(reachable via `OLLAMA_HOST`), and supports clean updates via
-`docker compose pull`. See [docs/docker.md](docs/docker.md) for the
-full guide.
+The fastest way to run Nova — nothing to install on the host but Docker
+itself. The included `Dockerfile` and `docker-compose.yml` bring up the
+whole stack: the Nova web app **and** a bundled Ollama model server. All
+runtime data (database, memory, settings, logs, exports) is persisted on
+a `nova-data` volume and models on an `ollama-models` volume, so rebuilds
+and updates never lose data.
+
+```bash
+cp .env.example .env
+docker compose up -d
+# pull at least one model, then open http://localhost:8000
+docker compose exec ollama ollama pull gemma3:1b
+```
+
+Nova is reachable at `http://localhost:8000`, and from other LAN machines
+(including Windows browsers) at `http://<host-ip>:8000`. See
+[docs/docker.md](docs/docker.md) for first-run, starting/stopping, logs,
+updates, backups, resetting, pulling models, optional NVIDIA GPU, and
+using Nova from a Windows browser.
 
 ### Portable workspace (systemd or Docker)
 

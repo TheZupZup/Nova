@@ -1,190 +1,361 @@
 # Running Nova with Docker
 
-Nova ships with a `Dockerfile` and `docker-compose.yml` for self-hosted deployments. This is a **local / self-hosted** setup: there is no cloud component, no remote sync, and no auto-deploy. You run Nova on a machine you control, talking to an Ollama you control.
+Nova ships a complete Docker Compose stack so you can run it **without
+installing Python, Ollama, or any dependencies on the host**. Everything
+runs in containers:
 
-> **Want one parent folder per install?** If you'd rather use **host
-> bind mounts** under a single workspace directory (so the data,
-> config, logs, and backups all live next to each other and move as
-> one unit), see [`docs/portable-workspace.md`](portable-workspace.md)
-> and the ready-to-edit
-> [`deploy/docker/docker-compose.portable.yml`](../deploy/docker/docker-compose.portable.yml).
-> The quickstart on this page uses a named Docker volume instead;
-> both are supported.
+| Container | Image | Role |
+|---|---|---|
+| `nova` | built from this repo's `Dockerfile` | Nova backend + web UI |
+| `nova-ollama` | `ollama/ollama` | local model server |
 
-> **Warning.** The container exposes Nova's web UI on the network. Do not publish port 8080 to the public internet without a reverse proxy and TLS in front of it. Defaults in `.env.example` are intentionally weak; change them before the first start.
+This is a **local / self-hosted** setup: no cloud component, no remote
+sync, no auto-deploy. It is designed for a Linux AI/project PC, a NAS
+that runs Docker, and Windows machines that connect to Nova through a
+browser.
+
+> **Heads-up on exposure.** The stack publishes Nova's web UI on your
+> LAN (`http://<host-ip>:8000`). Change `NOVA_USERNAME` / `NOVA_PASSWORD`
+> before exposing it, and do **not** forward port 8000 to the public
+> internet without a reverse proxy and TLS in front of it. Admin-only and
+> alpha-only features are **off by default** and stay off unless you opt
+> in (see [Admin / alpha features](#admin--alpha-features-stay-off)).
+
+---
 
 ## What ends up where
 
-| Component | Location |
-|---|---|
-| Application code | Inside the image at `/app` |
-| SQLite database (`nova.db`) | Docker volume `nova-data`, mounted at `/data` |
-| Credentials | `.env` on the host, passed in via `docker compose` |
-| Ollama models | **Outside the container.** Nova calls Ollama over the network. |
+Nova keeps **all** of its runtime state on Docker volumes, never in the
+disposable container layer:
 
-The image contains no secrets and no database. Pulling a new version cannot overwrite your data.
+| Data | Volume | Path in container |
+|---|---|---|
+| Database — incl. **memory, settings, conversations** (`nova.db`) | `nova-data` | `/data/nova.db` |
+| Logs | `nova-data` | `/data/logs/` |
+| Exports / user-generated files | `nova-data` | `/data/exports/` |
+| Memory packs | `nova-data` | `/data/memory-packs/` |
+| Backups (sidecar) | `nova-data` | `/data/backups/` |
+| Auto-generated session key | `nova-data` | `/data/secret_key` |
+| **Ollama models** | `ollama-models` | `/root/.ollama` |
+
+> **Why one volume for the database, memory, and settings?** In Nova,
+> memory, settings, and conversations are not separate folders — they are
+> tables **inside the single `nova.db` SQLite file**. So one `nova-data`
+> volume cleanly persists the database + memory + settings + logs + user
+> files together. Chat image attachments are stored inside `nova.db`
+> (base64), so there is no separate uploads directory to mount.
+
+The image contains **no secrets, no database, and no models**. Pulling or
+rebuilding a new version cannot overwrite your data.
+
+---
 
 ## Prerequisites
 
-- Docker Engine 24+ and the `docker compose` plugin
-- An Ollama instance reachable from the container (see [Connecting to Ollama](#connecting-to-ollama))
-- The Ollama models referenced in `config.py` already pulled on that Ollama instance
+- Docker Engine 24+ with the `docker compose` plugin (Docker Desktop on
+  Windows/macOS already includes it).
+- Enough disk for the models you pull (see
+  [Pulling Ollama models](#pulling--downloading-ollama-models)).
 
-## First run
+No Python, no Ollama, and no other host packages are required.
+
+---
+
+## First-time setup
 
 ```bash
 git clone https://github.com/TheZupZup/Nova.git
 cd Nova
 
 cp .env.example .env
-# Edit .env and set:
-#   NOVA_USERNAME       — your login
-#   NOVA_PASSWORD       — your password (change before first start)
-#   NOVA_SECRET_KEY     — a long random string used to sign JWTs
-#   OLLAMA_HOST         — see "Connecting to Ollama" below
-# Optionally set NOVA_CHANNEL=stable|beta|alpha.
+# Edit .env and set at least:
+#   NOVA_USERNAME   — your admin login
+#   NOVA_PASSWORD   — change it from the default
+# Everything else has working defaults.
 
 docker compose up -d
 ```
 
-Nova is now reachable at `http://<host>:8080`. Log in with the credentials you set in `.env`.
+The first `up`:
 
-To follow logs:
+1. builds the `nova` image from this checkout,
+2. starts the `ollama` model server (waits until it's healthy),
+3. starts Nova and creates the admin account from `.env`.
+
+Open **http://localhost:8000** and log in. From another machine on the
+same network use **http://&lt;host-ip&gt;:8000**.
+
+Then pull at least one model so Nova can reply — see
+[Pulling Ollama models](#pulling--downloading-ollama-models).
+
+> The session signing key is generated automatically on first start and
+> stored at `/data/secret_key`, so you don't have to set `NOVA_SECRET_KEY`
+> yourself. Logins survive restarts and rebuilds.
+
+---
+
+## Everyday operations
+
+### Starting Nova
 
 ```bash
-docker compose logs -f nova
-```
-
-## Updating
-
-The image is published to GHCR as `ghcr.io/thezupzup/nova:latest`. To update:
-
-```bash
-docker compose pull
 docker compose up -d
 ```
 
-This replaces the container but leaves the `nova-data` volume — and therefore `nova.db` — untouched.
-
-If you'd rather build from your local checkout, edit `docker-compose.yml`: comment the `image:` line and uncomment `build: .`, then:
+### Stopping Nova
 
 ```bash
-docker compose build
+docker compose stop          # stop containers, keep them
+# or
+docker compose down          # stop and remove containers (data volumes kept)
+```
+
+`down` removes the containers but **not** the `nova-data` /
+`ollama-models` volumes — your database and models are safe.
+
+### Viewing logs
+
+```bash
+docker compose logs -f            # both services, follow
+docker compose logs -f nova       # just Nova
+docker compose logs -f ollama     # just the model server
+docker compose logs --tail=200 nova
+```
+
+### Checking status
+
+```bash
+docker compose ps                 # health/status of both containers
+```
+
+### Updating Nova
+
+Because the image is built from this checkout, update the code and
+rebuild:
+
+```bash
+git pull
+docker compose up -d --build      # rebuild Nova, restart, keep all data
+```
+
+To also update the model server image:
+
+```bash
+docker compose pull ollama
 docker compose up -d
 ```
 
-## Where data is stored
+> **Prefer a prebuilt image?** Edit `docker-compose.yml`: comment the
+> `build:` block and uncomment `image: ghcr.io/thezupzup/nova:latest`.
+> Then update with `docker compose pull && docker compose up -d`.
 
-`nova.db` lives in the named Docker volume `nova-data`, mounted inside the container at `/data`. The application's relative `nova.db` path is symlinked into that volume by the entrypoint, so app code sees it at the usual location without any code change.
+### Resetting containers without deleting data
 
-To find the path on disk:
+Recreate the containers from scratch while keeping the database and
+models:
 
 ```bash
-docker volume inspect nova-data --format '{{ .Mountpoint }}'
+docker compose down               # removes containers only (NOT volumes)
+docker compose up -d --force-recreate
 ```
 
-On a default Linux Docker install this is typically `/var/lib/docker/volumes/nova-data/_data`.
+Your `nova-data` and `ollama-models` volumes are untouched. The
+**destructive** variant is `docker compose down -v`, which deletes the
+volumes (database, conversations, and downloaded models). Only use it
+when you truly want a clean slate.
 
-### Backing up `nova.db`
+---
 
-Stop the container before copying the file to avoid catching it mid-write:
+## Pulling / downloading Ollama models
+
+No models are bundled. Pull the ones Nova uses into the running `ollama`
+container — they land in the `ollama-models` volume and persist across
+rebuilds:
+
+```bash
+# Lightweight router/classifier + general chat (start here):
+docker compose exec ollama ollama pull gemma3:1b
+docker compose exec ollama ollama pull gemma4
+
+# Optional, for coding and "advanced" requests (larger downloads):
+docker compose exec ollama ollama pull deepseek-coder-v2
+docker compose exec ollama ollama pull qwen2.5:32b
+```
+
+These are the model names Nova references in `config.py`. `qwen2.5:32b`
+needs significant disk and RAM; if your hardware is constrained, skip it
+— the router falls back to `gemma4` for advanced requests.
+
+List and remove models:
+
+```bash
+docker compose exec ollama ollama list
+docker compose exec ollama ollama rm <model>
+```
+
+Because models live in the `ollama-models` volume, you only download them
+once. `docker compose down`, `up --build`, and image updates do not delete
+them — only `docker compose down -v` does.
+
+---
+
+## Backing up persistent data
+
+Everything important is in two volumes. Stop the app first so the SQLite
+file is copied in a consistent state.
+
+**Back up the Nova database + files (`nova-data`):**
 
 ```bash
 docker compose stop nova
 docker run --rm -v nova-data:/data -v "$PWD":/backup alpine \
-    cp /data/nova.db /backup/nova.db.$(date +%Y%m%d-%H%M%S)
+    tar czf /backup/nova-data-$(date +%Y%m%d-%H%M%S).tar.gz -C /data .
 docker compose start nova
 ```
 
-Restore by copying a backup back into the volume the same way before starting the container.
-
-> **Backup note.** `nova.db` is a single SQLite file. Copy it while the app is stopped, or use SQLite's `.backup` command against a live DB. Don't copy it under load — you may capture an inconsistent snapshot.
-
-## Connecting to Ollama
-
-Nova does **not** bundle Ollama. The container reaches Ollama over the network via `OLLAMA_HOST`. Three common setups:
-
-### 1. Ollama on the same host as Docker (Linux)
-
-Use the `host.docker.internal` alias wired up by the `extra_hosts` entry in `docker-compose.yml`:
-
-```env
-OLLAMA_HOST=http://host.docker.internal:11434
-```
-
-Make sure Ollama is listening on an interface the container can reach. By default `ollama serve` binds to `127.0.0.1`, which is **not** reachable from inside the container. Bind to all interfaces:
+**Back up the Ollama models (`ollama-models`, optional — they can be
+re-pulled):**
 
 ```bash
-OLLAMA_HOST=0.0.0.0 ollama serve
+docker run --rm -v ollama-models:/models -v "$PWD":/backup alpine \
+    tar czf /backup/ollama-models-$(date +%Y%m%d-%H%M%S).tar.gz -C /models .
 ```
 
-(or set `Environment=OLLAMA_HOST=0.0.0.0` in your Ollama systemd unit).
+**Restore** by extracting an archive back into the volume while the
+stack is stopped:
 
-### 2. Ollama on the same host (Docker Desktop, macOS / Windows)
+```bash
+docker compose down
+docker run --rm -v nova-data:/data -v "$PWD":/backup alpine \
+    sh -c "rm -rf /data/* && tar xzf /backup/nova-data-YYYYMMDD-HHMMSS.tar.gz -C /data"
+docker compose up -d
+```
 
-`host.docker.internal` resolves natively. The same `OLLAMA_HOST=http://host.docker.internal:11434` works without extra setup.
+> Nova also keeps an in-app export/restore flow (Settings → admin) that
+> writes to `/data/exports`. The volume-level backup above is the
+> simplest full-image snapshot.
 
-### 3. Ollama on a different machine
+---
 
-Point `OLLAMA_HOST` at that machine's LAN IP:
+## Using Nova from Windows as a browser client
+
+You do **not** install Nova on Windows. Run the stack on your Linux PC or
+NAS, then just open a browser on the Windows machine:
+
+1. Start the stack on the host (`docker compose up -d`).
+2. Find the host's LAN IP (on Linux: `ip addr` / `hostname -I`).
+3. On the Windows machine, browse to **`http://<host-ip>:8000`** — for
+   example `http://192.168.1.42:8000`.
+4. Log in with your `NOVA_USERNAME` / `NOVA_PASSWORD`.
+
+If it doesn't load from Windows but works as `http://localhost:8000` on
+the host:
+
+- Make sure the host firewall allows inbound TCP **8000**
+  (e.g. `sudo firewall-cmd --add-port=8000/tcp` on Fedora, or
+  `sudo ufw allow 8000/tcp` on Ubuntu).
+- Confirm both machines are on the same network/subnet.
+- The container publishes on all interfaces by default, so no Nova-side
+  change is needed.
+
+You can pin Nova to a different host port by setting `NOVA_HOST_PORT` in
+`.env` (e.g. `NOVA_HOST_PORT=9000` → browse to `:9000`).
+
+---
+
+## Connecting to an external Ollama instead of the bundled one
+
+By default Nova talks to the bundled `ollama` container. To use an Ollama
+running elsewhere (another machine, your NAS, a GPU box), set `OLLAMA_HOST`
+in `.env`:
 
 ```env
 OLLAMA_HOST=http://192.168.1.50:11434
 ```
 
-The other machine must be running Ollama with `OLLAMA_HOST=0.0.0.0` so the port is reachable across the network.
+That other Ollama must listen on a reachable interface
+(`OLLAMA_HOST=0.0.0.0 ollama serve`). You can also stop the bundled model
+server with `docker compose stop ollama` if you don't need it.
 
-## Changing the password before first start
+---
 
-Always set `NOVA_PASSWORD` in `.env` before the first `docker compose up`. The very first start creates the admin record from these environment variables.
+## Optional: NVIDIA GPU acceleration
 
-If you've already started the container with the default password and want to rotate it before exposing Nova:
+CPU works out of the box. To let Ollama use an NVIDIA GPU:
 
-```bash
-docker compose down
-# Edit .env, set the new NOVA_PASSWORD
-docker volume rm nova-data    # destructive: wipes nova.db, including conversations
-docker compose up -d
-```
+1. Install the NVIDIA driver and the
+   [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
+   on the host.
+2. In `docker-compose.yml`, uncomment the `deploy:` GPU block under the
+   `ollama` service.
+3. `docker compose up -d` and verify with:
 
-If you don't want to wipe the database, change the password from inside Nova's settings UI after logging in instead.
+   ```bash
+   docker compose exec ollama nvidia-smi
+   ```
 
-## Environment variables forwarded to the container
+Only the `ollama` container needs the GPU — Nova itself is CPU-only.
 
-| Variable | Required | Purpose |
-|---|---|---|
-| `NOVA_USERNAME` | yes | Admin login |
-| `NOVA_PASSWORD` | yes | Admin password (change before first start) |
-| `NOVA_SECRET_KEY` | yes | JWT signing secret — long random string |
-| `OLLAMA_HOST` | yes | URL of your Ollama instance |
-| `NOVA_CHANNEL` | no | `stable` (default), `beta`, or `alpha` |
-| `NOVA_BRANCH` | no | Display-only branch label |
-| `NOVA_ADMIN_UI` | no | `true` to expose admin-only UI controls |
-| `NOVA_AUTO_WEB_LEARNING` | no | `true` to enable background RSS learning |
+---
 
-The `alpha` channel additionally requires `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, and `NOVA_ALPHA_ALLOWED_USERS`. See `.env.example` for details — add them under `environment:` in `docker-compose.yml` if you use that channel.
+## Admin / alpha features stay off
 
-## What this deployment does NOT do
+The default Docker configuration does **not** expose admin-only or
+alpha-only functionality:
 
-- No bundled Ollama. Models are not downloaded by the image.
-- No automatic updates. You run `docker compose pull` when you want to update.
-- No remote deploy hook. Nothing in this repo will push to your server for you.
-- No telemetry, cloud sync, or third-party calls beyond Nova's existing optional integrations.
+- `NOVA_ADMIN_UI=false` — admin-only UI controls are hidden.
+- `NOVA_CHANNEL=stable` — the alpha GitHub-OAuth gate is inactive.
+- Maintenance Center, Dev Workspace, and all integrations
+  (SilentGuard, NexaNote, GitHub, Jellyfin) default to **off**.
+
+Leave these as-is unless you intentionally opt in. See `.env.example` for
+each switch.
+
+---
 
 ## Troubleshooting
 
-**`Cannot connect to Ollama`**
-Check `OLLAMA_HOST` from inside the container:
+**Nova replies with a model/connection error.**
+You probably haven't pulled a model yet, or the model name Nova requested
+isn't present. Check:
+
 ```bash
-docker compose exec nova python -c "import os, httpx; print(httpx.get(os.environ['OLLAMA_HOST']+'/api/tags').text)"
+docker compose exec ollama ollama list
+docker compose exec nova python -c \
+  "import os,urllib.request; print(urllib.request.urlopen(os.environ['OLLAMA_HOST']+'/api/tags',timeout=5).read()[:200])"
 ```
-If this fails, Ollama is either not running, not bound to a reachable interface, or blocked by a firewall.
 
-**`docker compose pull` says credentials are missing**
-The compose file requires `NOVA_USERNAME`, `NOVA_PASSWORD`, and `NOVA_SECRET_KEY` to be set. They live in `.env` next to `docker-compose.yml`. They are not needed for `docker compose pull` itself, but `docker compose up` validates them.
+**`docker compose up` fails saying `.env` is missing.**
+Run `cp .env.example .env` first.
 
-**Want to start over from a clean state**
+**Port 8000 is already in use.**
+Set `NOVA_HOST_PORT` to a free port in `.env`, then `docker compose up -d`.
+
+**Permission errors on the data volume.**
+The default named volume is initialised with the right ownership
+automatically. If you switched `nova-data` to a host **bind mount**, make
+the host directory writable by UID 1000 (the `nova` user):
+`sudo chown -R 1000:1000 /your/host/path`.
+
+**Start over completely (deletes data).**
+
 ```bash
-docker compose down -v   # removes the nova-data volume — DESTRUCTIVE
+docker compose down -v
 docker compose up -d
 ```
+
+---
+
+## What this deployment does NOT do
+
+- No telemetry, cloud sync, or third-party calls beyond Nova's existing
+  optional integrations.
+- No automatic model downloads — you pull models explicitly.
+- No automatic updates — you run `docker compose up -d --build` when you
+  want to update.
+- No reverse proxy or TLS is bundled. Add your own if you expose Nova
+  beyond a trusted LAN (see [`docs/secure-deployment.md`](secure-deployment.md)).
+
+For a host-bind-mount layout where data/config/logs live under one parent
+folder, see [`docs/portable-workspace.md`](portable-workspace.md) and
+[`deploy/docker/docker-compose.portable.yml`](../deploy/docker/docker-compose.portable.yml).

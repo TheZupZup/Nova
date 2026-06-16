@@ -1,14 +1,17 @@
 # syntax=docker/dockerfile:1.7
 
 # Nova — self-hosted local AI assistant
-# Build: docker build -t nova .
-# Run:   docker run -p 8080:8080 --env-file .env -v nova-data:/data nova
+#
+# Build:  docker build -t nova .
+# Run:    docker compose up -d           (recommended — see docker-compose.yml)
 #
 # This image bundles only the application code and Python dependencies.
 # It contains NO secrets, NO database, and NO Ollama models.
-#   - Credentials are passed at runtime via environment variables.
-#   - The SQLite database is stored on a host-managed volume (/data).
-#   - Ollama runs externally and is reached over the network via OLLAMA_HOST.
+#   - Credentials are passed at runtime via environment variables (.env).
+#   - All runtime data (nova.db, logs, exports, backups) lives on the
+#     /data volume, never in the disposable container layer.
+#   - Ollama runs as its own container and is reached over the Docker
+#     network via OLLAMA_HOST (see docker-compose.yml).
 
 FROM python:3.11-slim AS base
 
@@ -16,6 +19,14 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
+
+# Persist all runtime state under /data by default so a stock
+# `docker run -v nova-data:/data nova` keeps nothing important in the
+# container layer. core/paths.py reads NOVA_DATA_DIR and places nova.db +
+# backups/exports/memory-packs/logs underneath it. NOVA_PORT is the port
+# uvicorn binds inside the container; both are overridable at runtime.
+ENV NOVA_DATA_DIR=/data \
+    NOVA_PORT=8000
 
 WORKDIR /app
 
@@ -32,8 +43,8 @@ RUN pip install -r requirements.txt
 # __pycache__, tests, and other local artefacts from entering the image.
 COPY . .
 
-# Drop privileges. The /data volume is chowned by the entrypoint at runtime
-# so a host bind-mount with arbitrary ownership still works.
+# Drop privileges. /data is created and chowned here; the entrypoint also
+# ensures it exists at runtime so a host bind-mount still works.
 RUN useradd --system --create-home --uid 1000 nova \
     && mkdir -p /data \
     && chown -R nova:nova /app /data
@@ -43,9 +54,19 @@ RUN chmod +x /usr/local/bin/nova-entrypoint
 
 USER nova
 
-EXPOSE 8080
+EXPOSE 8000
 
 VOLUME ["/data"]
 
+# Liveness check: uvicorn is serving the web UI. Uses only the stdlib so
+# no extra packages are needed. A <500 response means the app is up.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=5 \
+    CMD python -c "import os,sys,urllib.request; \
+url='http://127.0.0.1:'+os.environ.get('NOVA_PORT','8000')+'/'; \
+sys.exit(0 if urllib.request.urlopen(url, timeout=3).status < 500 else 1)" \
+    || exit 1
+
 ENTRYPOINT ["tini", "--", "/usr/local/bin/nova-entrypoint"]
-CMD ["uvicorn", "web:app", "--host", "0.0.0.0", "--port", "8080"]
+# Shell form so ${NOVA_PORT} is expanded at runtime; `exec` keeps uvicorn
+# as the child tini supervises so signals propagate cleanly.
+CMD ["sh", "-c", "exec uvicorn web:app --host 0.0.0.0 --port ${NOVA_PORT:-8000}"]
