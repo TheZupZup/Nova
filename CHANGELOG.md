@@ -1,6 +1,49 @@
 # Changelog
 
 ## Unreleased
+### Added
+- **Nova Memory Pack — portable chat/memory export & import.** Nova can
+  now export a `.zip` of *structured JSON* (not a raw database dump) so a
+  user can carry their useful context to another install or device and
+  have the assistant "remember them". New module
+  [`core/memory_pack.py`](core/memory_pack.py) builds and validates the
+  pack; three authenticated FastAPI endpoints wire it up in `web.py`:
+  `POST /memory-pack/export` (streams the `.zip` download and writes a
+  copy to `NOVA_DATA_DIR/memory-packs/`), `POST /memory-pack/import/preview`
+  (dry-run that counts new vs. duplicate items and writes nothing), and
+  `POST /memory-pack/import?confirm=true` (the confirmed, merge-only
+  import). A new **Settings → Data** pane adds "Export Nova Memory Pack"
+  and "Import Nova Memory Pack" (preview-first, confirm-before-write)
+  controls for every authenticated user — **not** admin/alpha-gated, and
+  distinct from the admin-only `/admin/storage/*` raw-`nova.db` export.
+  The pack contains `manifest.json`, `profile.json`, `memories.json`
+  (classic + natural memories, **no embeddings**), `conversations.json`
+  (conversations with nested messages), `summaries.json` (a generated
+  session-continuity recap), and `settings.json` (safe per-user
+  preferences). It **never** contains password hashes, API keys,
+  GitHub/OAuth tokens, the JWT secret, session cookies, or the host
+  `settings` table; per-user settings additionally pass a secret-shaped
+  key/value denylist so a future sensitive key cannot leak. Import is
+  **merge by default** (keeps existing data, adds only what is missing,
+  de-duplicates classic memories on `(category, content)`, natural
+  memories on `(kind, topic, content)`, conversations on
+  `(title, created)`, and fills only missing settings), runs inside a
+  single SQLite transaction (any failure rolls back and the database is
+  left untouched), and validates the archive for path traversal (`../`,
+  absolute paths, drive letters, symlinks), member count, zip-bomb size,
+  per-file JSON validity, and a manifest `format_version` this build
+  understands before writing anything. Uploads over 50 MB are rejected
+  with `413`. Forward-compatible: every file carries a `version`, unknown
+  files/keys are ignored, optional files may be missing, and a
+  newer-than-supported pack is refused with a clear message. Under Docker
+  the exported copy lands on the mounted `nova-data` volume at
+  `/data/memory-packs/`. Fully covered by
+  [`tests/test_memory_pack.py`](tests/test_memory_pack.py) (manifest
+  generation, secret exclusion, invalid-zip / traversal / symlink /
+  zip-bomb rejection, merge + duplicate handling, transactional
+  rollback, Docker data path, and the HTTP endpoints). See
+  [docs/nova-memory-pack.md](docs/nova-memory-pack.md).
+
 ### Changed
 - **Removed the Tone Profile selector from the Settings UI.** Because
   Nova is now warm, patient, and emotionally aware by default (the

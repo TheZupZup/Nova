@@ -75,6 +75,7 @@ from core import provider_status as _provider_status
 from core import model_settings as _model_settings
 from core import gguf_settings as _gguf_settings
 from core import data_export as _data_export
+from core import memory_pack as _memory_pack
 from core import voice as _voice
 import sqlite3 as _sqlite3
 from core import users as _users_mod
@@ -1397,6 +1398,129 @@ def add_memory(
         )
     save_memory(request.category, request.content, user.id)
     return {"ok": True}
+
+
+# ── NOVA MEMORY PACK (portable export / import) ──
+#
+# A Memory Pack is a per-user .zip of structured JSON (memories,
+# conversations, generated summaries, and safe preferences) so a user
+# can carry their Nova context to another install/device. Unlike the
+# admin-only /admin/storage/* endpoints (which ship the raw nova.db),
+# these are available to any authenticated user and operate only on
+# that user's own data. The pack never contains secrets.
+
+async def _read_pack_upload(request: Request) -> bytes:
+    """Read a raw ``.zip`` upload body with a hard size cap.
+
+    The pack is sent as the raw request body (no multipart) so we can
+    enforce a strict in-memory size limit before doing any work.
+    Returns the bytes or raises 413 (too large) / 400 (empty).
+    """
+    declared = request.headers.get("content-length")
+    if declared is not None:
+        try:
+            if int(declared) > _memory_pack.MAX_UPLOAD_BYTES:
+                raise HTTPException(
+                    status_code=413, detail="Memory pack is too large.",
+                )
+        except ValueError:
+            pass
+    body = await request.body()
+    if len(body) > _memory_pack.MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="Memory pack is too large.")
+    if not body:
+        raise HTTPException(status_code=400, detail="No file was uploaded.")
+    return body
+
+
+@app.post("/memory-pack/export")
+def memory_pack_export(user: CurrentUser = Depends(get_current_user)):
+    """Build and download a Nova Memory Pack for the current user.
+
+    Streams a ``.zip`` of structured JSON and also writes a copy into
+    ``NOVA_DATA_DIR/memory-packs`` (best effort) so Docker installs keep
+    one on the persistent volume. The pack never contains secrets.
+    """
+    try:
+        result = _memory_pack.build_memory_pack(user.id)
+    except Exception:  # noqa: BLE001 - surface a safe 500, never a stack trace
+        raise HTTPException(
+            status_code=500, detail="Could not build the memory pack.",
+        )
+    # Persist a copy to the data volume; a read-only data dir is not fatal.
+    _memory_pack.write_pack_to_data_dir(result)
+    counts = result.counts
+    headers = {
+        "Content-Disposition": f'attachment; filename="{result.filename}"',
+        "Cache-Control": "no-store",
+        "X-Nova-Memory-Pack-Memories": str(
+            counts["memories"] + counts["natural_memories"]
+        ),
+        "X-Nova-Memory-Pack-Conversations": str(counts["conversations"]),
+        "X-Nova-Memory-Pack-Settings": str(counts["settings"]),
+    }
+    return Response(
+        content=result.data, media_type="application/zip", headers=headers,
+    )
+
+
+@app.post("/memory-pack/import/preview")
+async def memory_pack_import_preview(
+    request: Request,
+    user: CurrentUser = Depends(get_current_user),
+):
+    """Validate an uploaded pack and report what a merge would do.
+
+    Writes nothing — this is the dry-run step the UI shows before the
+    user confirms. Returns counts (new vs. duplicate), warnings, and
+    the pack manifest.
+    """
+    body = await _read_pack_upload(request)
+    return _memory_pack.build_import_preview(body, user.id).as_dict()
+
+
+@app.post("/memory-pack/import")
+async def memory_pack_import(
+    request: Request,
+    confirm: bool = False,
+    mode: str = "merge",
+    user: CurrentUser = Depends(get_current_user),
+):
+    """Merge an uploaded pack into the current user's data.
+
+    Requires ``?confirm=true`` (never imports blindly). Importing
+    writes memories/conversations, so it honours the same per-account
+    policy gate as the manual "add memory" endpoint. The merge runs in
+    a single transaction; on any failure the database is unchanged.
+    """
+    policy = get_policy(user)
+    if not policy.memory_save_enabled:
+        raise HTTPException(
+            status_code=403,
+            detail="Memory saving is disabled for this account.",
+        )
+    if not confirm:
+        raise HTTPException(
+            status_code=400,
+            detail="Import requires explicit confirmation (?confirm=true).",
+        )
+    body = await _read_pack_upload(request)
+    result = _memory_pack.import_memory_pack(
+        body, user.id, confirm=True, mode=mode,
+    )
+    if result.outcome == _memory_pack.OUTCOME_REFUSED:
+        raise HTTPException(
+            status_code=400,
+            detail="; ".join(result.errors)
+            or "The memory pack could not be imported.",
+        )
+    if result.outcome == _memory_pack.OUTCOME_FAILED:
+        raise HTTPException(
+            status_code=500,
+            detail="; ".join(result.errors)
+            or "Import failed; no changes were made.",
+        )
+    return result.as_dict()
 
 
 # ── FEEDBACK ENDPOINTS ──

@@ -3437,6 +3437,7 @@
                 <button class="settings-nav-btn" data-pane="memory" onclick="switchSettingsPane('memory')" id="settings-nav-memory">Memory</button>
                 <button class="settings-nav-btn" data-pane="voice" onclick="switchSettingsPane('voice')" id="settings-nav-voice">Voice</button>
                 <button class="settings-nav-btn" data-pane="models" onclick="switchSettingsPane('models')" id="settings-nav-models">Models</button>
+                <button class="settings-nav-btn" data-pane="data" onclick="switchSettingsPane('data')" id="settings-nav-data">Data</button>
                 <button class="settings-nav-btn" data-pane="admin" onclick="switchSettingsPane('admin')" id="settings-nav-admin" style="display:none;">Admin</button>
                 <div class="settings-nav-divider"></div>
                 <button class="settings-nav-btn" data-pane="account" onclick="switchSettingsPane('account')" id="settings-nav-account">Account</button>
@@ -3905,6 +3906,40 @@
                             </div>
                             <div id="maintenance-detail-status" style="margin-top:8px;color:var(--text);"></div>
                         </div>
+                    </div>
+                </section>
+
+                <!-- DATA — Nova Memory Pack (portable export / import) -->
+                <section class="settings-pane" id="settings-pane-data">
+                    <div class="settings-section-title" id="settings-data-title">Data — Nova Memory Pack</div>
+                    <div class="settings-row-hint" id="settings-data-note">
+                        Carry your Nova context to another install or device. A Memory Pack is a <code>.zip</code> of structured JSON — your memories, conversations, generated summaries, and safe preferences. It never contains passwords, API keys, or tokens.
+                    </div>
+
+                    <!-- Export -->
+                    <div class="settings-row">
+                        <div class="settings-row-head">
+                            <div class="settings-row-label">
+                                <span class="settings-row-title" id="memory-pack-export-title">Export Nova Memory Pack</span>
+                                <span class="settings-row-hint" id="memory-pack-export-hint">Download a <code>.zip</code> of your data. ⚠ It may contain personal conversation history — store it somewhere safe.</span>
+                            </div>
+                            <button class="memory-btn" id="memory-pack-export-btn" onclick="exportMemoryPack()">Export</button>
+                        </div>
+                        <div id="memory-pack-export-status" class="settings-row-hint" style="min-height:0;"></div>
+                    </div>
+
+                    <!-- Import -->
+                    <div class="settings-row">
+                        <div class="settings-row-head">
+                            <div class="settings-row-label">
+                                <span class="settings-row-title" id="memory-pack-import-title">Import Nova Memory Pack</span>
+                                <span class="settings-row-hint" id="memory-pack-import-hint">Merge a pack into this account. Existing data is kept; only missing memories and conversations are added. You'll see a preview before anything is saved.</span>
+                            </div>
+                            <button class="memory-btn" id="memory-pack-import-btn" onclick="document.getElementById('memory-pack-file').click()">Choose .zip…</button>
+                        </div>
+                        <input type="file" id="memory-pack-file" accept=".zip,application/zip" style="display:none" onchange="onMemoryPackFileSelected(event)" />
+                        <div id="memory-pack-import-error" class="settings-row-hint" style="color:var(--danger);min-height:0;"></div>
+                        <div id="memory-pack-import-preview" style="display:none;"></div>
                     </div>
                 </section>
 
@@ -8910,6 +8945,9 @@
             loadDefaultModelCard().catch(() => {});
             loadGgufCard().catch(() => {});
         }
+        if (pane === "data") {
+            resetMemoryPackUI();
+        }
     }
 
     function applySettingsAdminVisibility() {
@@ -8919,6 +8957,193 @@
         navAdmin.style.display = isAdmin ? "" : "none";
         if (!isAdmin && settingsCurrentPane === "admin") {
             settingsCurrentPane = "general";
+        }
+    }
+
+    // ── Nova Memory Pack (portable export / import) ──────────────────
+    // Available to every authenticated user (NOT admin-gated). Export
+    // streams a .zip download; import is a preview-first, merge-only,
+    // confirm-before-write flow. The server enforces all the real
+    // safety rules — this is just calm UI on top of it.
+
+    let _memoryPackFile = null;
+
+    function resetMemoryPackUI() {
+        _memoryPackFile = null;
+        const err = document.getElementById("memory-pack-import-error");
+        if (err) err.textContent = "";
+        const status = document.getElementById("memory-pack-export-status");
+        if (status) { status.textContent = ""; status.style.color = ""; }
+        const box = document.getElementById("memory-pack-import-preview");
+        if (box) { box.style.display = "none"; box.innerHTML = ""; }
+    }
+
+    async function exportMemoryPack() {
+        const btn = document.getElementById("memory-pack-export-btn");
+        const status = document.getElementById("memory-pack-export-status");
+        if (!confirm(
+            "Export a Nova Memory Pack?\n\n" +
+            "The .zip may contain personal conversation history and " +
+            "long-term memories. Keep it somewhere safe and only import " +
+            "it into a Nova you trust. It never contains passwords, API " +
+            "keys, or tokens."
+        )) return;
+        const token = localStorage.getItem("nova_token");
+        btn.disabled = true;
+        status.style.color = "";
+        status.textContent = "Building your Memory Pack…";
+        try {
+            const res = await fetch("/memory-pack/export", {
+                method: "POST",
+                headers: { "Authorization": `Bearer ${token}` },
+            });
+            if (res.status === 401) { logout(); return; }
+            if (!res.ok) {
+                let detail = "Export failed.";
+                try { const b = await res.json(); if (b && b.detail) detail = b.detail; } catch {}
+                status.style.color = "var(--danger)";
+                status.textContent = detail;
+                return;
+            }
+            const mems = res.headers.get("x-nova-memory-pack-memories") || "0";
+            const convs = res.headers.get("x-nova-memory-pack-conversations") || "0";
+            let fname = "nova-memory-pack.zip";
+            const cd = res.headers.get("content-disposition") || "";
+            const m = cd.match(/filename="?([^"]+)"?/);
+            if (m) fname = m[1];
+            const blob = await res.blob();
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = fname;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            URL.revokeObjectURL(url);
+            status.style.color = "";
+            status.textContent = `Exported ${mems} memories and ${convs} conversations to ${fname}.`;
+        } catch (e) {
+            status.style.color = "var(--danger)";
+            status.textContent = "Export failed. Please try again.";
+        } finally {
+            btn.disabled = false;
+        }
+    }
+
+    function onMemoryPackFileSelected(event) {
+        const file = event.target.files && event.target.files[0];
+        event.target.value = "";  // allow re-selecting the same file later
+        if (!file) return;
+        _memoryPackFile = file;
+        memoryPackPreview(file);
+    }
+
+    async function memoryPackPreview(file) {
+        const errEl = document.getElementById("memory-pack-import-error");
+        const box = document.getElementById("memory-pack-import-preview");
+        errEl.textContent = "";
+        box.style.display = "none";
+        box.innerHTML = "";
+        const token = localStorage.getItem("nova_token");
+        try {
+            const res = await fetch("/memory-pack/import/preview", {
+                method: "POST",
+                headers: {
+                    "Authorization": `Bearer ${token}`,
+                    "Content-Type": "application/zip",
+                },
+                body: file,
+            });
+            if (res.status === 401) { logout(); return; }
+            const body = await res.json().catch(() => null);
+            if (!res.ok) {
+                errEl.textContent = (body && body.detail) ? body.detail : "Could not read that file.";
+                return;
+            }
+            if (!body || !body.valid) {
+                const why = (body && body.errors && body.errors.length)
+                    ? body.errors.join("; ") : "it is not a valid Nova Memory Pack.";
+                errEl.textContent = "Cannot import: " + why;
+                return;
+            }
+            renderMemoryPackPreview(body);
+        } catch (e) {
+            errEl.textContent = "Could not read that file.";
+        }
+    }
+
+    function renderMemoryPackPreview(preview) {
+        const box = document.getElementById("memory-pack-import-preview");
+        const c = preview.counts || {};
+        const memNew = ((c.memories && c.memories.new) || 0) +
+            ((c.natural_memories && c.natural_memories.new) || 0);
+        const convNew = (c.conversations && c.conversations.new) || 0;
+        const setNew = (c.settings && c.settings.applicable) || 0;
+        const warnings = preview.warnings || [];
+        let html = '<div class="settings-row" style="margin-top:10px;">';
+        html += '<div class="settings-row-hint" style="color:var(--text);">This pack would add:</div>';
+        html += '<ul style="margin:6px 0 0 18px;padding:0;">';
+        html += `<li>${memNew} new memories</li>`;
+        html += `<li>${convNew} new conversations</li>`;
+        html += `<li>${setNew} new settings</li>`;
+        html += '</ul>';
+        if (warnings.length) {
+            html += '<div class="settings-row-hint" style="color:var(--danger);margin-top:6px;">' +
+                warnings.map(escapeHtml).join("<br>") + '</div>';
+        }
+        html += '<div class="settings-row-hint" style="margin-top:6px;">Existing data is kept and duplicates are skipped (merge).</div>';
+        html += '<div style="display:flex;gap:8px;margin-top:10px;">';
+        html += '<button class="memory-btn" id="memory-pack-confirm-btn" onclick="confirmMemoryPackImport()">Merge into my account</button>';
+        html += '<button class="memory-btn" onclick="cancelMemoryPackImport()">Cancel</button>';
+        html += '</div></div>';
+        box.innerHTML = html;
+        box.style.display = "block";
+    }
+
+    function cancelMemoryPackImport() {
+        _memoryPackFile = null;
+        const box = document.getElementById("memory-pack-import-preview");
+        box.style.display = "none";
+        box.innerHTML = "";
+    }
+
+    async function confirmMemoryPackImport() {
+        if (!_memoryPackFile) return;
+        const errEl = document.getElementById("memory-pack-import-error");
+        const box = document.getElementById("memory-pack-import-preview");
+        const token = localStorage.getItem("nova_token");
+        errEl.textContent = "";
+        box.innerHTML = '<div class="settings-row-hint">Importing…</div>';
+        try {
+            const res = await fetch("/memory-pack/import?confirm=true", {
+                method: "POST",
+                headers: {
+                    "Authorization": `Bearer ${token}`,
+                    "Content-Type": "application/zip",
+                },
+                body: _memoryPackFile,
+            });
+            if (res.status === 401) { logout(); return; }
+            const body = await res.json().catch(() => null);
+            if (!res.ok) {
+                box.style.display = "none";
+                box.innerHTML = "";
+                errEl.textContent = (body && body.detail) ? body.detail : "Import failed.";
+                return;
+            }
+            const imp = (body && body.imported) || {};
+            const memCount = (imp.memories || 0) + (imp.natural_memories || 0);
+            box.innerHTML = '<div class="settings-row-hint" style="color:var(--text);">' +
+                `Imported ${memCount} memories, ${imp.conversations || 0} conversations, ` +
+                `and ${imp.settings || 0} settings. ✓</div>`;
+            _memoryPackFile = null;
+            // Refresh the views that now have new data.
+            try { if (typeof loadMemories === "function") loadMemories(); } catch {}
+            try { if (typeof loadConversations === "function") loadConversations(); } catch {}
+        } catch (e) {
+            box.style.display = "none";
+            box.innerHTML = "";
+            errEl.textContent = "Import failed. Your existing data was not changed.";
         }
     }
 
