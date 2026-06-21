@@ -935,11 +935,15 @@ a `nova-data` volume and models on an `ollama-models` volume, so rebuilds
 and updates never lose data.
 
 ```bash
-cp .env.example .env
 docker compose up -d
-# pull at least one model, then open http://localhost:8000
+# pull at least one model, then open http://localhost:8000 (admin / changeme)
 docker compose exec ollama ollama pull gemma3:1b
 ```
+
+No `.env` is required — the stack starts with safe defaults. Copy
+`.env.example` to `.env` only when you want to change the admin login,
+ports, or enable integrations (and **do** change the admin password before
+exposing Nova beyond localhost).
 
 **Don't want to build?** A prebuilt image is published to the GitHub
 Container Registry on every push to `main` and every release tag, so you
@@ -947,7 +951,6 @@ can deploy without cloning or building the repo. Use the bundled
 `docker-compose.ghcr.yml`, which pulls `ghcr.io/thezupzup/nova:latest`:
 
 ```bash
-cp .env.example .env
 docker compose -f docker-compose.ghcr.yml up -d
 docker compose -f docker-compose.ghcr.yml exec ollama ollama pull gemma3:1b
 # update later: docker compose -f docker-compose.ghcr.yml pull && \
@@ -961,8 +964,9 @@ between build and prebuilt keeps your data.
 Nova is reachable at `http://localhost:8000`, and from other LAN machines
 (including Windows browsers) at `http://<host-ip>:8000`. See
 [docs/docker.md](docs/docker.md) for first-run, starting/stopping, logs,
-updates, backups, resetting, pulling models, optional NVIDIA GPU, and
-using Nova from a Windows browser.
+updates (incl. optional auto-update), production vs development, backups,
+resetting, pulling models, optional NVIDIA GPU, and using Nova from a
+Windows browser.
 
 ### Portable workspace (systemd or Docker)
 

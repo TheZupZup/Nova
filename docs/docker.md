@@ -75,24 +75,30 @@ No Python, no Ollama, and no other host packages are required.
 ```bash
 git clone https://github.com/TheZupZup/Nova.git
 cd Nova
-
-cp .env.example .env
-# Edit .env and set at least:
-#   NOVA_USERNAME   — your admin login
-#   NOVA_PASSWORD   — change it from the default
-# Everything else has working defaults.
-
 docker compose up -d
 ```
+
+That's the whole setup — **no file copying and no manual configuration.**
+The stack comes up with safe built-in defaults, including an admin login of
+`admin` / `changeme`.
 
 The first `up`:
 
 1. builds the `nova` image from this checkout,
 2. starts the `ollama` model server (waits until it's healthy),
-3. starts Nova and creates the admin account from `.env`.
+3. starts Nova, which on first boot creates `nova.db`, seeds the admin
+   account, and generates a per-install session key — all automatically.
 
-Open **http://localhost:8000** and log in. From another machine on the
-same network use **http://&lt;host-ip&gt;:8000**.
+Open **http://localhost:8000** and log in with `admin` / `changeme`. From
+another machine on the same network use **http://&lt;host-ip&gt;:8000**.
+
+> **Change the admin password before exposing Nova beyond localhost.**
+> Copy the sample env file and edit it — this is the *only* reason you need
+> an `.env`, and it stays optional:
+> ```bash
+> cp .env.example .env     # then set NOVA_USERNAME / NOVA_PASSWORD, etc.
+> docker compose up -d     # picks up the new values
+> ```
 
 Then pull at least one model so Nova can reply — see
 [Pulling Ollama models](#pulling--downloading-ollama-models).
@@ -124,18 +130,23 @@ this one file and an `.env`.
 # Fetch the compose file (or copy it out of the repo):
 curl -fsSLO https://raw.githubusercontent.com/TheZupZup/Nova/main/docker-compose.ghcr.yml
 
-# Create a minimal .env next to it (only credentials are required):
-cat > .env <<'EOF'
-NOVA_USERNAME=admin
-NOVA_PASSWORD=change-me-please
-EOF
-
-# Pull the image + Ollama, then start the stack:
+# Pull the image + Ollama and start the stack. No .env is needed — it comes
+# up with admin / changeme by default:
 docker compose -f docker-compose.ghcr.yml up -d
 
 # Pull at least one model, then open http://localhost:8000
 docker compose -f docker-compose.ghcr.yml exec ollama ollama pull gemma3:1b
 ```
+
+> **Set real credentials before exposing it.** Create an `.env` next to the
+> compose file and re-run `up -d`:
+> ```bash
+> cat > .env <<'EOF'
+> NOVA_USERNAME=admin
+> NOVA_PASSWORD=change-me-please
+> EOF
+> docker compose -f docker-compose.ghcr.yml up -d
+> ```
 
 Open **http://localhost:8000** and log in. From another machine on the
 same network use **http://&lt;host-ip&gt;:8000** (see
@@ -251,6 +262,85 @@ Your `nova-data` and `ollama-models` volumes are untouched. The
 **destructive** variant is `docker compose down -v`, which deletes the
 volumes (database, conversations, and downloaded models). Only use it
 when you truly want a clean slate.
+
+---
+
+## Production vs development
+
+The default `docker compose up -d` is the **production-shaped** setup: a
+self-contained image that runs as a non-root user, restarts automatically,
+and serves the code baked in at build time. That's what you want on a
+server or NAS.
+
+For **active development** — editing Nova's source and seeing changes live —
+layer the opt-in dev overlay on top. It bind-mounts your checkout into the
+container and runs uvicorn with `--reload`:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+```
+
+The overlay only changes the `nova` service (live source mount, `--reload`,
+no auto-restart); Ollama, the volumes, and the database are untouched. Set
+it once for your shell so plain `docker compose` commands pick up both files:
+
+```bash
+export COMPOSE_FILE=docker-compose.yml:docker-compose.dev.yml
+docker compose up        # now runs with live reload
+```
+
+To keep development data completely separate from a production stack on the
+same host, give the dev stack its own project name (separate containers and
+volumes):
+
+```bash
+docker compose -p nova-dev -f docker-compose.yml -f docker-compose.dev.yml up
+```
+
+After changing `requirements.txt`, rebuild: add `--build` to the `up`
+command.
+
+---
+
+## Automatic updates (optional)
+
+Updates are **manual by default** — nothing changes under you. To update
+deliberately:
+
+```bash
+# Prebuilt (GHCR) stack:
+docker compose -f docker-compose.ghcr.yml pull
+docker compose -f docker-compose.ghcr.yml up -d
+
+# Build-from-source stack:
+git pull
+docker compose up -d --build
+```
+
+Your `nova-data` and `ollama-models` volumes are never touched by an
+update, so the database, conversations, and downloaded models survive.
+
+If you'd rather Nova update **itself**, the repo ships an opt-in Watchtower
+overlay for the prebuilt stack. Watchtower periodically checks GHCR, pulls a
+newer image, and recreates the container — keeping your volumes intact:
+
+```bash
+docker compose -f docker-compose.ghcr.yml -f docker-compose.watchtower.yml up -d
+```
+
+Trade-offs to understand before enabling it:
+
+- **Prebuilt image only.** Watchtower pulls published images; it cannot
+  rebuild the build-from-source stack.
+- **Pin for stability.** With `NOVA_IMAGE_TAG=latest` (the default)
+  Watchtower tracks `main`. Pin a release (`NOVA_IMAGE_TAG=1.2.3` in `.env`)
+  to receive only patches within that line, or to freeze entirely.
+- **It needs the Docker socket** — host-level container control. Only
+  enable it on a host you trust; a socket-proxy can narrow the surface.
+- Tune the cadence with `WATCHTOWER_POLL_INTERVAL` (seconds; default 24h).
+
+Only the `nova` container opts in (via a label); Ollama and Watchtower
+itself are never auto-updated.
 
 ---
 
@@ -413,8 +503,11 @@ docker compose exec nova python -c \
   "import os,urllib.request; print(urllib.request.urlopen(os.environ['OLLAMA_HOST']+'/api/tags',timeout=5).read()[:200])"
 ```
 
-**`docker compose up` fails saying `.env` is missing.**
-Run `cp .env.example .env` first.
+**`docker compose up` errors on the `env_file` / `.env` entry.**
+`.env` is optional — the stack runs without it. This error means your
+Docker Compose predates the `required: false` field (added in Compose
+v2.24, early 2024). Upgrade Docker Desktop / the Compose plugin, or just
+create the file once: `cp .env.example .env`.
 
 **Port 8000 is already in use.**
 Set `NOVA_HOST_PORT` to a free port in `.env`, then `docker compose up -d`.

@@ -1,0 +1,44 @@
+# Nova — development overlay (opt-in).
+#
+# Layer this ON TOP of docker-compose.yml for live code-reload while you
+# edit Nova on the host. The base compose file stays production-shaped;
+# this overlay only applies when you ask for it explicitly:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+#
+# Tip: set it once for the shell and plain `docker compose up` uses both —
+#   export COMPOSE_FILE=docker-compose.yml:docker-compose.dev.yml
+#
+# What it changes vs the production default:
+#   * Bind-mounts your working copy over /app, so source edits are visible
+#     inside the container immediately.
+#   * Runs uvicorn with --reload, so the server restarts on code changes.
+#   * Drops restart: unless-stopped, so a dev container never fights you.
+#
+# Your data still lives on the nova-data volume from the base file, so the
+# database survives restarts. To keep dev data fully separate from a
+# production stack on the same host, give dev its own project name:
+#   docker compose -p nova-dev -f docker-compose.yml -f docker-compose.dev.yml up
+#
+# After changing requirements.txt, rebuild the image: add --build to `up`.
+
+services:
+  nova:
+    build:
+      context: .
+    # Shadow the baked-in /app with your live checkout. Python dependencies
+    # were installed into the image's site-packages at build time, so only
+    # the source is overlaid here. nova.db is NOT in /app — it stays on the
+    # /data volume (NOVA_DATA_DIR=/data is inherited from the base file), so
+    # reloading never writes the database into your host checkout.
+    volumes:
+      - ./:/app
+
+    # Live reload. uvicorn watches /app and restarts on .py changes. The
+    # container entrypoint still runs first (data-dir prep + secret-key
+    # generation); this only replaces the command it execs. ${NOVA_PORT} is
+    # substituted by Compose at `up` time, mirroring the base image's CMD.
+    command: ["sh", "-c", "exec uvicorn web:app --host 0.0.0.0 --port ${NOVA_PORT:-8000} --reload --reload-dir /app"]
+
+    # You drive a dev container's lifecycle; don't auto-restart it.
+    restart: "no"

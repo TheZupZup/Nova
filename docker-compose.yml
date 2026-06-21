@@ -5,9 +5,14 @@
 # the host. There is no cloud component and no remote sync.
 #
 # Quick start (build from source — the default developer workflow):
-#   cp .env.example .env      # then edit credentials
 #   docker compose up -d
 #   open http://localhost:8000
+#
+# That's the whole setup — no file copying, no manual steps. The stack
+# comes up with safe defaults (admin login: admin / changeme). To change
+# credentials, ports, or enable integrations, copy the sample env file
+# and edit it first (entirely optional):
+#   cp .env.example .env      # optional — only to override the defaults
 #
 # Don't want to build? Deploy the prebuilt image from GHCR instead with
 # docker-compose.ghcr.yml (no checkout/build needed):
@@ -31,11 +36,15 @@ services:
     container_name: nova
     restart: unless-stopped
 
-    # All variables from .env are passed to the container. Docker-specific
-    # values are overridden in `environment:` below (which wins over the
-    # env file) so the in-container paths/URLs are always correct.
+    # Load overrides from .env WHEN PRESENT. `required: false` keeps a
+    # fresh clone working with zero setup: with no .env the container falls
+    # back to the defaults in `environment:` below (which always win over
+    # the env file, so the in-container paths/URLs stay correct).
+    # Needs Docker Compose v2.24+ (Docker Desktop / Engine shipped it in
+    # early 2024); upgrade Docker if you see an "unexpected key" error here.
     env_file:
-      - .env
+      - path: .env
+        required: false
     environment:
       # Persist all runtime state on the /data volume (mounted below).
       NOVA_DATA_DIR: /data
@@ -45,6 +54,12 @@ services:
       OLLAMA_HOST: ${OLLAMA_HOST:-http://ollama:11434}
       # Port uvicorn binds inside the container.
       NOVA_PORT: ${NOVA_PORT:-8000}
+      # First-run admin account. These defaults let the stack come up with
+      # zero configuration; the app seeds this login into the database on
+      # the very first start. CHANGE THEM in .env (or your shell) BEFORE
+      # exposing Nova beyond localhost — the defaults are deliberately weak.
+      NOVA_USERNAME: ${NOVA_USERNAME:-admin}
+      NOVA_PASSWORD: ${NOVA_PASSWORD:-changeme}
 
     ports:
       # host:container. Reach Nova at http://localhost:8000 and, from
