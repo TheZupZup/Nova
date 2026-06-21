@@ -86,11 +86,23 @@ class TestComposeStack:
         assert "\n  nova-data:" in body
         assert "\n  ollama-models:" in body
 
-    def test_passes_env_file(self):
-        # All required environment variables flow in from .env.
+    def test_passes_env_file_optionally(self):
+        # Overrides flow in from .env WHEN PRESENT, but the file is optional
+        # so a fresh clone comes up with zero setup. The long-form
+        # `required: false` is what lets `docker compose up` work with no
+        # .env on disk (Compose v2.24+).
         body = _read("docker-compose.yml")
         assert "env_file:" in body
-        assert "- .env" in body
+        assert "path: .env" in body
+        assert "required: false" in body
+
+    def test_seeds_admin_login_defaults_for_zero_setup(self):
+        # With no .env the stack must still have admin credentials so
+        # first-run seeding works out of the box. Defaults are deliberately
+        # weak and overridable from .env / the shell.
+        body = _read("docker-compose.yml")
+        assert "NOVA_USERNAME: ${NOVA_USERNAME:-admin}" in body
+        assert "NOVA_PASSWORD: ${NOVA_PASSWORD:-changeme}" in body
 
     def test_does_not_mount_docker_socket(self):
         assert "docker.sock" not in _read("docker-compose.yml")
@@ -221,10 +233,19 @@ class TestGhcrComposeStack:
         assert "\n  nova-data:" in body
         assert "\n  ollama-models:" in body
 
-    def test_passes_env_file(self):
+    def test_passes_env_file_optionally(self):
+        # Same optional-.env contract as the build stack: loaded when
+        # present, but not required, so the prebuilt stack also starts with
+        # no manual setup.
         body = _read(self.PATH)
         assert "env_file:" in body
-        assert "- .env" in body
+        assert "path: .env" in body
+        assert "required: false" in body
+
+    def test_seeds_admin_login_defaults_for_zero_setup(self):
+        body = _read(self.PATH)
+        assert "NOVA_USERNAME: ${NOVA_USERNAME:-admin}" in body
+        assert "NOVA_PASSWORD: ${NOVA_PASSWORD:-changeme}" in body
 
     def test_does_not_mount_docker_socket(self):
         assert "docker.sock" not in _read(self.PATH)
