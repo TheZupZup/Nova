@@ -1,0 +1,41 @@
+# Nova — automatic-updates overlay (opt-in, prebuilt image only).
+#
+# Adds Watchtower, a small companion that periodically checks GHCR for a
+# newer Nova image, pulls it, and recreates the container — WITHOUT touching
+# your nova-data or ollama-models volumes, so no data is lost on update.
+#
+# Use it ONLY with the prebuilt (GHCR) stack. Watchtower pulls published
+# images; it cannot rebuild Nova from source:
+#
+#   docker compose -f docker-compose.ghcr.yml -f docker-compose.watchtower.yml up -d
+#
+# Notes:
+#   * Pin a release (NOVA_IMAGE_TAG=1.2.3 in .env) and Watchtower only moves
+#     you within that tag; leave it at `latest` to track main automatically.
+#   * Only the nova container is auto-updated (via the label below). Ollama
+#     and Watchtower itself are left alone — update those deliberately.
+#   * Default poll interval is 24h; override WATCHTOWER_POLL_INTERVAL (sec).
+
+services:
+  watchtower:
+    image: containrrr/watchtower:latest
+    container_name: nova-watchtower
+    restart: unless-stopped
+    environment:
+      # Only manage containers that opt in via the label below, so Watchtower
+      # never touches unrelated containers on the same host.
+      WATCHTOWER_LABEL_ENABLE: "true"
+      # Delete the superseded image after a successful update to save disk.
+      WATCHTOWER_CLEANUP: "true"
+      # How often to check for a newer image, in seconds (default 24h).
+      WATCHTOWER_POLL_INTERVAL: ${WATCHTOWER_POLL_INTERVAL:-86400}
+    volumes:
+      # Watchtower drives the Docker Engine API through this socket, which is
+      # effectively full control of the host's containers. Only enable it on
+      # a host you trust; put a socket-proxy in front to narrow the surface.
+      - /var/run/docker.sock:/var/run/docker.sock
+
+  # Opt the Nova container in to Watchtower-managed updates.
+  nova:
+    labels:
+      com.centurylinklabs.watchtower.enable: "true"

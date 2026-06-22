@@ -1,0 +1,36 @@
+# Cross-platform line-ending normalization.
+#
+# Without this, a Windows checkout with core.autocrlf=true rewrites shell
+# scripts to CRLF. The Linux container then can't run docker/entrypoint.sh
+# (/bin/sh chokes on the trailing \r — you get a confusing "no such file or
+# directory" on `docker compose up`). Forcing LF keeps the exact same bytes
+# on Linux, macOS, and Windows so the stack is truly plug-and-play anywhere.
+
+# Default: treat files as text, auto-detect, and always store/check out LF.
+* text=auto eol=lf
+
+# Files that MUST stay LF — they run inside Linux containers / POSIX shells.
+*.sh                 text eol=lf
+*.py                 text eol=lf
+*.yml                text eol=lf
+*.yaml               text eol=lf
+*.env                text eol=lf
+.env.example         text eol=lf
+Dockerfile           text eol=lf
+docker/entrypoint.sh text eol=lf
+
+# Windows-only helpers (if ever added) should keep CRLF.
+*.bat                text eol=crlf
+*.ps1                text eol=crlf
+
+# Binary assets — never normalize or diff as text.
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.gguf  binary
+*.onnx  binary
+*.db    binary
+*.gz    binary
+*.zip   binary
