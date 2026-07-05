@@ -13,7 +13,25 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.coverage
+htmlcov/
 *.egg-info/
+
+# JavaScript / frontend toolchains (avoid huge accidental build contexts)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Build outputs / generated artifacts
+build/
+dist/
+out/
+coverage/
+.cache/
+.tmp/
+tmp/
 
 # Local secrets and runtime data — MUST NOT be baked into the image
 .env
@@ -21,8 +39,18 @@ __pycache__/
 !.env.example
 *.db
 *.db.*
+*.sqlite
+*.sqlite3
 *.backup
 *.save
+
+# Local exports / backups produced while operating Nova
+exports/
+backups/
+memory-packs/
+*.tar
+*.tar.gz
+*.tgz
 
 # Editor / OS
 .vscode/
@@ -37,5 +65,5 @@ docs/
 
 # Docker meta
 Dockerfile
-docker-compose.yml
+docker-compose*.yml
 .dockerignore
