@@ -23,6 +23,11 @@ sync, no auto-deploy. It is designed for a Linux AI/project PC, a NAS
 that runs Docker, and Windows machines that connect to Nova through a
 browser.
 
+New here? The short version of this page is [INSTALL.md](../INSTALL.md).
+If you manage containers through the **Docker Desktop** UI, read
+[docs/docker-desktop.md](docker-desktop.md) — in short: create the stack
+with Compose, then monitor/manage it in Docker Desktop.
+
 > **Heads-up on exposure.** The stack publishes Nova's web UI on your
 > LAN (`http://<host-ip>:8000`). Change `NOVA_USERNAME` / `NOVA_PASSWORD`
 > before exposing it, and do **not** forward port 8000 to the public
@@ -93,12 +98,18 @@ Open **http://localhost:8000** and log in with `admin` / `changeme`. From
 another machine on the same network use **http://&lt;host-ip&gt;:8000**.
 
 > **Change the admin password before exposing Nova beyond localhost.**
-> Copy the sample env file and edit it — this is the *only* reason you need
-> an `.env`, and it stays optional:
+> `NOVA_USERNAME` / `NOVA_PASSWORD` seed the admin account **on the very
+> first start only** (when the database is still empty). To start with
+> your own credentials, copy the sample env file and edit it *before*
+> the first `up` — this is the *only* reason you need an `.env`, and it
+> stays optional:
 > ```bash
 > cp .env.example .env     # then set NOVA_USERNAME / NOVA_PASSWORD, etc.
-> docker compose up -d     # picks up the new values
+> docker compose up -d
 > ```
+> On a stack that has already started once, editing `.env` does **not**
+> change the existing account — log in as the admin and use the admin
+> panel (**Users → reset password**) instead.
 
 Then pull at least one model so Nova can reply — see
 [Pulling Ollama models](#pulling--downloading-ollama-models).
@@ -138,8 +149,9 @@ docker compose -f docker-compose.ghcr.yml up -d
 docker compose -f docker-compose.ghcr.yml exec ollama ollama pull gemma3:1b
 ```
 
-> **Set real credentials before exposing it.** Create an `.env` next to the
-> compose file and re-run `up -d`:
+> **Set real credentials before exposing it.** `NOVA_USERNAME` /
+> `NOVA_PASSWORD` seed the account on the **very first start only**, so
+> create the `.env` next to the compose file *before* that first `up -d`:
 > ```bash
 > cat > .env <<'EOF'
 > NOVA_USERNAME=admin
@@ -147,6 +159,8 @@ docker compose -f docker-compose.ghcr.yml exec ollama ollama pull gemma3:1b
 > EOF
 > docker compose -f docker-compose.ghcr.yml up -d
 > ```
+> If the stack has already started once, change the password from the
+> in-app admin panel (**Users → reset password**) instead.
 
 Open **http://localhost:8000** and log in. From another machine on the
 same network use **http://&lt;host-ip&gt;:8000** (see
@@ -492,6 +506,18 @@ each switch.
 ---
 
 ## Troubleshooting
+
+**First step: run the doctor.** `scripts/docker-doctor.sh` is a strictly
+read-only diagnostic that checks the Docker CLI, daemon, Compose plugin,
+compose files, containers, volumes, and published ports — and changes
+nothing:
+
+```bash
+scripts/docker-doctor.sh
+# or, for the prebuilt / auto-update stack:
+NOVA_COMPOSE_FILES=docker-compose.ghcr.yml:docker-compose.watchtower.yml \
+    ./scripts/docker-doctor.sh
+```
 
 **Nova replies with a model/connection error.**
 You probably haven't pulled a model yet, or the model name Nova requested
