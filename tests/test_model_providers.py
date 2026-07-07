@@ -311,7 +311,6 @@ class TestRegistry:
 def _neutralise_chat_side_effects():
     with patch.object(chat_module, "route", lambda _m: "default"), \
          patch.object(chat_module, "should_search", lambda _m: False), \
-         patch.object(chat_module, "is_security_query", lambda _m: False), \
          patch.object(chat_module, "detect_weather_city", lambda _m: None), \
          patch.object(chat_module, "get_relevant_memories", lambda *_a, **_k: []), \
          patch.object(chat_module, "extract_and_save_memory", lambda *_a, **_k: None), \

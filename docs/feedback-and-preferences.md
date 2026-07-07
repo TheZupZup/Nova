@@ -201,7 +201,7 @@ Behaviour guarantees:
 - the bubble shows plain text while the stream is in flight, then
   swaps to rendered Markdown once `done` arrives so half-formed
   fenced blocks never flicker into the wrong layout;
-- the action row (thumbs / copy / read aloud) attaches *after*
+- the action row (thumbs / copy) attaches *after*
   `done` only, so it can never be clicked against an in-progress
   response;
 - `assistant_message_id` is included on the `done` event so the

@@ -1,6 +1,6 @@
 """Pytest conftest: stub heavy / optional deps that the env may not ship.
 
-Several existing test files (e.g. ``test_silentguard_summary_endpoint``)
+Several existing test files (e.g. ``test_personalization_settings``)
 already stub these modules at import time. Centralising the workaround
 here lets suites that touch ``web.py`` collect cleanly even when one of
 the optional wheels is missing on the host. The stub is **only**

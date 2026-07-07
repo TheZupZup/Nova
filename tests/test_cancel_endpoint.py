@@ -152,7 +152,6 @@ def test_cancelled_stream_does_not_persist(db_path, web_client):
     with patch.object(ollama_client.client, "chat", side_effect=fake_chat_raises_cancelled), \
             patch.object(chat_module, "route", lambda _msg: "default"), \
             patch.object(chat_module, "should_search", lambda _msg: False), \
-            patch.object(chat_module, "is_security_query", lambda _msg: False), \
             patch.object(chat_module, "detect_weather_city", lambda _msg: None), \
             patch.object(chat_module, "get_relevant_memories", lambda *_a, **_k: []), \
             patch.object(chat_module, "extract_and_save_memory", lambda *_a, **_k: None), \

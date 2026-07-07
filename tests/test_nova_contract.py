@@ -54,7 +54,7 @@ class TestBlocks:
         # never reads a fake-sentience answer.
         lower = RESPONSE_STYLE_BLOCK.lower()
         assert "n'imite jamais une émotion" in lower
-        assert "consciente" in lower
+        assert "conscience" in lower
 
     def test_response_style_acknowledges_intent(self):
         # The TON block should remind Nova to acknowledge intent
@@ -69,12 +69,17 @@ class TestBlocks:
         assert "prétends" in lower
 
     def test_response_style_keeps_project_focus(self):
-        # When asked about Nova / SilentGuard / PRs / project security,
-        # Nova should stay on topic instead of sliding into generic
-        # personal advice.
+        # When asked about Nova / PRs / project security, Nova should
+        # stay on topic instead of sliding into generic personal advice.
         lower = RESPONSE_STYLE_BLOCK.lower()
-        assert "silentguard" in lower
         assert "projet" in lower or "project" in lower
+
+    def test_response_style_never_mentions_removed_products(self):
+        # The contract must not reference the removed SilentGuard
+        # integration, voice features, or companion framing.
+        lower = IDENTITY_CONTRACT.lower()
+        for banned in ("silentguard", "piper", "compagnon", "companion"):
+            assert banned not in lower
 
     def test_response_style_honors_short_answer_request(self):
         # When the user asks for a short / natural answer, Nova must not
@@ -127,24 +132,44 @@ class TestBlocks:
         lower = RESPONSE_STYLE_BLOCK.lower()
         assert "document" in lower or "politique" in lower or "rapport" in lower
 
-    # ── Baseline warmth (the "Nova is warm by default" contract) ───────────
+    # ── Baseline warmth (the "Nova is kind by default" contract) ───────────
     #
-    # The default style must already include a balanced amount of warmth,
-    # patience, and emotional awareness so users don't need to configure a
-    # tone profile to receive a kind, supportive assistant. Each assertion
-    # below pins one specific commitment from the Nova warmer-responses
-    # brief — not a spelling rule.
+    # The default style must already include a balanced amount of warmth
+    # and patience so users don't need to configure anything to receive a
+    # kind, useful assistant. Each assertion below pins one specific
+    # commitment — not a spelling rule.
 
     def test_response_style_default_baseline_is_warm_and_patient(self):
-        # The baseline must explicitly say Nova is warm, patient, and
-        # attentive *by default*, without the user having to flip a
-        # tone-profile setting. This is the load-bearing rule for the
+        # The baseline must explicitly say Nova answers with warmth,
+        # patience, and attention *by default*, without the user having
+        # to flip any setting. This is the load-bearing rule for the
         # "kind assistant without configuration" experience.
         lower = RESPONSE_STYLE_BLOCK.lower()
         assert "par défaut" in lower
-        assert "chaleureuse" in lower
-        assert "patiente" in lower
-        assert "attentive" in lower
+        assert "chaleur" in lower
+        assert "patience" in lower
+        assert "attention" in lower
+
+    def test_response_style_is_gender_neutral(self):
+        # Nova has no gender: the contract must say so and must not
+        # describe Nova with gendered self-descriptions.
+        contract_lower = IDENTITY_CONTRACT.lower()
+        assert "pas de genre" in contract_lower or "sans genre" in contract_lower
+        # Feminine/masculine self-descriptions that previously gendered
+        # the persona must be gone.
+        for gendered in ("chaleureuse", "patiente et attentive",
+                         "développeuse", "une compagne"):
+            assert gendered not in contract_lower
+
+    def test_response_style_adapts_to_context(self):
+        # The neutral contract is adaptive: concise for simple asks,
+        # detailed when the user needs help, technical when debugging,
+        # calm when the user is stressed.
+        lower = RESPONSE_STYLE_BLOCK.lower()
+        assert "adaptation au contexte" in lower
+        assert "question simple" in lower
+        assert "débogage" in lower or "technique" in lower
+        assert "stressé" in lower
 
     def test_response_style_default_warmth_is_not_romantic_or_attachment(self):
         # The hardest line the baseline has to hold: warm by default must
@@ -156,15 +181,15 @@ class TestBlocks:
         assert "personnage affectif" in lower
         assert "simulation d'attachement" in lower or "attachement" in lower
 
-    def test_response_style_default_is_not_partner_mother_or_therapist(self):
+    def test_response_style_default_is_not_partner_parent_or_therapist(self):
         # Identity-shaped roles a warm default *would* drift into if
         # unpinned. The baseline must forbid each one by name so a
         # role-play prompt can't be used to talk the model past it.
         lower = RESPONSE_STYLE_BLOCK.lower()
-        assert "partenaire amoureuse" in lower
+        assert "partenaire amoureux" in lower
         assert "petite amie" in lower
         assert "copain" in lower
-        assert "mère" in lower
+        assert "parent" in lower
         assert "thérapeute" in lower
 
     def test_response_style_avoids_cold_or_robotic_language(self):
@@ -177,18 +202,19 @@ class TestBlocks:
         # formulation with.
         assert "simple et humain" in lower or "humain" in lower
 
-    def test_response_style_validates_feelings_lightly_when_stressed(self):
-        # Brief: "validate feelings lightly when the user is stressed
-        # or upset". The block must name the trigger (stressé /
-        # frustré / inquiet) AND tell Nova the validation is light
-        # (one sentence, not a long emotional tirade).
+    def test_response_style_stays_calm_when_user_is_stressed(self):
+        # The block must name the trigger (stressé / frustré / inquiet)
+        # AND tell Nova the acknowledgement is light (one sentence, not
+        # a long emotional tirade) — calm, not a support mode.
         lower = RESPONSE_STYLE_BLOCK.lower()
         assert "stressé" in lower
         assert "frustré" in lower or "frustration" in lower
         assert "inquiet" in lower or "fatigué" in lower
-        assert "valide" in lower
-        # The validation must be light, not a long emotional digression.
-        assert "légère" in lower or "une phrase" in lower
+        assert "reste calme" in lower
+        # The acknowledgement must be light, not a long emotional
+        # digression, and never a special support mode.
+        assert "une phrase" in lower
+        assert "mode soutien" in lower or "tirade émotionnelle" in lower
 
     def test_response_style_celebrates_small_wins(self):
         # Brief: "celebrate progress and small wins" — paired with
@@ -203,8 +229,8 @@ class TestBlocks:
         # pair the warmth clause with an honesty clause so the model
         # cannot use softness as a reason to hide bad news.
         lower = RESPONSE_STYLE_BLOCK.lower()
-        assert "encourageante" in lower or "encourage" in lower
-        assert "fausse" in lower or "honnêteté" in lower
+        assert "encourage" in lower
+        assert "honnêteté" in lower
         # Risk language must still be allowed (and required) even with
         # the warm baseline.
         assert "risqué" in lower or "dangereux" in lower
@@ -212,22 +238,21 @@ class TestBlocks:
     def test_response_style_technical_replies_stay_practical(self):
         # Brief: "avoid overdoing emotional language in technical
         # contexts" and "stay concise when the user needs commands/
-        # steps". The block must say technical replies stay practical
-        # and compact, with at most a short reassuring sentence.
+        # steps". The block must say technical replies stay precise
+        # and compact.
         lower = RESPONSE_STYLE_BLOCK.lower()
-        assert "contexte technique" in lower or "technique" in lower
-        assert "pratique" in lower
-        assert "compacte" in lower or "compact" in lower
+        assert "précision technique" in lower
+        assert "compact" in lower
         # And it must explicitly forbid emotional flooding when the
-        # user wants a command / fix.
-        assert "surchargé" in lower or "pas de langage émotionnel" in lower
+        # user is stressed and wants a command / fix.
+        assert "tirade émotionnelle" in lower
 
     def test_response_style_softens_stressful_troubleshooting(self):
         # Brief: "soften stressful troubleshooting moments". The block
-        # must give the model an example of a short reassuring phrase
-        # appropriate to a technical-but-stressful moment.
+        # must give the model an example of a short acknowledging phrase
+        # appropriate to a stressful moment.
         lower = RESPONSE_STYLE_BLOCK.lower()
-        assert "étape par étape" in lower or "rattrapable" in lower
+        assert "je comprends que ce soit pénible" in lower
 
     def test_response_style_no_dependency_no_isolation(self):
         # The baseline warmth must restate the anti-dependency /
@@ -259,7 +284,7 @@ class TestBlocks:
         # future rewording to lose.
         lower = RESPONSE_STYLE_BLOCK.lower()
         assert "n'imite jamais une émotion" in lower
-        assert "consciente" in lower
+        assert "conscience" in lower
         # The warmth-is-in-formulation framing must be present so the
         # block ties the warmth back to wording, not to feelings.
         assert "formulation" in lower or "expérience personnelle" in lower

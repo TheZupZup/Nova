@@ -17,7 +17,7 @@ container that groups:
 - an optional free-text **description**,
 - (future) optional per-project settings.
 
-Examples: `Nova`, `Auryn`, `SilentGuard`, `NexaNote`, `Home Lab`,
+Examples: `Nova`, `Auryn`, `NexaNote`, `Home Lab`,
 `Personal`.
 
 Projects are local-first and per-user, exactly like conversations and
@@ -51,7 +51,7 @@ Nova has two memory scopes:
    project is active. Examples:
    - *Nova*: roadmap and storage/migration state
    - *Auryn*: streamrip / packaging details
-   - *SilentGuard*: firewall / TUI / network details
+   - *NexaNote*: notes / API / sync details
    - *NexaNote*: sync / WebDAV / mobile roadmap
 
 ### How memory gets scoped

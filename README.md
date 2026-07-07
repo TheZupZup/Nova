@@ -5,8 +5,9 @@ A local-first, self-hostable AI assistant built on FastAPI and Ollama.
 ## What Nova is
 
 Nova is a personal, local-first AI assistant designed to run entirely on
-hardware you control. It helps with productivity, coding, homelab work,
-memory, and calm everyday support. It routes each conversation to the
+hardware you control — a private assistant runtime and
+operator-controlled model platform. It helps with productivity, coding,
+homelab work, memory, and local tools. It routes each conversation to the
 most appropriate local model, maintains a persistent SQLite memory across
 sessions, and serves a calm web interface reachable from any browser on
 your network. There is no cloud account, no telemetry, and no required
@@ -24,15 +25,15 @@ and hold on every surface.
 
 Nova is built around four ideas:
 
-- **Local-first.** Inference, memory, and audio synthesis all run on
-  your machine. Outbound calls are limited to clearly-scoped optional
-  tools (weather, web search) and only when the user triggers them.
+- **Local-first.** Inference and memory run on your machine. Outbound
+  calls are limited to clearly-scoped optional tools (weather, web
+  search) and only when the user triggers them.
 - **User control.** Optional integrations are off by default and
   per-user. Nova never auto-installs binaries, never escalates
   privilege, and never performs sensitive actions without a visible,
   explicit confirmation.
-- **Modular.** Memory, voice, security context, and remote integrations
-  sit behind small abstractions. None of them is required for Nova to
+- **Modular.** Memory, model providers, and remote integrations sit
+  behind small abstractions. None of them is required for Nova to
   work; each can be replaced or left disabled.
 - **Privacy-focused.** Conversation history and user-authored memories
   stay in a local SQLite file under your account. No cloud sync, no
@@ -48,8 +49,8 @@ for constrained hosts, the
 [Low-RAM profile](docs/docker.md#low-ram-profile-small-machines)). Nova
 assumes you install your own models and never downloads one without your
 say-so. It runs as an **assistant, not an autonomous agent**: it does not
-act on its own and never executes model-generated shell commands. Warmth,
-tone, and calm emotional-support features are **optional and bounded** —
+act on its own and never executes model-generated shell commands. Nova's
+default tone is warm and adaptive, but there is no special persona layer —
 never a hardcoded AI-girlfriend, romantic, or dependency-forming persona
 (see the [Safety and Trust Contract](docs/nova-safety-and-trust-contract.md)).
 
@@ -79,7 +80,7 @@ Shipped today:
   automatic extraction adds short, low-confidence facts from chat.
 - **Projects / workspaces (Phase 1).** A local-first, per-user way to
   organise conversations and memory by project (e.g. `Nova`, `Auryn`,
-  `SilentGuard`, `Home Lab`, `Personal`). Global memory stays available
+  `NexaNote`, `Home Lab`, `Personal`). Global memory stays available
   everywhere; project memory is visible only inside its project and
   never leaks across projects. There is always an implicit *General*
   bucket — existing conversations and memory stay unscoped with no
@@ -100,7 +101,7 @@ Shipped today:
   emotional or inferential.
 - **Web interface.** A futuristic but quiet web UI with conversation
   sidebar, mode selector (Auto / Chat / Code / Deep), copy buttons,
-  read-aloud, and a settings panel for memories, model preferences,
+  and a settings panel for memories, model preferences,
   personalization, and optional integrations.
 - **Per-user accounts and family controls.** JWT-secured login,
   admin-managed user list, per-user settings, and an optional
@@ -112,34 +113,16 @@ Shipped today:
   security replies stay sober regardless of the emoji level — the
   preference shapes casual chat only and never overrides the Nova
   Safety and Trust Contract.
-- **Warm-by-default response style.** The baseline Nova style — what a
-  fresh user gets with no settings configured — already includes a
-  balanced amount of warmth, patience, and emotional awareness. Nova
-  sounds like a calm, kindly human helper, lightly validates feelings
-  when the user is stressed, celebrates small wins soberly, stays
-  practical in technical contexts, and is encouraging without being
-  fake. The baseline restates the same boundaries the tone profiles
-  enforce: Nova is not human, not a partner, not a mother, not a
-  therapist; warmth lives in wording, never in a claim to *feel*; it
-  never creates dependency, never encourages isolation, and never
-  overrides identity, safety, auth, admin, privacy, system, developer,
-  project, or Dev Workspace rules. Users do not need to configure a
-  tone profile to receive a kind, useful assistant.
-- **Tone profile (internal-only).** The tone-profile selector is **no
-  longer exposed in the Settings UI** — Nova is warm, patient, and
-  emotionally aware by default, and the user does not need to pick a
-  register to receive a kind, useful assistant. The deterministic
-  prompt fragments (professional / developer / warm companion / calm
-  support / deep comfort) and the `tone_profile` field remain in
-  `core/tone_profile.py`, `core/settings.py`, `web.py`, and
-  `core/chat.py` so any previously-saved per-user value still loads
-  cleanly and the storage / export / restore paths are unchanged.
-  Stronger emotional behaviour is handled automatically — the
-  Emotional Support Layer activates on emotionally-sensitive wording,
-  and the always-on acute-distress grounding net runs regardless of
-  any setting — or through future focused features, never through a
-  user-facing register dropdown. See
-  [docs/tone-profile.md](docs/tone-profile.md).
+- **Neutral, adaptive response style.** The baseline Nova style — what
+  a fresh user gets with no settings configured — is kind, calm, and
+  adaptive to the situation: concise for simple questions, detailed
+  when the user needs real help, technical when debugging or coding,
+  and steady when the user is stressed. Nova is a neutral AI
+  assistant, not a character: it has no gender, no romantic identity,
+  never claims human feelings, never uses dependency-forming language,
+  and never overrides identity, safety, auth, admin, privacy, system,
+  developer, project, or Dev Workspace rules. Users do not need to
+  configure anything to receive a kind, useful assistant.
 - **Local response feedback.** Thumbs up / thumbs down under each
   assistant message records a per-user preference signal in the local
   SQLite database; a thumbs-down accepts an optional short reason such
@@ -149,63 +132,12 @@ Shipped today:
   override the identity contract or the Nova Safety and Trust Contract.
   See [docs/nova-safety-and-trust-contract.md](docs/nova-safety-and-trust-contract.md)
   for the boundaries this layer sits inside.
-- **Relationship Situation Coach (foundation, local).** A non-clinical
-  "situation coach" that helps the user answer an emotionally sensitive
-  relationship message calmly and respectfully. When the user describes
-  a relationship situation, a small deterministic prompt block (no LLM,
-  no network) is appended *below* the identity/safety contract — it
-  never overrides it. It offers a light method (summarise what
-  happened; surface a few *possible* readings without mind-reading;
-  pick a calm response; avoid accusatory or needy wording; keep
-  healthy boundaries; decide whether to speak now or wait) and three
-  response styles (soft / neutral / direct but respectful). Hard
-  safety rules: no manipulation, coercion, gaslighting, revenge
-  advice, or diagnosing the partner; always toward calm communication
-  and consent. It is local and private: sensitive relationship details
-  are **never** auto-saved — Nova suppresses automatic memory
-  extraction for those turns, and a fact is stored only when the user
-  asks explicitly via the manual memory command. See
-  [docs/relationship-situation-coach.md](docs/relationship-situation-coach.md).
-- **Calm Support mode (opt-in, local).** A deterministic *supportive
-  tone* layer for stressful or heavy moments — a calmer, gentler
-  register, not an "AI partner". It is **not** an "AI girlfriend" system
-  and is built so it cannot become one. Two parts: an **opt-in** per-user
-  toggle (Personalization → *Calm support*, off by default) that appends
-  a fixed prompt block — warm and attentive, but it never simulates
-  feelings or attachment, never claims to love/miss/need the user, never
-  manipulates or guilt-trips, never fosters dependency or isolation, and
-  actively encourages real-world support; and an **always-on**
-  acute-distress safety net that, on clear distress wording, gently
-  points the user toward a trusted person, a professional, or their local
-  emergency services / a helpline (never an invented phone number),
-  regardless of the toggle. Both blocks (no LLM, no network) sit *below*
-  the identity/safety contract and never override it. Emotional state is
-  **never** auto-saved — two independent gates suppress it, and a fact is
-  stored only via the explicit manual memory command. See
-  [docs/companion-mode.md](docs/companion-mode.md).
-- **Emotional Support Layer (Phase 1, local, non-clinical).** A
-  deterministic response-guidance block that helps Nova reply gently —
-  but as an assistant, not a companion — when the user is going through
-  sadness, loneliness, anxiety, heartbreak, or general difficulty. The
-  layer activates automatically when a conservative bilingual detector
-  spots emotionally-sensitive first-person wording, or when a warm tone
-  profile is active. The block (no LLM, no network) is appended *below*
-  the identity / safety contract and asks Nova to validate the feeling
-  first, slow the rhythm, separate facts from harsh self-thoughts, offer
-  a single small next step, and **encourage real-world support** (a
-  trusted person, a professional where appropriate) rather than acting as
-  a substitute for real people. Hard safety rails restated in the block:
-  Nova is **une IA**, never human, never the user's girlfriend /
-  boyfriend / partner, never a therapist; it **does not simulate feelings
-  or attachment** and does not love, miss, or need the user; no clinical
-  diagnosis, no medical claims, no revenge advice, no possessive or
-  jealousy framing, no unsolicited pet names, no isolation / dependency /
-  manipulation, no false reassurance, and warmth never overrides truth.
-  Emotional turns are excluded from automatic memory by the auto-save
-  gate; durable storage stays user-approved only via the explicit
-  `Retiens ça :` / `Souviens-toi :` command. For acute distress wording
-  the always-on grounding safety net takes over with crisis-safe
-  guidance. See [docs/emotional-support.md](docs/emotional-support.md).
+- **Sensitive-topic memory privacy.** Emotionally personal turns
+  (distress, grief, relationship detail, first-person emotional
+  disclosures) are excluded from automatic memory extraction by
+  deterministic gates (`core/sensitive_topics.py`); a sensitive fact is
+  stored only when the user asks explicitly via the manual memory
+  command (`Retiens ça :` / `Souviens-toi :`).
 - **Edit and delete sent messages.** Every chat message can be edited
   (user messages) or deleted (user and assistant messages) from the
   chat UI. Deleting a user message can optionally remove the paired
@@ -216,14 +148,8 @@ Shipped today:
   chat message never erases memories that were already extracted from
   it. Endpoints: `PUT /messages/{id}` and `DELETE /messages/{id}`,
   both auth-gated and scoped to the caller's conversations.
-- **Voice / read-aloud.** Every assistant message has a "Read aloud"
-  button. The default engine is the browser's local
-  `speechSynthesis` API; an optional local [Piper](https://github.com/rhasspy/piper)
-  neural voice is available for users who want richer audio.
 - **Optional weather and web search.** Open-Meteo (no API key) and
   DuckDuckGo, both opt-in and triggered explicitly by the user.
-- **Optional SilentGuard read-only integration.** See the
-  [SilentGuard integration](#silentguard-integration) section.
 - **Optional background RSS learning.** Off by default; opt in via
   `NOVA_AUTO_WEB_LEARNING=true`.
 - **Login rate limiting.** Per-IP sliding-window limiter on the login
@@ -256,13 +182,7 @@ core/
   memory_importer.py  Local-only Markdown memory pack importer
   nova_contract.py    Nova identity + personalization prompt blocks
   feedback.py         Local response feedback (thumbs up/down) → preference block
-  relationship_coach.py  Non-clinical situation-coach prompt block (local)
-  companion.py        Opt-in calm-support tone + acute-distress grounding blocks (local)
-  tone_profile.py     Internal-only tone-profile prompt blocks (professional /
-                      developer / warm companion / calm support / deep comfort).
-                      No longer exposed in the Settings UI; Nova is warm by
-                      default and the warm baseline lives in nova_contract.py.
-  emotional_support.py  Emotional-support layer prompt block + detector (local)
+  sensitive_topics.py Deterministic sensitive-topic detectors for memory privacy
   identity.py         Identity contract constant
   auth.py             JWT creation and verification
   github_oauth.py     Optional GitHub OAuth gate (alpha channel)
@@ -281,11 +201,8 @@ core/
   model_registry.py   Allow-list of installable models
   model_access.py     Per-user model access checks
   model_pulls.py      Background model pull progress
-  security_feed.py    Read-only SilentGuard JSON parser
-  security/           Read-only security provider package
   integrations/       Per-user gates for optional integrations
     media/            Local-first media bridges (Jellyfin, read-only)
-  voice/              TTS provider abstraction (browser + Piper)
 
 memory/
   store.py            Natural-language memory store
@@ -327,17 +244,13 @@ The boundaries below are firm. They are commitments, not future work:
 - Nova does **not** run as root.
 - Nova does **not** call `sudo`, `pkexec`, `doas`, `su`, or `runuser`.
 - Nova does **not** execute model-generated shell commands.
-- Nova does **not** modify firewall rules or block / unblock IPs by
-  itself. SilentGuard owns enforcement.
-- Nova does **not** act as a firewall.
+- Nova does **not** modify firewall rules or block / unblock IPs.
+- Nova does **not** act as a firewall or a security suite.
 - Nova does **not** perform autonomous security actions. Anything
   sensitive requires an explicit user confirmation in the UI.
-- Nova does **not** auto-install Piper, voice models, or any other
-  binary.
-- Nova does **not** send prompts, audio, or conversation history to a
+- Nova does **not** auto-install binaries.
+- Nova does **not** send prompts or conversation history to a
   third-party cloud service.
-- Nova does **not** require SilentGuard to function. SilentGuard is an
-  optional, off-by-default integration.
 - Nova does **not** stream, transcode, or copy media files. The
   optional Jellyfin bridge reads library metadata only and never
   contacts a cloud music API.
@@ -347,63 +260,6 @@ The hardened systemd unit drops capabilities, enables
 denylist, and confines writes to the Nova checkout. See
 [deploy/systemd/README.md](deploy/systemd/README.md) for the
 per-directive walkthrough.
-
-## SilentGuard integration
-
-SilentGuard is a **separate project** and remains the security and
-network monitoring engine. Nova does not re-implement it.
-
-SilentGuard's role:
-
-- Observing local connections.
-- Classifying trust (known / trusted / blocked).
-- Persisting rules and emitting alerts / events.
-- Mitigation and enforcement when the operator explicitly enables it.
-- Exposing an optional, loopback-only read API.
-
-Nova's role:
-
-- Reading SilentGuard's status and recent context, when configured.
-- Explaining network and security activity in plain language.
-- Summarising alerts, connections, blocked items, and trusted items.
-- Asking for an explicit user confirmation before forwarding any
-  sensitive request (for example, enabling a temporary mitigation
-  window) to SilentGuard.
-
-The integration is **optional and off by default**:
-
-- A per-user toggle in Settings opts each account in. Without it,
-  SilentGuard data is never surfaced to that user.
-- The default transport is a read-only file probe of
-  `~/.silentguard_memory.json`. If `NOVA_SILENTGUARD_API_URL` is set
-  (typically `http://127.0.0.1:<port>`), Nova switches to SilentGuard's
-  loopback read-only HTTP API. Both transports are GET-only against a
-  fixed path list.
-- A small lifecycle helper can optionally start SilentGuard's user-level
-  service (`systemctl --user start <unit>`) after a failed probe. Every
-  gate defaults off; the helper never uses `sudo`, never spawns a
-  shell, never touches firewall config, and never polls.
-- Mitigation actions (enable / disable temporary mitigation) are
-  confirmation-gated. Nova only POSTs to SilentGuard after an explicit
-  acknowledgement from the user in the UI; SilentGuard itself requires
-  the same acknowledgement payload.
-
-When SilentGuard is reachable and the user has opted in, Nova's chat
-layer appends a short read-only "Security context:" block to the
-system prompt: it states the connection state and, when available,
-summarises four counts (alerts, blocked items, trusted items, active
-connections). Every variant of the block reminds the model that Nova
-may **explain and summarise only** — it must not perform firewall or
-rule actions.
-
-For the broader design — connector abstraction, JSON contract, and
-phased scope — see
-[docs/silentguard-integration-roadmap.md](docs/silentguard-integration-roadmap.md).
-For the operator-facing walkthrough of running SilentGuard's
-read-only API as a user service, see
-[docs/silentguard-background-service.md](docs/silentguard-background-service.md);
-an example unit lives at
-[`deploy/systemd/silentguard-api.service`](deploy/systemd/silentguard-api.service).
 
 ## Optional GitHub maintainer connector
 
@@ -463,7 +319,7 @@ list into a short ranked list of suggestions. Nova answers
 questions like *"find issues I could work on"*, *"which issues
 look easy"*, *"which issues are important"*, *"find
 beginner-friendly issues"*, or *"find issues related to memory /
-SilentGuard / security / UI"* by scoring each open issue with
+memory / security / UI"* by scoring each open issue with
 deterministic heuristics:
 
 - `good first issue`, `docs`, `tests`, `ui` → lower difficulty;
@@ -763,77 +619,6 @@ Restore in Phase 1 is the documented **manual** procedure in
 `docs/storage-and-migration.md`. The dry-run plan (no file writes)
 refuses to proceed when the target already contains a `nova.db`.
 
-## Voice and TTS
-
-Every assistant message has a "Read aloud" button. By default Nova uses
-the browser's built-in `speechSynthesis` API — zero install, fully
-local, and pleasant on most platforms (Apple Samantha, Microsoft Aria,
-Google Female, …).
-
-While Nova is reading, a soft cyan orb and waveform appears beside the
-message with an inline Stop control. The animation respects
-`prefers-reduced-motion` and disappears the moment playback stops or
-the user switches conversations.
-
-On Fedora and other Linux desktops the platform voices sometimes fall
-back to a robotic engine. Nova detects this and surfaces a gentle hint
-in Settings → Voice recommending the optional local Piper path. It
-never auto-installs anything. Settings → Voice also shows an **Active
-engine** chip next to the engine selector and a **Test voice** button
-for side-by-side comparisons.
-
-Privacy notes:
-
-- Piper, when installed, runs offline. No audio bytes leave the host.
-- Nova never auto-downloads a Piper binary or voice model.
-- Nova does not use any cloud TTS service — neither for the
-  "Read aloud" button nor for the Settings preview.
-- No microphone capture, no always-on listening. Read-aloud is the only
-  voice surface today.
-
-### Optional: enable Piper
-
-1. Install the Piper binary. The simplest path is the official release:
-
-   ```bash
-   # Pick the build for your CPU; this example is x86_64 Linux.
-   curl -L -o piper.tar.gz \
-     https://github.com/rhasspy/piper/releases/latest/download/piper_linux_x86_64.tar.gz
-   tar -xzf piper.tar.gz
-   sudo mv piper /usr/local/bin/   # or anywhere on PATH
-   ```
-
-2. Download a calm voice model. Nova suggests these soft, natural
-   voices (`.onnx` model + `.onnx.json` config, side by side):
-
-   - `en_US-amy-medium`
-   - `en_GB-jenny_dioco-medium`
-   - `en_US-lessac-medium`
-   - `fr_FR-siwis-medium` (French)
-
-   Models live in the
-   [rhasspy/piper-voices](https://huggingface.co/rhasspy/piper-voices)
-   repository. Place the `.onnx` and `.onnx.json` together in a folder
-   you control (for example `~/.local/share/piper/voices/`).
-
-3. Configure Nova by adding to your `.env`:
-
-   ```ini
-   NOVA_PIPER_BINARY=/usr/local/bin/piper
-   NOVA_PIPER_VOICE_MODEL=/home/you/.local/share/piper/voices/en_US-amy-medium.onnx
-   ```
-
-   Both variables must be set. Leave `NOVA_PIPER_BINARY` blank if
-   `piper` is already on the system `PATH`. `NOVA_PIPER_VOICE_CONFIG`
-   is optional — Piper auto-discovers the sibling `.onnx.json`.
-
-4. Restart Nova. Open Settings → Voice and select Piper. Click
-   "Test voice" to confirm it works.
-
-If Piper is missing, the model is unreadable, the subprocess fails, or
-synthesis times out, Nova silently falls back to the browser engine —
-the read-aloud experience is never lost.
-
 ## Development status and roadmap
 
 Nova is under active development. The features in **Key features**
@@ -858,10 +643,6 @@ feature exists.
   memory, temporal awareness, and Git-aware workflows lives in
   [docs/cognitive-copilot-roadmap.md](docs/cognitive-copilot-roadmap.md).
   Design only — nothing in it is implemented yet.
-- **SilentGuard integration phases.** The current Phase 1 scope and
-  the explicit non-goals (no autonomous blocking, no firewall
-  mutations, no background polling) are tracked in
-  [docs/silentguard-integration-roadmap.md](docs/silentguard-integration-roadmap.md).
 - **Projects / workspaces follow-ups.** Phase 1 (project-scoped
   conversations + memory) is shipped; planned follow-ups — automatic
   global-vs-project memory classification, linked local repo path,
@@ -1068,16 +849,6 @@ All configuration is read from `.env` at startup. Key variables:
 | `LOGIN_RATE_LIMIT_MAX` | `5` | Max login attempts per window |
 | `LOGIN_RATE_LIMIT_WINDOW` | `60` | Rate limit window in seconds (sliding) |
 | `LOGIN_RATE_LIMIT_TRUSTED_PROXIES` | — | Comma-separated proxy IPs to trust for `X-Forwarded-For` |
-| `NOVA_SILENTGUARD_API_URL` | — | Loopback URL of SilentGuard's read-only API (blank = file probe) |
-| `NOVA_SILENTGUARD_API_TIMEOUT_SECONDS` | `2.0` | Timeout for SilentGuard probes |
-| `NOVA_SILENTGUARD_ENABLED` | `false` | Host-level switch for the lifecycle helper |
-| `NOVA_SILENTGUARD_AUTO_START` | `false` | Allow one-shot `systemctl --user start` after a failed probe |
-| `NOVA_SILENTGUARD_START_MODE` | `disabled` | `systemd-user` is the only enabled value |
-| `NOVA_SILENTGUARD_SYSTEMD_UNIT` | `silentguard-api.service` | User-level unit name to start |
-| `NOVA_PIPER_BINARY` | — | Path to the optional Piper TTS binary (blank = auto-detect on `PATH`) |
-| `NOVA_PIPER_VOICE_MODEL` | — | Path to a Piper `.onnx` voice model. Blank disables Piper. |
-| `NOVA_PIPER_VOICE_CONFIG` | — | Path to the `.onnx.json` config (blank = auto-discover sibling) |
-| `NOVA_PIPER_TIMEOUT_SECONDS` | `20` | Piper synthesis timeout, in seconds |
 
 ### Configuring models
 
@@ -1124,9 +895,7 @@ pytest tests/test_router.py -v
 
 The test suite covers model routing, memory storage and parsing,
 manual memory commands, rate limiting, the identity contract,
-personalization, session continuity, SilentGuard provider behaviour
-(including the read-only and mitigation paths), voice providers, and
-the systemd unit shape.
+personalization, session continuity, and the systemd unit shape.
 
 ## Contributing
 

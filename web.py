@@ -60,15 +60,11 @@ from core import model_pulls as _model_pulls
 from core import model_access as _model_access
 from core import local_models as _local_models
 from core.ollama_client import OllamaUnavailable
-from core.integrations import silentguard as _silentguard_integration
 from core.integrations import nexanote as _nexanote_integration
 from core.integrations import github as _github_integration
 from core.integrations import github_triage as _github_triage
 from core.integrations.media import jellyfin as _jellyfin_integration
 from core.integrations.media import recommendations as _media_recommendations
-from core.security import ensure_silentguard_running as _ensure_silentguard_running
-from core.security import lifecycle as _silentguard_lifecycle
-from core.security import SilentGuardProvider as _SilentGuardProvider
 from core import maintenance as _maintenance
 from core import storage_status as _storage_status
 from core import provider_status as _provider_status
@@ -78,7 +74,6 @@ from core import model_bootstrap as _model_bootstrap
 from core import gguf_settings as _gguf_settings
 from core import data_export as _data_export
 from core import memory_pack as _memory_pack
-from core import voice as _voice
 import sqlite3 as _sqlite3
 from core import users as _users_mod
 from memory.store import (
@@ -454,10 +449,8 @@ class SettingsUpdateRequest(BaseModel):
     ram_budget: int | None = None
     nova_model_enabled: bool | None = None
     nova_model_name: str | None = None
-    silentguard_enabled: bool | None = None
     nexanote_enabled: bool | None = None
     nexanote_write_enabled: bool | None = None
-    companion_mode_enabled: bool | None = None
 
     # Personalization preferences (per-user). Enum fields are validated
     # against PERSONALIZATION_ENUMS so the DB never carries a value the
@@ -467,7 +460,6 @@ class SettingsUpdateRequest(BaseModel):
     warmth_level: str | None = None
     enthusiasm_level: str | None = None
     emoji_level: str | None = None
-    tone_profile: str | None = None
     custom_instructions: str | None = None
 
     @field_validator("ram_budget")
@@ -492,7 +484,6 @@ class SettingsUpdateRequest(BaseModel):
 
     @field_validator(
         "response_style", "warmth_level", "enthusiasm_level", "emoji_level",
-        "tone_profile",
     )
     @classmethod
     def validate_personalization_enum(cls, v, info):
@@ -1592,17 +1583,11 @@ def get_settings(user: CurrentUser = Depends(get_current_user)):
         "nova_model_name": get_user_setting(
             user.id, "nova_model_name", NOVA_MODEL_DEFAULT_NAME
         ),
-        "silentguard_enabled": (
-            get_user_setting(user.id, "silentguard_enabled", "false") == "true"
-        ),
         "nexanote_enabled": (
             get_user_setting(user.id, "nexanote_enabled", "false") == "true"
         ),
         "nexanote_write_enabled": (
             get_user_setting(user.id, "nexanote_write_enabled", "false") == "true"
-        ),
-        "companion_mode_enabled": (
-            get_user_setting(user.id, "companion_mode_enabled", "false") == "true"
         ),
     }
     # Personalization is read for the caller and merged in flat; the
@@ -1645,12 +1630,6 @@ def update_settings(
         )
     if data.nova_model_name is not None:
         save_user_setting(user.id, "nova_model_name", data.nova_model_name)
-    if data.silentguard_enabled is not None:
-        save_user_setting(
-            user.id,
-            "silentguard_enabled",
-            "true" if data.silentguard_enabled else "false",
-        )
     if data.nexanote_enabled is not None:
         save_user_setting(
             user.id,
@@ -1663,12 +1642,6 @@ def update_settings(
             "nexanote_write_enabled",
             "true" if data.nexanote_write_enabled else "false",
         )
-    if data.companion_mode_enabled is not None:
-        save_user_setting(
-            user.id,
-            "companion_mode_enabled",
-            "true" if data.companion_mode_enabled else "false",
-        )
     # Personalization. Pydantic has already validated each field; the
     # second pass through validate_personalization_value is the canonical
     # check used by tests and any non-HTTP caller, and it normalises
@@ -1678,7 +1651,6 @@ def update_settings(
         "warmth_level",
         "enthusiasm_level",
         "emoji_level",
-        "tone_profile",
         "custom_instructions",
     ):
         value = getattr(data, key)
@@ -1692,8 +1664,8 @@ def update_settings(
 
 # ── INTEGRATIONS ────────────────────────────────────────────────────
 # Optional, per-user, opt-in bridges to external tools. Status is
-# computed against the caller's own switches; one user enabling
-# SilentGuard never affects another. The endpoint is read-only —
+# computed against the caller's own switches; one user enabling an
+# integration never affects another. The endpoint is read-only —
 # mutations go through /settings.
 
 @app.get("/integrations/status")
@@ -1705,7 +1677,6 @@ def integrations_status(user: CurrentUser = Depends(get_current_user)):
     card without leaking the configured state.
     """
     payload: dict = {
-        "silentguard": _silentguard_integration.status(user.id).as_dict(),
         "nexanote": {
             **_nexanote_integration.status(user.id).as_dict(),
             "write_enabled": _nexanote_integration.is_write_enabled(user.id),
@@ -1738,514 +1709,6 @@ def integrations_status(user: CurrentUser = Depends(get_current_user)):
             "library_kinds": [],
         }
     return payload
-
-
-@app.get("/integrations/silentguard/lifecycle")
-def silentguard_lifecycle(user: CurrentUser = Depends(get_current_user)):
-    """SilentGuard read-only API lifecycle state for the caller.
-
-    Surfaces — and, when the operator has explicitly opted in via
-    ``NOVA_SILENTGUARD_AUTO_START`` *and* a ``systemd-user`` start
-    mode, may attempt to start — the local SilentGuard read-only API
-    service. The endpoint is gated by the per-user
-    ``silentguard_enabled`` setting; users who have not opted in see
-    a ``state="disabled"`` payload and no spawn is attempted.
-
-    Read-only with one narrow exception: when every gate is on, the
-    helper may run a single ``systemctl --user start <unit>`` against
-    the configured unit. No ``sudo``, no firewall command, no shell
-    interpretation, no remote URLs, no input from chat. See
-    :mod:`core.security.lifecycle` and the SilentGuard roadmap for
-    the full safety contract.
-    """
-    if not _silentguard_integration.is_enabled(user.id):
-        return _silentguard_lifecycle.disabled_status().as_dict()
-    return _ensure_silentguard_running().as_dict()
-
-
-def _silentguard_summary_payload(user: CurrentUser) -> dict:
-    """Build the SilentGuard Settings card payload for ``user``.
-
-    Shared by the GET ``/summary`` read path and the POST
-    ``/enable`` / ``/disable`` / ``/retry`` user-action endpoints so
-    every caller surfaces the same shape (``lifecycle``, ``counts``,
-    ``connection_summary``, ``host_enabled``) without re-deriving the
-    gating logic. The function is read-only with the single carve-out
-    documented in :func:`core.security.lifecycle.ensure_running` —
-    when the host operator has opted into ``systemd-user`` auto-start,
-    the lifecycle helper may run a single
-    ``systemctl --user start <unit>``.
-
-    ``connection_summary`` is the richer read-only aggregate produced
-    by SilentGuard's optional ``/connections/summary`` endpoint
-    (totals, local/known/unknown breakdown, top processes / remote
-    hosts). It is ``None`` whenever the endpoint is missing on the
-    SilentGuard side, the HTTP transport is not configured, or the
-    payload was malformed — the Settings card falls back to the
-    existing four basic counts in that case.
-    """
-    host_enabled = _silentguard_lifecycle.host_enabled()
-    if not _silentguard_integration.is_enabled(user.id):
-        return {
-            "lifecycle": _silentguard_lifecycle.disabled_status().as_dict(),
-            "counts": None,
-            "connection_summary": None,
-            "host_enabled": host_enabled,
-        }
-    lifecycle_status = _ensure_silentguard_running()
-    counts = None
-    connection_summary = None
-    if lifecycle_status.state == _silentguard_lifecycle.STATE_CONNECTED:
-        provider = _SilentGuardProvider()
-        try:
-            counts = provider.get_summary_counts()
-        except Exception:  # pragma: no cover — defensive belt-and-braces
-            counts = None
-        try:
-            connection_summary = provider.get_connection_summary()
-        except Exception:  # pragma: no cover — defensive belt-and-braces
-            connection_summary = None
-    return {
-        "lifecycle": lifecycle_status.as_dict(),
-        "counts": counts,
-        "connection_summary": connection_summary,
-        "host_enabled": host_enabled,
-    }
-
-
-@app.get("/integrations/silentguard/summary")
-def silentguard_summary(user: CurrentUser = Depends(get_current_user)):
-    """SilentGuard Settings status summary for the caller.
-
-    One-call snapshot the Settings UI renders into a small calm status
-    card: the same lifecycle state surfaced by
-    ``/integrations/silentguard/lifecycle`` plus, when the read-only
-    API is reachable, the four optional summary counts produced by
-    :class:`SilentGuardProvider.get_summary_counts`.
-
-    Stable shape::
-
-        {
-            "lifecycle": LifecycleStatus.as_dict(),
-            "counts": {"alerts": int, "blocked": int,
-                       "trusted": int, "connections": int} | None,
-            "connection_summary": {
-                "total": int, "local": int, "known": int,
-                "unknown": int,
-                "top_processes": [{"name": str, "count": int}, ...],
-                "top_remote_hosts": [{"host": str, "count": int}, ...],
-            } | None,
-            "host_enabled": bool,
-        }
-
-    ``counts`` is ``None`` whenever the lifecycle state is anything
-    other than ``connected``, when the HTTP transport is not
-    configured (file-only fallback), or when the optional count probe
-    fails. ``connection_summary`` is additionally ``None`` whenever
-    SilentGuard does not expose ``/connections/summary`` (older
-    builds), when the response is not a JSON object, or when no field
-    survives normalisation. Every key inside ``connection_summary`` is
-    itself optional — Nova omits values it does not have rather than
-    inventing them. The endpoint never raises; every failure path
-    maps to a calm payload the UI renders without alarm.
-
-    ``host_enabled`` mirrors the host-level
-    ``NOVA_SILENTGUARD_ENABLED`` switch *as Nova currently sees it*.
-    The Settings UI uses it to tell the user *why* the integration is
-    off when ``state="disabled"``: the host config is off, or the host
-    config is on but the per-user toggle is still off. Without this
-    hint the disabled headline conflates the two, and an operator who
-    has correctly set the env vars cannot tell that they only need to
-    flip their per-user toggle in Settings.
-
-    Read-only and gated by the per-user ``silentguard_enabled``
-    setting, exactly like the lifecycle endpoint. No background
-    polling — the UI calls this once per Settings open / Refresh
-    click, mirroring the trigger set documented in the roadmap.
-    """
-    return _silentguard_summary_payload(user)
-
-
-@app.post("/integrations/silentguard/enable")
-def silentguard_enable(user: CurrentUser = Depends(get_current_user)):
-    """Persist ``silentguard_enabled=true`` for the caller.
-
-    The Settings UI's "Enable SilentGuard" button calls this endpoint.
-    After persisting the per-user opt-in, the lifecycle helper is
-    invoked once so an operator who has also configured the safe
-    ``systemd-user`` auto-start path sees the local read-only API
-    come up immediately. The response shape is identical to
-    ``GET /integrations/silentguard/summary`` so the UI can paint the
-    new state without a follow-up request.
-
-    Safety contract (unchanged from the rest of the integration):
-
-      * only the per-user ``silentguard_enabled`` setting is mutated;
-      * lifecycle handling is delegated to
-        :func:`core.security.lifecycle.ensure_running`, which is the
-        only code path allowed to spawn a process and which already
-        forbids ``sudo`` / firewall actions / shell interpretation;
-      * no payload is read from the request — there is nothing for the
-        client to smuggle in.
-    """
-    save_user_setting(user.id, "silentguard_enabled", "true")
-    return _silentguard_summary_payload(user)
-
-
-@app.post("/integrations/silentguard/disable")
-def silentguard_disable(user: CurrentUser = Depends(get_current_user)):
-    """Persist ``silentguard_enabled=false`` for the caller.
-
-    Stops Nova from using the SilentGuard integration for this user.
-    The local SilentGuard service itself is **not** stopped — Nova
-    deliberately does not offer a stop control for an external
-    security tool (see the roadmap §8.4). Returns the same payload
-    shape as ``/summary`` so the UI can repaint the disabled state in
-    a single round-trip.
-    """
-    save_user_setting(user.id, "silentguard_enabled", "false")
-    return _silentguard_summary_payload(user)
-
-
-@app.post("/integrations/silentguard/retry")
-def silentguard_retry(user: CurrentUser = Depends(get_current_user)):
-    """Re-probe SilentGuard for the caller.
-
-    Backs the "Retry" button surfaced by the Settings card when the
-    integration is enabled but unreachable. No setting is mutated:
-    the call simply re-runs the lifecycle helper, which probes the
-    read-only API and — only when the operator has opted into the
-    safe ``systemd-user`` start mode — may attempt the same single
-    ``systemctl --user start <unit>`` ``ensure_running`` already
-    documents. Returns the same payload as ``/summary``.
-    """
-    return _silentguard_summary_payload(user)
-
-
-# ── SILENTGUARD MITIGATION (opt-in, confirmation-gated) ─────────────
-#
-# SilentGuard owns enforcement. Nova does not become the firewall: it
-# only explains, asks for confirmation, and — *only after explicit user
-# acknowledgement* — relays the user's decision to SilentGuard's
-# narrow ``/mitigation/*`` endpoints. The endpoints below are the
-# entire surface of that bridge, and every one of them:
-#
-#   * requires an authenticated session;
-#   * requires the per-user ``silentguard_enabled`` opt-in;
-#   * for the mutating endpoints, requires an explicit
-#     ``{"acknowledge": true}`` body — Nova refuses to forward without it,
-#     even though the underlying SilentGuard call would also reject;
-#   * never runs sudo, shell, or firewall commands, and never opens a
-#     non-loopback connection;
-#   * sanitises every error path into calm, user-safe wording.
-#
-# There is no background polling and no auto-enable. The default
-# remains detection-only.
-
-
-class _SilentGuardMitigationRequest(BaseModel):
-    """Body for the mitigation enable / disable endpoints.
-
-    The single recognised field is ``acknowledge``. Anything else is
-    silently ignored — there is nothing for an attacker to smuggle in.
-    The endpoint refuses the request unless the caller has explicitly
-    sent ``acknowledge=True``, mirroring SilentGuard's own
-    acknowledgement contract.
-    """
-
-    model_config = {"extra": "ignore"}
-
-    acknowledge: bool = False
-
-
-def _silentguard_mitigation_disabled_payload() -> dict:
-    """Calm payload returned when the per-user gate is off."""
-    return {
-        "ok": False,
-        "available": False,
-        "state": None,
-        "message": "SilentGuard integration is disabled.",
-    }
-
-
-def _silentguard_mitigation_payload(state, *, ok=True, message=""):
-    """Render a Nova-side mitigation response.
-
-    Always returns the same shape — ``ok``, ``available``, ``state``,
-    ``message`` — so the UI can render reads and action results with
-    one renderer.
-    """
-    state_dict = state.as_dict() if state is not None else None
-    return {
-        "ok": bool(ok),
-        "available": state is not None,
-        "state": state_dict,
-        "message": message or "",
-    }
-
-
-@app.get("/integrations/silentguard/mitigation")
-def silentguard_mitigation_state(user: CurrentUser = Depends(get_current_user)):
-    """Return the current SilentGuard mitigation snapshot for the caller.
-
-    Read-only. Gated by the per-user ``silentguard_enabled`` setting,
-    just like every other SilentGuard surface. When the user has not
-    opted in, the endpoint returns a calm
-    ``{"available": false, "state": null, ...}`` payload instead of
-    issuing any HTTP call to SilentGuard.
-
-    The response shape is::
-
-        {
-            "ok": bool,
-            "available": bool,        # SilentGuard returned a parsed state
-            "state": {                # null when not available
-                "mode":       "detection_only" | "ask_before_blocking"
-                              | "temporary_auto_block" | "unknown",
-                "active":     bool,
-                "expires_at": str | null,   # ISO-8601, when known
-            } | null,
-            "message": str,           # calm, user-safe wording
-        }
-
-    No background polling, no notifications. The endpoint runs only
-    when the UI explicitly asks (Settings card mount or Refresh
-    click). It never triggers any mitigation enable / disable call.
-    """
-    if not _silentguard_integration.is_enabled(user.id):
-        return _silentguard_mitigation_disabled_payload()
-    provider = _SilentGuardProvider()
-    try:
-        state = provider.get_mitigation_state()
-    except Exception:  # pragma: no cover — defensive belt-and-braces
-        state = None
-    if state is None:
-        return _silentguard_mitigation_payload(
-            None, ok=True,
-            message="SilentGuard mitigation status is currently unavailable.",
-        )
-    return _silentguard_mitigation_payload(state, ok=True)
-
-
-@app.post("/integrations/silentguard/mitigation/enable-temporary")
-def silentguard_mitigation_enable_temporary(
-    user: CurrentUser = Depends(get_current_user),
-    body: _SilentGuardMitigationRequest = _SilentGuardMitigationRequest(),
-):
-    """Enable SilentGuard temporary mitigation, after explicit confirmation.
-
-    Gating, in order:
-
-      1. The request must be authenticated.
-      2. The caller's ``silentguard_enabled`` setting must be ``true``.
-      3. The request body must contain ``"acknowledge": true``. Without
-         it the endpoint returns 400 and **never** issues a call to
-         SilentGuard. This mirrors SilentGuard's own acknowledgement
-         contract and gives the UI a hard server-side checkpoint
-         independent of any client-side confirmation flow.
-
-    On success the response carries the post-action mitigation state
-    so the UI can repaint without a follow-up read. On failure the
-    endpoint returns a calm, user-safe message — never a raw exception
-    or HTTP body from SilentGuard.
-
-    Safety contract:
-
-      * Nova does not run sudo / firewall / shell commands.
-      * Nova does not call SilentGuard until the body has been
-        explicitly acknowledged by the user.
-      * The acknowledgement is single-use: a fresh request must
-        re-acknowledge before any further action.
-      * Errors never leak raw transport text; SilentGuard-side
-        failures map to a calm "currently unavailable" message.
-    """
-    if not _silentguard_integration.is_enabled(user.id):
-        return _silentguard_mitigation_disabled_payload()
-    if not body.acknowledge:
-        # 400 here is intentional: every other mitigation gate returns
-        # 200 with a calm payload, but a missing acknowledgement is a
-        # client-side bug — the UI must always send ``acknowledge=true``
-        # after the user clicks Confirm.
-        raise HTTPException(
-            status_code=400,
-            detail="Acknowledgement required to enable mitigation.",
-        )
-    provider = _SilentGuardProvider()
-    try:
-        result = provider.enable_temporary_mitigation()
-    except Exception:  # pragma: no cover — defensive belt-and-braces
-        return _silentguard_mitigation_payload(
-            None, ok=False,
-            message="SilentGuard mitigation request failed.",
-        )
-    return _silentguard_mitigation_payload(
-        result.state, ok=result.ok, message=result.message,
-    )
-
-
-@app.post("/integrations/silentguard/mitigation/disable")
-def silentguard_mitigation_disable(
-    user: CurrentUser = Depends(get_current_user),
-    body: _SilentGuardMitigationRequest = _SilentGuardMitigationRequest(),
-):
-    """Disable SilentGuard mitigation, after explicit confirmation.
-
-    Same gating contract as the enable endpoint above: authenticated
-    user, per-user opt-in, and ``acknowledge=true`` in the body.
-    Returning to detection-only is still a user-visible change, so
-    Nova requires the same explicit confirmation rather than offering
-    a one-click disable.
-    """
-    if not _silentguard_integration.is_enabled(user.id):
-        return _silentguard_mitigation_disabled_payload()
-    if not body.acknowledge:
-        raise HTTPException(
-            status_code=400,
-            detail="Acknowledgement required to disable mitigation.",
-        )
-    provider = _SilentGuardProvider()
-    try:
-        result = provider.disable_mitigation()
-    except Exception:  # pragma: no cover — defensive belt-and-braces
-        return _silentguard_mitigation_payload(
-            None, ok=False,
-            message="SilentGuard mitigation request failed.",
-        )
-    return _silentguard_mitigation_payload(
-        result.state, ok=result.ok, message=result.message,
-    )
-
-
-# ── VOICE / TTS ─────────────────────────────────────────────────────
-# Opt-in "read aloud" surface on assistant replies. The server returns
-# voice preferences, validates input, and (when a local engine is
-# configured) renders WAV audio. The browser engine remains the safe
-# default — no audio bytes ever leave the user's host on either path.
-# Additional engines plug into `core/voice/providers.py` without
-# changing this endpoint's shape.
-
-# Engines the request body is allowed to ask for. Unknown values are
-# rejected by Pydantic with a 422 before our handler runs.
-_TTS_ALLOWED_ENGINES = (_voice.ENGINE_BROWSER, _voice.ENGINE_PIPER)
-
-
-class TTSRequest(BaseModel):
-    model_config = {"extra": "forbid"}
-    text: str = Field(min_length=1, max_length=_voice.MAX_TTS_INPUT_CHARS)
-    # Optional engine override. When omitted we use the server default
-    # (browser), which preserves the original zero-config behaviour.
-    engine: str | None = Field(default=None)
-
-    @field_validator("engine")
-    @classmethod
-    def _engine(cls, v):
-        if v is None:
-            return v
-        if v not in _TTS_ALLOWED_ENGINES:
-            raise ValueError(
-                f"engine must be one of {list(_TTS_ALLOWED_ENGINES)}"
-            )
-        return v
-
-
-def _voice_config_payload() -> dict:
-    """Build the /voice/config response.
-
-    Always reports the server-default provider so the existing browser
-    flow is unchanged. Adds ``available_engines`` and an optional
-    ``piper`` block so the Settings UI can offer Piper as an opt-in
-    engine when (and only when) it is fully configured on this host.
-    """
-    provider = _voice.get_default_provider()
-    payload = {
-        "available": provider.is_available(),
-        **provider.voice_config().as_dict(),
-        "available_engines": _voice.list_available_engines(),
-    }
-    piper = _voice.get_piper_provider()
-    if piper is not None:
-        # Surface the diagnostic block whether or not Piper resolves —
-        # the UI uses ``status.available`` to decide if the option is
-        # offered, and ``detail`` to show a calm hint when it isn't.
-        payload["piper"] = piper.status().as_dict()
-    return payload
-
-
-@app.get("/voice/config")
-def voice_config(_: CurrentUser = Depends(get_current_user)):
-    """Return the active voice profile for the calling user."""
-    return _voice_config_payload()
-
-
-@app.post("/voice/synthesize")
-def voice_synthesize(
-    req: TTSRequest,
-    _: CurrentUser = Depends(get_current_user),
-):
-    """Prepare a single message for playback.
-
-    Browser engine (default): returns the same JSON envelope the client
-    has always consumed — text plus voice profile — and the page drives
-    `speechSynthesis` locally.
-
-    Piper engine (opt-in): renders WAV audio on the host and returns
-    it as ``audio/wav`` bytes. Any failure (binary missing at runtime,
-    subprocess error, timeout, …) returns a JSON envelope marked
-    ``fallback: true`` so the client can play the message through the
-    browser engine instead — the read-aloud experience is never lost.
-    """
-    try:
-        text = _voice.prepare_text(req.text)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-
-    requested_engine = req.engine
-    if requested_engine == _voice.ENGINE_PIPER:
-        provider = _voice.get_provider(_voice.ENGINE_PIPER)
-        if provider is None:
-            return _piper_fallback_response(
-                text, reason="Piper is not configured on this host."
-            )
-        try:
-            audio = provider.synthesize(text)
-        except Exception as exc:  # noqa: BLE001 — graceful fallback is the point
-            return _piper_fallback_response(text, reason=str(exc))
-        headers = {
-            "X-Voice-Engine": _voice.ENGINE_PIPER,
-            "Cache-Control": "no-store",
-        }
-        return Response(content=audio, media_type="audio/wav", headers=headers)
-
-    # Browser engine — unchanged JSON envelope.
-    provider = _voice.get_default_provider()
-    if not provider.is_available():
-        raise HTTPException(
-            status_code=503, detail="No TTS provider is currently available."
-        )
-    return {
-        "text": text,
-        **provider.voice_config().as_dict(),
-    }
-
-
-def _piper_fallback_response(text: str, reason: str) -> JSONResponse:
-    """Render the JSON the client uses to fall back to the browser.
-
-    Status 200 with ``fallback: true`` keeps this off the error path;
-    the browser engine is a perfectly good outcome, not a 5xx event.
-    The ``reason`` is short and user-safe — never the input text.
-    """
-    browser = _voice.get_default_provider()
-    payload = {
-        "text": text,
-        "fallback": True,
-        "fallback_reason": reason[:200],
-        **browser.voice_config().as_dict(),
-    }
-    return JSONResponse(
-        content=payload,
-        headers={"X-Voice-Engine": _voice.ENGINE_BROWSER},
-    )
 
 
 # ── ADMIN: USER MANAGEMENT ──────────────────────────────────────────

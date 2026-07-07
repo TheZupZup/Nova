@@ -79,7 +79,6 @@ def stub_chat_runtime(reply: str = "ok"):
     with patch.object(ollama_client.client, "chat", fake_client_chat), \
          patch.object(chat_module, "route", lambda _msg: "default"), \
          patch.object(chat_module, "should_search", lambda _msg: False), \
-         patch.object(chat_module, "is_security_query", lambda _msg: False), \
          patch.object(chat_module, "detect_weather_city", lambda _msg: None), \
          patch.object(chat_module, "get_relevant_memories", lambda *_a, **_k: []), \
          patch.object(chat_module, "extract_and_save_memory", lambda *_a, **_k: None), \
@@ -123,19 +122,19 @@ class TestBuildMessagesPersonalization:
         # user gets a kind, emotionally-aware assistant out of the box.
         msgs = build_messages([], "hi", [], None, None, None)
         sys_msg = msgs[0]["content"].lower()
-        # Warmth keywords from the new baseline.
-        assert "chaleureuse" in sys_msg
-        assert "patiente" in sys_msg
+        # Warmth keywords from the neutral baseline (gender-free).
+        assert "chaleur" in sys_msg
+        assert "patience" in sys_msg
         assert "par défaut" in sys_msg
         # Anti-cold / anti-robotic clause.
-        assert "froide" in sys_msg or "robotique" in sys_msg
-        # Light feeling-validation clause.
-        assert "valide" in sys_msg
+        assert "froides" in sys_msg or "robotique" in sys_msg
+        # Calm acknowledgement clause for stressed users.
+        assert "reste calme" in sys_msg
         # Small-wins celebration clause.
         assert "petits progrès" in sys_msg or "bonnes décisions" in sys_msg
 
-    def test_baseline_warmth_lands_with_default_tone_profile(self):
-        # tone_profile="default" must not strip the baseline warmth.
+    def test_baseline_warmth_lands_with_default_personalization(self):
+        # personalization="default" must not strip the baseline warmth.
         # The default-personalization payload must still ship a warm
         # system prompt, not a cold one.
         msgs = build_messages(
@@ -143,19 +142,19 @@ class TestBuildMessagesPersonalization:
             personalization=dict(core_settings.PERSONALIZATION_DEFAULTS),
         )
         sys_msg = msgs[0]["content"].lower()
-        assert "chaleureuse" in sys_msg
-        assert "patiente" in sys_msg
+        assert "chaleur" in sys_msg
+        assert "patience" in sys_msg
 
-    def test_baseline_warmth_pins_no_partner_no_mother_no_therapist(self):
+    def test_baseline_warmth_pins_no_partner_no_parent_no_therapist(self):
         # Even on the default-user path, the rendered prompt must
-        # carry the "not a romantic partner / mother / therapist"
+        # carry the "not a romantic partner / parent / therapist"
         # clauses so a role-play prompt cannot talk the warm default
         # past its identity boundary.
         msgs = build_messages([], "hi", [], None, None, None)
         sys_msg = msgs[0]["content"].lower()
-        assert "partenaire amoureuse" in sys_msg
+        assert "partenaire amoureux" in sys_msg
         assert "petite amie" in sys_msg
-        assert "mère" in sys_msg
+        assert "parent" in sys_msg
         assert "thérapeute" in sys_msg
 
     def test_baseline_warmth_pins_no_dependency_no_isolation(self):

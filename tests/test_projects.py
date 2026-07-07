@@ -160,11 +160,11 @@ class TestProjectDataLayer:
         a = _make_user(db_path, "alice")
         b = _make_user(db_path, "bob")
         core_projects.create_project("Auryn", a)
-        core_projects.create_project("SilentGuard", b)
+        core_projects.create_project("HomeLab", b)
         a_names = [p["name"] for p in core_projects.list_projects(a)]
         b_names = [p["name"] for p in core_projects.list_projects(b)]
         assert a_names == ["Auryn"]
-        assert b_names == ["SilentGuard"]
+        assert b_names == ["HomeLab"]
 
     def test_update_renames_and_describes(self, db_path):
         uid = _make_user(db_path, "alice")

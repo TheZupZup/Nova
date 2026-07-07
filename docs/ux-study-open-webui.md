@@ -191,8 +191,8 @@ Open WebUI has plenty that does not belong in Nova. Explicitly skip:
   switch.
 - **Showing the underlying Ollama model name on each message bubble.**
   This is the most direct violation of the identity contract today.
-- **Voice / STT / TTS UI.** Tracked separately as issue #4. Out of
-  scope for this study.
+- **Voice / STT / TTS UI.** Removed from Nova's scope — Nova is not a
+  voice assistant.
 - **Rating thumbs / fine-tune feedback.** Cosmetic noise; no training
   loop in Nova.
 
@@ -337,7 +337,6 @@ by issues #84, #93, #94, #96, #97, or #98.
 - Backend-aware Stop — issue #96.
 - Capabilities block in Nova contract — issue #99.
 - SearXNG support — issue #8.
-- Voice — issue #4.
 
 These remain on their own issues. This study does not duplicate them.
 

@@ -30,7 +30,7 @@ heading (`#`) is a title; each second-level heading (`##`) is a memory
 - The user wants warnings before risky Git actions.
 
 ## Projects
-- The user works on Nova, Auryn, SilentGuard, and NexaNote.
+- The user works on Nova, Auryn, and NexaNote.
 ```
 
 Parsing rules:

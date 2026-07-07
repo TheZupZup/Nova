@@ -610,7 +610,7 @@ alpha-only functionality:
 - `NOVA_ADMIN_UI=false` — admin-only UI controls are hidden.
 - `NOVA_CHANNEL=stable` — the alpha GitHub-OAuth gate is inactive.
 - Maintenance Center, Dev Workspace, and all integrations
-  (SilentGuard, NexaNote, GitHub, Jellyfin) default to **off**.
+  (NexaNote, GitHub, Jellyfin) default to **off**.
 
 Leave these as-is unless you intentionally opt in. See `.env.example` for
 each switch.

@@ -64,11 +64,11 @@ _PR_REF_RE = re.compile(r"(?<![A-Za-z0-9])#(\d{1,5})(?![A-Za-z0-9])")
 # Tokens we consider "interesting" for the topic list. We only keep
 # words that look like project / capability names, which on this
 # project tend to be CamelCase, ALL-CAPS, or names with internal
-# punctuation (e.g. `nova-voice`, `Piper`). Plain English filler is
+# punctuation (e.g. `nova-docs`, `NexaNote`). Plain English filler is
 # dropped to keep the summary honest.
 _TOPIC_TOKEN_RE = re.compile(
     r"\b("
-    r"[A-Z][A-Za-z0-9]+(?:[-_/][A-Za-z0-9]+)+"  # Nova-voice, Foo/Bar
+    r"[A-Z][A-Za-z0-9]+(?:[-_/][A-Za-z0-9]+)+"  # Nova-docs, Foo/Bar
     r"|[A-Z]{2,}[A-Za-z0-9]*"  # ROCm, UI, API
     r"|[A-Z][a-z]+[A-Z][A-Za-z0-9]*"  # CamelCase
     r")\b"

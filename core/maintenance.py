@@ -124,7 +124,7 @@ _MAX_LOG_LINES = 50
 _MAX_DIFF_LINES = 50
 _MAX_LINE_CHARS = 300
 
-# Strict unit-name regex (mirrors the SilentGuard lifecycle helper).
+# Strict unit-name regex for the systemd-user restart path.
 _UNIT_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*\.service$")
 _UNIT_FORBIDDEN_SUBSTRINGS = (
     "..", "/", "\\", "\n", "\r", "\t", " ",
@@ -313,7 +313,7 @@ def _resolve_repo_path() -> str:
 def validate_unit_name(unit: str) -> bool:
     """Return True only when ``unit`` is a safe systemd user unit name.
 
-    Same defensive rules as ``core/security/lifecycle.py``: the input
+    Defensive rules: the input
     must be a non-empty string under 128 characters, equal to its
     ``.strip()`` form, free of forbidden substrings (``..``, path
     separators, shell metacharacters, whitespace, control characters),

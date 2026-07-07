@@ -136,7 +136,6 @@ def stub_chat_stream_runtime(chunks, *, event_shape="dict"):
     with patch.object(ollama_client.client, "chat", side_effect=fake_chat), \
             patch.object(chat_module, "route", lambda _msg: "default"), \
             patch.object(chat_module, "should_search", lambda _msg: False), \
-            patch.object(chat_module, "is_security_query", lambda _msg: False), \
             patch.object(chat_module, "detect_weather_city", lambda _msg: None), \
             patch.object(chat_module, "get_relevant_memories", lambda *_a, **_k: []), \
             patch.object(chat_module, "extract_and_save_memory", lambda *_a, **_k: None), \
@@ -207,7 +206,6 @@ class TestChatStreamGenerator:
                 ), \
                 patch.object(chat_module, "route", lambda _msg: "default"), \
                 patch.object(chat_module, "should_search", lambda _msg: False), \
-                patch.object(chat_module, "is_security_query", lambda _msg: False), \
                 patch.object(chat_module, "detect_weather_city", lambda _msg: None), \
                 patch.object(chat_module, "get_relevant_memories", lambda *_a, **_k: []):
             events = list(chat_stream([], "hi", [], alice))
@@ -486,7 +484,6 @@ class TestChatStreamEndpoint:
                 ), \
                 patch.object(chat_module, "route", lambda _msg: "default"), \
                 patch.object(chat_module, "should_search", lambda _msg: False), \
-                patch.object(chat_module, "is_security_query", lambda _msg: False), \
                 patch.object(chat_module, "detect_weather_city", lambda _msg: None), \
                 patch.object(chat_module, "get_relevant_memories", lambda *_a, **_k: []):
             resp = web_client.post(
