@@ -28,6 +28,21 @@ from dataclasses import dataclass, field
 from typing import Iterator, Mapping, Optional
 
 
+# ── Error-kind taxonomy ──────────────────────────────────────────────
+# A provider classifies *why* a request failed so callers can render a
+# distinct, honest message instead of one catch-all. The chat layer maps
+# these to user-facing text: a missing model names the model and how to
+# install it; a runtime failure (crash / OOM-kill / load failure) is
+# surfaced as such — never as a false "backend unreachable"; a genuine
+# transport failure stays "unreachable". Unknown / legacy errors default
+# to ``ERROR_BACKEND`` so existing ``ModelProviderError("msg")`` callers
+# behave exactly as before.
+ERROR_UNREACHABLE = "unreachable"      # backend not reachable at all
+ERROR_MODEL_MISSING = "model_missing"  # backend up, model not installed
+ERROR_MODEL_RUNTIME = "model_runtime"  # model failed to load / crashed / killed
+ERROR_BACKEND = "backend_error"        # any other backend failure
+
+
 class ModelProviderError(Exception):
     """A model provider could not fulfil a request.
 
@@ -35,9 +50,26 @@ class ModelProviderError(Exception):
     (e.g. ``ollama.ResponseError``, ``ConnectionError``, ``httpx.HTTPError``)
     in this type so Nova core never imports or catches a concrete client
     library's exceptions. Callers map it to a controlled, user-facing
-    message (the chat path turns it into the existing "Ollama is
-    unreachable" reply / stream ``error`` event).
+    message.
+
+    ``kind`` is one of the ``ERROR_*`` constants above so the chat layer
+    can tell "backend unreachable" apart from "model not installed" and
+    "model crashed at runtime". ``model`` is the model name the request
+    targeted, when known, so a missing-model message can name it. Both
+    are optional and default to the backward-compatible "generic backend
+    error, model unknown" — every existing raise site keeps working.
     """
+
+    def __init__(
+        self,
+        message: str = "",
+        *,
+        kind: str = ERROR_BACKEND,
+        model: Optional[str] = None,
+    ) -> None:
+        super().__init__(message)
+        self.kind = kind
+        self.model = model
 
 
 @dataclass(frozen=True)

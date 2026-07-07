@@ -28,6 +28,10 @@ import httpx
 import ollama
 
 from .base import (
+    ERROR_BACKEND,
+    ERROR_MODEL_MISSING,
+    ERROR_MODEL_RUNTIME,
+    ERROR_UNREACHABLE,
     ModelChunk,
     ModelProvider,
     ModelProviderError,
@@ -41,6 +45,54 @@ from .base import (
 # monkeypatches ``ollama.ResponseError`` is still matched — this mirrors
 # the pre-refactor behaviour in ``core.chat``.
 _TRANSPORT_ERRORS = (ConnectionError, OSError, httpx.HTTPError)
+
+# Substrings that classify an Ollama ``ResponseError``. Ollama replies
+# with a 404 and "model '<x>' not found, try pulling it first" when a
+# model is not installed, and with a 500 carrying runner/load/memory
+# wording when a model fails to load or is OOM-killed mid-generation.
+# Matching on the message (plus the status code when the client exposes
+# one) lets the chat layer tell "model not installed" and "model
+# crashed" apart from "daemon unreachable". Kept lowercase; compared
+# against a lowercased message.
+_MODEL_MISSING_MARKERS = (
+    "not found",
+    "try pulling",
+    "no such model",
+    "pull it first",
+    "does not exist",
+)
+_MODEL_RUNTIME_MARKERS = (
+    "unexpectedly stopped",
+    "runner process",
+    "llama runner",
+    "failed to load model",
+    "error loading model",
+    "out of memory",
+    "cannot allocate",
+    "insufficient memory",
+    "exit status",
+    "was killed",
+    "killed",
+    "signal",
+    "oom",
+)
+
+
+def _classify_response_error(exc: BaseException) -> str:
+    """Map an Ollama ``ResponseError`` to a :data:`ERROR_*` kind.
+
+    A 404 (or a "not found / try pulling" message) is a missing model;
+    runner / load / memory wording is a runtime failure; anything else is
+    a generic backend error. Best-effort and never raises — an
+    unclassifiable error simply falls through to ``ERROR_BACKEND``.
+    """
+    text = str(getattr(exc, "error", "") or exc).lower()
+    status = getattr(exc, "status_code", None)
+    if status == 404 or any(marker in text for marker in _MODEL_MISSING_MARKERS):
+        return ERROR_MODEL_MISSING
+    if any(marker in text for marker in _MODEL_RUNTIME_MARKERS):
+        return ERROR_MODEL_RUNTIME
+    return ERROR_BACKEND
 
 
 def _safe_get(obj, key: str):
@@ -132,11 +184,17 @@ class OllamaProvider(ModelProvider):
                 model=request.model, messages=request.messages
             )
         except _TRANSPORT_ERRORS as exc:
-            raise ModelProviderError(str(exc) or "Ollama unreachable") from exc
+            raise ModelProviderError(
+                str(exc) or "Ollama unreachable",
+                kind=ERROR_UNREACHABLE,
+                model=request.model,
+            ) from exc
         except Exception as exc:  # noqa: BLE001 — narrowed below
             if _is_response_error(exc):
                 raise ModelProviderError(
-                    str(exc) or "Ollama error"
+                    str(exc) or "Ollama error",
+                    kind=_classify_response_error(exc),
+                    model=request.model,
                 ) from exc
             raise
         content = _safe_get(_safe_get(response, "message") or {}, "content")
@@ -175,10 +233,18 @@ class OllamaProvider(ModelProvider):
                     return
                 yield ModelChunk(content=chunk)
         except _TRANSPORT_ERRORS as exc:
-            raise ModelProviderError(str(exc) or "Ollama unreachable") from exc
+            raise ModelProviderError(
+                str(exc) or "Ollama unreachable",
+                kind=ERROR_UNREACHABLE,
+                model=request.model,
+            ) from exc
         except Exception as exc:  # noqa: BLE001 — narrowed below
             if _is_response_error(exc):
-                raise ModelProviderError(str(exc) or "Ollama error") from exc
+                raise ModelProviderError(
+                    str(exc) or "Ollama error",
+                    kind=_classify_response_error(exc),
+                    model=request.model,
+                ) from exc
             raise
 
     def health(self) -> ProviderHealth:
