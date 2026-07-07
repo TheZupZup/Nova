@@ -29,7 +29,7 @@ Out of scope:
 - A determined attacker who already has code execution **as the
   Nova user** with full read/write access to the checkout. The
   hardening reduces blast radius, it does not erase it.
-- Patching Nova, Python, Ollama, Piper, your reverse proxy or your
+- Patching Nova, Python, Ollama, your reverse proxy or your
   kernel. Keep them up to date.
 - Authentication / authorization inside Nova. Those live in
   `core/auth.py` and the admin surface — they are unrelated to the
@@ -170,13 +170,6 @@ copy / migration procedure.
 - **Ollama.** Nova talks to Ollama over HTTP through `OLLAMA_HOST`.
   `AF_INET` is allowed; if Ollama runs on the same host you can keep
   it on `127.0.0.1` and rely on the loopback path.
-- **SilentGuard read-only API.** When configured (see
-  [`docs/silentguard-background-service.md`](silentguard-background-service.md)),
-  Nova GETs a fixed read-only path list on `127.0.0.1`. Read-only is
-  the contract — the systemd unit does not need any extra grants
-  beyond `AF_INET`.
-- **Piper / local TTS.** Synthesis runs as a subprocess of Nova, in
-  the same systemd unit. No network is involved.
 - **Outbound calls.** DuckDuckGo search, Open-Meteo weather, the
   GitHub OAuth flow on the alpha channel, and the RSS learner all use
   `AF_INET` / `AF_INET6` like any other outbound HTTPS request.
@@ -200,10 +193,8 @@ Hard rules:
   files, or `/usr`.** `ProtectSystem=strict` already enforces this at
   the kernel level; leave the filesystem permissions matching.
 - **Do not let Nova execute model-generated shell commands.** Nova
-  reads context from narrow local APIs (SilentGuard's read-only
-  endpoint, Piper as a subprocess with a fixed argv, the LLM via
-  Ollama). Anything that would let model output reach `subprocess`
-  is a regression.
+  reads context from narrow local APIs (the LLM via Ollama). Anything
+  that would let model output reach `subprocess` is a regression.
 
 A useful exercise on a fresh host:
 
@@ -246,9 +237,8 @@ sudo -u nova sudo -l   # should print "Sorry, user nova may not run sudo"
   defaults — the hardened unit does not write a separate log file.
 - Nova logs at INFO level by default. Avoid raising verbosity in
   production — DEBUG can include parsed memory blocks.
-- The SilentGuard provider is intentionally **read-only** and never
-  emits "Nova blocked X" / "Nova unblocked X" log lines, because Nova
-  is not the enforcement layer. If you see such a line, treat it as
+- Nova is not an enforcement layer and never emits "Nova blocked X" /
+  "Nova unblocked X" log lines. If you see such a line, treat it as
   a regression and file an issue.
 
 ## What Nova will NOT do
@@ -259,12 +249,11 @@ These are firm boundaries, not future work:
 - Nova does not call `sudo`, `pkexec`, `doas`, `su`, or `runuser`.
 - Nova does not execute model-generated shell commands.
 - Nova does not run anything as root.
-- Nova does not auto-download Piper, voice models, or any other
-  binary.
-- Nova does not block / unblock IPs or hostnames. SilentGuard owns
-  enforcement.
-- Nova does not send audio, prompts, or conversation history to a
-  third-party cloud service.
+- Nova does not auto-download binaries.
+- Nova does not block / unblock IPs or hostnames. Enforcement belongs
+  to dedicated tools the operator runs, not to Nova.
+- Nova does not send prompts or conversation history to a third-party
+  cloud service.
 
 If a future feature would cross any of these lines, it is the wrong
 feature for Nova.
@@ -281,8 +270,7 @@ sudo systemctl stop nova
 A future "safe mode" might disable optional integrations and pause
 background work without killing the HTTP listener, so an
 administrator can keep talking to Nova while the rest of the system
-is being investigated. That work is tracked alongside the broader
-SilentGuard integration roadmap; nothing in this guide depends on it.
+is being investigated. Nothing in this guide depends on it.
 
 ## Further reading
 
@@ -291,9 +279,5 @@ SilentGuard integration roadmap; nothing in this guide depends on it.
 - [`docs/nova-safety-and-trust-contract.md`](nova-safety-and-trust-contract.md)
   — the safety and trust boundaries every Nova feature must respect,
   including the future-quarantine / honeypot rules.
-- [`docs/silentguard-integration-roadmap.md`](silentguard-integration-roadmap.md)
-  — the architectural rationale for keeping enforcement out of Nova.
-- [`docs/silentguard-background-service.md`](silentguard-background-service.md)
-  — running SilentGuard's loopback API as a user service.
 - `systemd-analyze security nova.service` — your single best source of
   truth after a unit edit.

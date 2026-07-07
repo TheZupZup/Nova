@@ -1,11 +1,13 @@
 """
 Assistant-framing guardrails.
 
-Nova is a warm, local-first **AI assistant** — for productivity, coding,
-homelab, memory, and calm support. It is deliberately **not** an "AI
-girlfriend", a romantic companion, a soulmate, or a dependency-forming
-emotional partner. This file pins that positioning so a future rewrite
-cannot quietly drift Nova back into companion-product framing:
+Nova is a kind, neutral, local-first **AI assistant** — for
+productivity, coding, homelab, memory, and local tools. It is
+deliberately **not** an "AI girlfriend", a romantic companion, a
+soulmate, a dependency-forming emotional partner, a voice assistant,
+or a security-suite dashboard. This file pins that positioning so a
+future rewrite cannot quietly drift Nova back into companion-product
+framing:
 
   * the Nova Safety and Trust Contract carries the explicit
     assistant-not-companion boundaries (the safe phrases the brief
@@ -14,10 +16,11 @@ cannot quietly drift Nova back into companion-product framing:
   * the README positions Nova as a local-first assistant, not a
     companion product, near the top;
   * the user-facing Settings *labels* never sound romantic or
-    companion-like (no "companion", "girlfriend", "partner", …);
-  * every warm system-prompt fragment restates the identity + the
-    non-attachment clause (Nova does not love / miss / need / attach)
-    and encourages real-world support;
+    companion-like (no "companion", "girlfriend", "partner", …), and
+    there is no companion / calm-support toggle at all;
+  * the system-prompt fragments restate the identity + the
+    non-attachment clause (Nova does not love / miss / need / attach),
+    assign Nova no gender, and encourage real-world support;
   * no prompt fragment ever positions Nova *as* a romantic partner
     (a denylist of positive-romance self-statements that must never
     appear); and
@@ -43,22 +46,9 @@ for _mod in ("ddgs", "ollama", "sgmllib", "feedparser"):
     if _mod not in sys.modules:
         sys.modules[_mod] = MagicMock()
 
-from core.companion import (  # noqa: E402
-    COMPANION_GROUNDING_BLOCK,
-    COMPANION_MODE_BLOCK,
-)
-from core.emotional_support import EMOTIONAL_SUPPORT_BLOCK  # noqa: E402
 from core.identity import IDENTITY_CONTRACT  # noqa: E402
 from core.nova_contract import RESPONSE_STYLE_BLOCK  # noqa: E402
 from core.policies import ADMIN_POLICY  # noqa: E402
-from core.relationship_coach import RELATIONSHIP_COACH_BLOCK  # noqa: E402
-from core.tone_profile import (  # noqa: E402
-    TONE_CALM_SUPPORT_BLOCK,
-    TONE_DEEP_COMFORT_BLOCK,
-    TONE_DEVELOPER_BLOCK,
-    TONE_PROFESSIONAL_BLOCK,
-    TONE_WARM_COMPANION_BLOCK,
-)
 from core.chat import _autosave_allowed  # noqa: E402
 
 
@@ -74,27 +64,10 @@ def _norm(text: str) -> str:
     return re.sub(r"\s+", " ", text.lower())
 
 
-# Fragments the reframe added the explicit non-attachment clause to.
-_NON_ATTACHMENT_FRAGMENTS = {
-    "RESPONSE_STYLE_BLOCK": RESPONSE_STYLE_BLOCK,
-    "COMPANION_MODE_BLOCK": COMPANION_MODE_BLOCK,
-    "TONE_WARM_COMPANION_BLOCK": TONE_WARM_COMPANION_BLOCK,
-    "EMOTIONAL_SUPPORT_BLOCK": EMOTIONAL_SUPPORT_BLOCK,
-}
-
 # Every deterministic prompt fragment that ships in a system prompt.
 _ALL_FRAGMENTS = {
     "IDENTITY_CONTRACT": IDENTITY_CONTRACT,
     "RESPONSE_STYLE_BLOCK": RESPONSE_STYLE_BLOCK,
-    "COMPANION_MODE_BLOCK": COMPANION_MODE_BLOCK,
-    "COMPANION_GROUNDING_BLOCK": COMPANION_GROUNDING_BLOCK,
-    "EMOTIONAL_SUPPORT_BLOCK": EMOTIONAL_SUPPORT_BLOCK,
-    "RELATIONSHIP_COACH_BLOCK": RELATIONSHIP_COACH_BLOCK,
-    "TONE_PROFESSIONAL_BLOCK": TONE_PROFESSIONAL_BLOCK,
-    "TONE_DEVELOPER_BLOCK": TONE_DEVELOPER_BLOCK,
-    "TONE_WARM_COMPANION_BLOCK": TONE_WARM_COMPANION_BLOCK,
-    "TONE_CALM_SUPPORT_BLOCK": TONE_CALM_SUPPORT_BLOCK,
-    "TONE_DEEP_COMFORT_BLOCK": TONE_DEEP_COMFORT_BLOCK,
 }
 
 
@@ -125,6 +98,16 @@ class TestSafetyContractPositioning:
     def test_contract_disclaims_ai_girlfriend(self):
         text = _norm(CONTRACT.read_text(encoding="utf-8"))
         assert '"ai girlfriend"' in text or "ai girlfriend" in text
+
+    def test_contract_states_nova_has_no_gender(self):
+        text = _norm(CONTRACT.read_text(encoding="utf-8"))
+        assert "nova has no gender" in text
+
+    def test_contract_states_no_special_modes(self):
+        # No companion mode, no emotional-support mode, no voice persona.
+        text = _norm(CONTRACT.read_text(encoding="utf-8"))
+        assert "no companion mode" in text
+        assert "no emotional-support mode" in text
 
 
 # ── README positions Nova as an assistant, not a companion product ──────────
@@ -166,7 +149,7 @@ class TestSettingsLabelsAreNotRomantic:
         "companion", "compagnon", "girlfriend", "boyfriend",
         "petite amie", "petit ami", "soulmate", "âme sœur",
         "romantic", "romantique", "partner", "partenaire",
-        "always here for you", "lonely",
+        "always here for you", "lonely", "calm support", "soutien calme",
     )
     # Terms that must never appear even in an explanatory hint.
     _HINT_DENYLIST = (
@@ -215,47 +198,46 @@ class TestSettingsLabelsAreNotRomantic:
             for bad in self._HINT_DENYLIST:
                 assert bad not in low, f"hint {value!r} contains {bad!r}"
 
-    def test_calm_support_label_replaced_companion_mode(self):
-        html = self._html()
-        titles = [v.lower() for v in self._title_values(html)]
-        assert "calm support" in titles
-        assert "soutien calme" in titles
-        # The old companion labels are gone from the label surface.
-        assert "companion mode" not in titles
-        assert "mode compagnon" not in titles
+    def test_companion_toggle_is_gone(self):
+        # The former "Calm support" / companion-mode toggle must not be
+        # present in the Settings UI in any form.
+        html = self._html().lower()
+        assert "pers-companion" not in html
+        assert "companion_mode_enabled" not in html
+        assert "savecompanionmode" not in html.replace(" ", "")
 
 
-# ── Warm prompt fragments restate the identity + non-attachment clause ──────
+# ── Prompt fragments restate identity + non-attachment, no gender ───────────
 
 
-class TestWarmFragmentsHaveBoundaries:
+class TestPromptFragmentBoundaries:
     def test_non_attachment_clause_present(self):
-        # Every warm fragment must carry the explicit "does not
-        # attach / miss" clause so a warm register can never imply Nova
-        # loves, misses, or needs the user.
-        for name, block in _NON_ATTACHMENT_FRAGMENTS.items():
-            low = block.lower()
-            assert "t'attaches pas" in low, name
-            assert "ne te manque pas" in low, name
-            assert "pas besoin" in low, name
+        # The default style must carry the explicit "does not attach /
+        # miss" clause so the warm baseline can never imply Nova loves,
+        # misses, or needs the user.
+        low = RESPONSE_STYLE_BLOCK.lower()
+        assert "t'attaches pas" in low
+        assert "ne te manque pas" in low
+        assert "pas besoin" in low
 
     def test_fragments_stay_honest_about_being_an_ai(self):
-        for name, block in _NON_ATTACHMENT_FRAGMENTS.items():
-            low = block.lower()
-            assert "assistant ia local" in low or "une ia" in low, name
+        low = RESPONSE_STYLE_BLOCK.lower()
+        assert "assistant ia local" in low
 
     def test_fragments_encourage_real_world_support(self):
-        for name, block in _NON_ATTACHMENT_FRAGMENTS.items():
-            low = block.lower()
-            assert any(
-                marker in low
-                for marker in (
-                    "vraies personnes",
-                    "liens humains réels",
-                    "personne de confiance",
-                    "relations humaines",
-                )
-            ), name
+        low = RESPONSE_STYLE_BLOCK.lower()
+        assert "vraies personnes" in low
+
+    def test_fragments_assign_no_gender(self):
+        # The system prompt frames Nova as a neutral assistant with no
+        # gender, and never describes Nova with a gendered persona word.
+        contract = IDENTITY_CONTRACT.lower()
+        assert "pas de genre" in contract or "sans genre" in contract
+        for gendered_self_description in (
+            "chaleureuse", "patiente et attentive", "développeuse",
+            "je suis une femme", "je suis un homme",
+        ):
+            assert gendered_self_description not in contract
 
 
 # ── No fragment ever positions Nova *as* a romantic partner ─────────────────
@@ -283,30 +265,21 @@ class TestNoRomanticSelfPositioning:
                 assert phrase not in low, f"{name} contains {phrase!r}"
 
 
-# ── Emotional support: real-world, honest, and not auto-saved ───────────────
+# ── Sensitive turns are never auto-saved ─────────────────────────────────────
 
 
-class TestEmotionalSupportBehaviour:
-    def test_block_encourages_real_world_and_no_substitute(self):
-        low = EMOTIONAL_SUPPORT_BLOCK.lower()
-        assert "personne de confiance" in low
-        assert "professionnel" in low
-        # Nova must not position itself as a replacement for real people.
-        assert "remplacement" in low or "substitut" in low
-
-    def test_block_does_not_over_identify_with_user(self):
-        low = EMOTIONAL_SUPPORT_BLOCK.lower()
-        # Honest identity + the non-attachment clause together prevent
-        # the block from over-identifying ("I'm always here for you").
-        assert "tu restes nova" in low
-        assert "t'attaches pas" in low
-
+class TestSensitiveTurnsNotAutoSaved:
     def test_emotional_turn_is_not_auto_saved(self):
         # Sensitive emotional turns must never be silently mined into
         # durable memory; the explicit "Retiens ça:" path is separate.
         assert _autosave_allowed(ADMIN_POLICY, "i feel so alone tonight") is False
         assert _autosave_allowed(ADMIN_POLICY, "i'm heartbroken") is False
         assert _autosave_allowed(ADMIN_POLICY, "je me sens seul ce soir") is False
+
+    def test_relationship_turn_is_not_auto_saved(self):
+        assert _autosave_allowed(
+            ADMIN_POLICY, "my girlfriend and I had a fight"
+        ) is False
 
     def test_neutral_turn_is_still_auto_saved(self):
         # The gate is targeted, not a blanket memory kill-switch.

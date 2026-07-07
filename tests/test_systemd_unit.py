@@ -20,11 +20,9 @@ from pathlib import Path
 import pytest
 
 
-# Two units ship in this directory: the system-level Nova service and
-# the optional user-level SilentGuard read-only API. Both are covered.
+# One unit ships in this directory: the system-level Nova service.
 REPO_ROOT = Path(__file__).resolve().parents[1]
 NOVA_UNIT = REPO_ROOT / "deploy" / "systemd" / "nova.service"
-SILENTGUARD_UNIT = REPO_ROOT / "deploy" / "systemd" / "silentguard-api.service"
 
 
 def _parse_unit(path: Path) -> dict[str, list[str]]:
@@ -52,12 +50,6 @@ def _parse_unit(path: Path) -> dict[str, list[str]]:
 def nova_unit() -> dict[str, list[str]]:
     assert NOVA_UNIT.is_file(), f"missing unit file: {NOVA_UNIT}"
     return _parse_unit(NOVA_UNIT)
-
-
-@pytest.fixture(scope="module")
-def silentguard_unit() -> dict[str, list[str]]:
-    assert SILENTGUARD_UNIT.is_file(), f"missing unit file: {SILENTGUARD_UNIT}"
-    return _parse_unit(SILENTGUARD_UNIT)
 
 
 # ── nova.service — system-level hardening ──────────────────────────
@@ -190,8 +182,8 @@ class TestNovaServiceHardening:
 
     def test_system_call_error_number_is_eperm(self, nova_unit):
         # Returning EPERM keeps a filtered syscall an application
-        # error rather than killing the process — the read-aloud
-        # flow stays alive even if a dependency tries something weird.
+        # error rather than killing the process, so the app stays
+        # alive even if a dependency tries something weird.
         assert nova_unit.get("SystemCallErrorNumber") == ["EPERM"]
 
     def test_runs_as_unprivileged_user(self, nova_unit):
@@ -231,48 +223,3 @@ class TestNovaServiceHardening:
             assert "|" not in line
             assert ";" not in line
             assert "$(" not in line
-
-
-# ── silentguard-api.service — optional user-level unit ─────────────
-
-
-class TestSilentGuardUserUnit:
-    """The companion read-only SilentGuard API unit must stay safe.
-
-    Nova does not own SilentGuard, but it ships the example unit, so a
-    minimum safety bar applies here too. None of these directives
-    require root; they are all valid for ``systemctl --user``.
-    """
-
-    def test_loopback_only_address_families(self, silentguard_unit):
-        families = silentguard_unit.get("RestrictAddressFamilies", [])
-        assert families and families[0]
-        assert set(families[0].split()) == {"AF_INET", "AF_INET6", "AF_UNIX"}
-
-    def test_no_new_privileges(self, silentguard_unit):
-        assert silentguard_unit.get("NoNewPrivileges") == ["true"]
-
-    def test_exec_start_binds_loopback(self, silentguard_unit):
-        exec_start = silentguard_unit.get("ExecStart") or []
-        assert exec_start, "ExecStart= must be set"
-        # The example argv must keep ``--host 127.0.0.1`` so a
-        # casual copy-paste does not expose the read-only API on a
-        # non-loopback interface.
-        assert "127.0.0.1" in exec_start[0], (
-            "Example SilentGuard unit must bind --host 127.0.0.1; "
-            f"got: {exec_start!r}"
-        )
-
-    def test_read_only_flag_present(self, silentguard_unit):
-        exec_start = silentguard_unit.get("ExecStart") or []
-        assert exec_start
-        assert "--read-only" in exec_start[0], (
-            "Example SilentGuard unit must include --read-only so the "
-            "integration contract (read-only only) holds."
-        )
-
-    def test_runs_under_default_target(self, silentguard_unit):
-        # User units belong under default.target; using
-        # multi-user.target would imply a system-level install path
-        # that the docs explicitly forbid.
-        assert silentguard_unit.get("WantedBy") == ["default.target"]

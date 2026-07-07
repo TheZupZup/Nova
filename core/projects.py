@@ -3,7 +3,7 @@ Nova Projects / Workspaces — local-first project foundation (Phase 1).
 
 A *project* is a lightweight, user-scoped container that lets Nova
 organise conversations and memory by context (e.g. "Nova", "Auryn",
-"SilentGuard", "Home Lab", "Personal"). It groups:
+"NexaNote", "Home Lab", "Personal"). It groups:
 
   * conversations that opt into ``project_id``
   * project-scoped memory (memory rows that carry the same ``project_id``)

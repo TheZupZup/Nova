@@ -72,9 +72,9 @@ What the Maintenance surface **does not** do:
   actions.
 - It does **not** merge or rebase on a diverged branch. The only
   pull verb wired in is `pull --ff-only`.
-- It does **not** disable any other Nova safety check. SilentGuard,
-  the GitHub read-only connector, the family controls, and the
-  identity contract are untouched.
+- It does **not** disable any other Nova safety check. The GitHub
+  read-only connector, the family controls, and the identity contract
+  are untouched.
 
 These are firm boundaries. A future change that crosses any of them
 is a contract change that must be discussed in its own PR.
@@ -324,8 +324,6 @@ added without their own review:
 - **No rollback.** A future "roll back to the previous commit"
   button is plausible but is deliberately not part of this PR.
 - **No remote terminal.** Period.
-- **No SilentGuard behaviour change.** The SilentGuard read-only
-  surface and the mitigation flow are unaffected by this feature.
 
 ---
 
@@ -351,5 +349,5 @@ The contract is pinned by [`tests/test_maintenance.py`](../tests/test_maintenanc
 - Pull and restart require `{"confirm": true}` and return `400`
   otherwise.
 
-The existing auth / admin / SilentGuard / GitHub-connector test
+The existing auth / admin / GitHub-connector test
 suites continue to pass — this feature is additive.

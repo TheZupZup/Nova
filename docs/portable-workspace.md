@@ -438,7 +438,7 @@ downloads model weights and never writes into Ollama's data
 directory. Keep Ollama models out of the Nova workspace; if you back
 the workspace up, you also back up only what Nova owns.
 
-The same rule applies to Plex, Jellyfin, SilentGuard, and any other
+The same rule applies to Plex, Jellyfin, and any other
 side service: they each manage their own data directory. Nova reads
 metadata over the network when an integration is enabled, and writes
 nothing back outside its own `data/` directory.

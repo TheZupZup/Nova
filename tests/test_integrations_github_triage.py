@@ -289,7 +289,7 @@ class TestAnalyzeIssueClarification:
 
     def test_concrete_title_not_marked_vague(self):
         rec = triage.analyze_issue(
-            _sanitised(_issue(23, title="Wire SilentGuard summary card",
+            _sanitised(_issue(23, title="Wire NexaNote summary card",
                               labels=["ui"])),
         )
         assert not any("vague" in note for note in rec["risk_notes"])
@@ -466,17 +466,17 @@ class TestRanker:
     def test_topic_filter_matches_title(self):
         issues = [
             _sanitised(_issue(1, title="Memory pack import")),
-            _sanitised(_issue(2, title="Voice polish")),
+            _sanitised(_issue(2, title="Sidebar polish")),
         ]
         recs = triage.rank_issues(issues, topic="memory")
         assert [r["number"] for r in recs] == [1]
 
     def test_topic_filter_matches_label(self):
         issues = [
-            _sanitised(_issue(1, title="Add metric", labels=["silentguard"])),
-            _sanitised(_issue(2, title="Add metric", labels=["voice"])),
+            _sanitised(_issue(1, title="Add metric", labels=["nexanote"])),
+            _sanitised(_issue(2, title="Add metric", labels=["sidebar"])),
         ]
-        recs = triage.rank_issues(issues, topic="silentguard")
+        recs = triage.rank_issues(issues, topic="nexanote")
         assert [r["number"] for r in recs] == [1]
 
     def test_stable_tie_break_on_issue_number(self):
@@ -557,7 +557,7 @@ class TestRecommendIssues:
                 200,
                 [
                     _issue(31, title="Memory pack import"),
-                    _issue(32, title="Voice polish", labels=["ui"]),
+                    _issue(32, title="Sidebar polish", labels=["ui"]),
                 ],
             ),
         })

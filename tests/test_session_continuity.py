@@ -65,7 +65,7 @@ class TestEmptyAndStale:
         for a continue-where-we-left-off card; silence is correct.
         """
         uid = _make_user()
-        cid = core_memory.create_conversation("Nova voice tuning", uid)
+        cid = core_memory.create_conversation("Nova docs tuning", uid)
         _set_updated(cid, datetime.now() - timedelta(days=60))
         result = session_continuity.build_session_continuity(uid)
         assert result == {"has_continuity": False}
@@ -74,19 +74,19 @@ class TestEmptyAndStale:
 class TestBasicSummary:
     def test_recent_conversation_produces_summary(self, db_path):
         uid = _make_user()
-        cid = core_memory.create_conversation("Nova-voice improvements", uid)
+        cid = core_memory.create_conversation("Nova-docs improvements", uid)
         now = datetime.now()
         _set_updated(cid, now - timedelta(hours=2))
         result = session_continuity.build_session_continuity(uid, now=now)
         assert result["has_continuity"] is True
-        assert "Nova-voice" in result["summary"]
-        assert result["recent_titles"] == ["Nova-voice improvements"]
-        assert "Nova-voice" in result["topics"]
+        assert "Nova-docs" in result["summary"]
+        assert result["recent_titles"] == ["Nova-docs improvements"]
+        assert "Nova-docs" in result["topics"]
         assert isinstance(result["fingerprint"], str) and len(result["fingerprint"]) >= 6
 
     def test_pr_reference_surfaces_as_topic(self, db_path):
         uid = _make_user()
-        cid = core_memory.create_conversation("Reviewing PR #154 piper integration", uid)
+        cid = core_memory.create_conversation("Reviewing PR #154 jellyfin integration", uid)
         now = datetime.now()
         _set_updated(cid, now - timedelta(hours=3))
         result = session_continuity.build_session_continuity(uid, now=now)
@@ -109,7 +109,7 @@ class TestExclusionAndOrdering:
         """Don't quote the conversation the user is already looking at."""
         uid = _make_user()
         a = core_memory.create_conversation("UI refinements", uid)
-        b = core_memory.create_conversation("Piper integration", uid)
+        b = core_memory.create_conversation("Jellyfin integration", uid)
         now = datetime.now()
         _set_updated(a, now - timedelta(hours=10))
         _set_updated(b, now - timedelta(hours=2))

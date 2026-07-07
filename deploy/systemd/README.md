@@ -29,15 +29,6 @@ this hardening to the container/VM host as well.
 
 - `nova.service` — the hardened example unit. Ships with `USERNAME` and
   `/path/to/Nova` placeholders so it cannot accidentally be used unedited.
-- `silentguard-api.service` — an optional user-level unit for running
-  SilentGuard's loopback, **read-only** HTTP API as a background
-  service. Used only by hosts that want to wire the optional Nova
-  ↔ SilentGuard integration end-to-end. The unit binds to
-  `127.0.0.1`, runs under `systemctl --user` (no sudo, no root), and
-  is **disabled by default**. See
-  [`docs/silentguard-background-service.md`](../../docs/silentguard-background-service.md)
-  for the install / enable / disable walkthrough and the security
-  notes (read-only only, no firewall changes, no telemetry).
 
 ## What stays the same
 
@@ -183,9 +174,8 @@ analysed offline:
 ```
 
 The remaining points are deliberate trade-offs — Nova needs IPv4/IPv6
-networking to reach Ollama, the weather API, and any optional
-read-only SilentGuard endpoint, so the families and `PrivateNetwork=`
-must stay open. If your host has no need for outbound traffic, you
+networking to reach Ollama and the weather API, so the families and
+`PrivateNetwork=` must stay open. If your host has no need for outbound traffic, you
 can add an egress allow-list with `IPAddressAllow=` / `IPAddressDeny=`
 on top of this unit.
 

@@ -1,7 +1,42 @@
 # Changelog
 
 ## Unreleased
+### Removed
+- **Companion, voice, and SilentGuard features.** Nova is now a neutral,
+  adaptive, local-first AI assistant — not a companion app, a voice
+  assistant, or a security-suite dashboard.
+  - **SilentGuard integration removed.** The read-only security provider
+    package (`core/security/`), the security feed (`core/security_feed.py`),
+    the per-user integration gate (`core/integrations/silentguard.py`),
+    every `/integrations/silentguard/*` endpoint, the Settings status /
+    mitigation cards, the `NOVA_SILENTGUARD_*` env switches, the example
+    `deploy/systemd/silentguard-api.service` unit, and the SilentGuard
+    docs are gone. A stale `silentguard_enabled` row in an existing
+    settings DB is simply ignored — never read, never a crash.
+  - **Voice / TTS removed.** The read-aloud buttons, the Settings →
+    Voice pane, the browser `speechSynthesis` and Piper engines
+    (`core/voice/`), the `/voice/config` and `/voice/synthesize`
+    endpoints, and the `NOVA_PIPER_*` env switches are gone. Stale
+    `NOVA_PIPER_*` lines in an old `.env` are ignored.
+  - **Companion / calm-support / emotional-support modes removed.** The
+    Calm support toggle, `core/companion.py`, `core/emotional_support.py`,
+    `core/relationship_coach.py`, and the tone-profile prompt fragments
+    (`core/tone_profile.py`, incl. `warm_companion` / `calm_support` /
+    `deep_comfort`) are gone, along with their docs. Stale
+    `companion_mode_enabled` / `tone_profile` rows in an existing DB are
+    ignored. The privacy behaviour survives: sensitive emotional /
+    relationship turns are still never auto-saved to memory — the
+    deterministic detectors now live in
+    [`core/sensitive_topics.py`](core/sensitive_topics.py).
+
 ### Changed
+- **Neutral adaptive assistant contract.** The system prompt
+  (`core/nova_contract.py`) now frames Nova as a neutral AI assistant
+  with no gender, no romantic identity, and no claims of human feelings.
+  It stays kind and warm by default, adapts to context (concise for
+  simple questions, detailed when the user needs help, technical when
+  debugging, calm when the user is stressed), and keeps the
+  no-dependency / no-isolation rules — without any special support mode.
 - **Re-centred Nova as a local-first AI assistant, not a companion
   product.** A docs/safety pass that keeps Nova's warmth but removes the
   "AI girlfriend / emotional companion" framing. The **Nova Safety and
