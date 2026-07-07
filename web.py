@@ -73,6 +73,8 @@ from core import maintenance as _maintenance
 from core import storage_status as _storage_status
 from core import provider_status as _provider_status
 from core import model_settings as _model_settings
+from core import model_status as _model_status
+from core import model_bootstrap as _model_bootstrap
 from core import gguf_settings as _gguf_settings
 from core import data_export as _data_export
 from core import memory_pack as _memory_pack
@@ -87,7 +89,7 @@ from config import (
     MODELS, ALLOWED_SETTINGS, NOVA_MODEL_DEFAULT_NAME,
     NOVA_CHANNEL, NOVA_BRANCH,
     GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET, GITHUB_OAUTH_REDIRECT_URI,
-    NOVA_AUTO_WEB_LEARNING,
+    NOVA_AUTO_WEB_LEARNING, NOVA_AUTO_UPDATE_MODELS,
 )
 from core.github_oauth import build_auth_url, exchange_code, fetch_username, is_allowed
 
@@ -175,7 +177,13 @@ MODE_MAP = {
 scheduler = BackgroundScheduler()
 if NOVA_AUTO_WEB_LEARNING:
     scheduler.add_job(learn_from_feeds, "interval", hours=1)
-scheduler.add_job(check_and_update_models, "interval", weeks=1)
+# The weekly model refresh runs `ollama pull` on every model in the map,
+# which is an automatic download. Nova keeps downloads explicit, so this
+# unattended job is OFF unless the operator opts in with
+# NOVA_AUTO_UPDATE_MODELS=true. The manual "check for updates" admin
+# action stays available regardless.
+if NOVA_AUTO_UPDATE_MODELS:
+    scheduler.add_job(check_and_update_models, "interval", weeks=1)
 
 
 @asynccontextmanager
@@ -184,6 +192,9 @@ async def lifespan(app: FastAPI):
     scheduler.start()
     if NOVA_AUTO_WEB_LEARNING:
         learn_from_feeds()
+    # Opt-in, background, non-blocking first-run model bootstrap. A no-op
+    # unless NOVA_AUTO_PULL_MODELS=true; never blocks startup.
+    _model_bootstrap.maybe_bootstrap_models()
     yield
     scheduler.shutdown()
 
@@ -2514,6 +2525,20 @@ def admin_list_models(_: CurrentUser = Depends(require_admin)):
     # and never triggers a pull.
     reconcile_installed_models()
     return list_registered_models()
+
+
+@app.get("/admin/models/status")
+def admin_model_status(_: CurrentUser = Depends(require_admin)):
+    """Read-only model-map status for operators.
+
+    Reports the configured router/default/code/advanced model names,
+    whether the backend is reachable, the models it has installed, and
+    which configured models are missing — plus the operator-install
+    switches (auto-pull / auto-update / bootstrap list). Never writes,
+    pulls, generates, or restarts; an unreachable backend is a calm 200
+    with ``reachable=false``, never a 500.
+    """
+    return _model_status.get_model_status()
 
 
 # ── ADMIN: LOCAL OLLAMA MODEL DETECTION ─────────────────────────────
