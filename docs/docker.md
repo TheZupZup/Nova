@@ -374,9 +374,14 @@ docker compose exec ollama ollama pull deepseek-coder-v2
 docker compose exec ollama ollama pull qwen2.5:32b
 ```
 
-These are the model names Nova references in `config.py`. `qwen2.5:32b`
-needs significant disk and RAM; if your hardware is constrained, skip it
-— the router falls back to `gemma4` for advanced requests.
+These are the **default** model names for Nova's four routing roles
+(router / default / code / advanced). They are not hard-coded: each role
+is configurable, so on a constrained host you can point every role at one
+small model instead of pulling the large ones — see
+[Low-RAM profile](#low-ram-profile-small-machines) below.
+
+Nova never downloads models on its own — you pull them explicitly (or opt
+in to a bootstrap; see [Operator-installed models](#operator-installed-models-no-surprise-downloads)).
 
 List and remove models:
 
@@ -388,6 +393,81 @@ docker compose exec ollama ollama rm <model>
 Because models live in the `ollama-models` volume, you only download them
 once. `docker compose down`, `up --build`, and image updates do not delete
 them — only `docker compose down -v` does.
+
+---
+
+## Low-RAM profile (small machines)
+
+Nova is a **local assistant runtime, not a fixed model** — you choose
+which model fills each of its four routing roles. The full-size defaults
+(`gemma4`, `deepseek-coder-v2`, `qwen2.5:32b`) are comfortable on a
+workstation with a GPU or plenty of RAM, but a modest **CPU-only** box —
+say a **Ryzen 5 3600, 16 GB RAM, no GPU** — cannot load them. Instead of
+failing when Nova reaches for a model the host can't run, point **every
+role at one small model**.
+
+Set these in your `.env` (next to the compose file) *before* `up -d`, or
+add them and `docker compose up -d` to apply:
+
+```env
+# Low-RAM profile: one lightweight model for every role.
+NOVA_ROUTER_MODEL=gemma3:1b
+NOVA_DEFAULT_MODEL=gemma3:1b
+NOVA_CODE_MODEL=gemma3:1b
+NOVA_ADVANCED_MODEL=gemma3:1b
+```
+
+Then pull just that one model:
+
+```bash
+docker compose exec ollama ollama pull gemma3:1b
+```
+
+That is the whole profile. With it, Nova **never tries to load a larger
+model like `gemma4`, `deepseek-coder-v2`, or `qwen2.5:32b`** on a host
+that can't handle them — routing still classifies each turn, but every
+role resolves to `gemma3:1b`. You can mix and match too: e.g. keep
+`gemma3:1b` for the router and default while pointing `NOVA_CODE_MODEL` at
+a coding model you know your host can run. Leave any variable unset to
+keep that role's full-size default.
+
+> **Why this matters.** A model Ollama can't load (out of memory / killed)
+> now surfaces as a clear *model runtime failure* in chat — not a generic
+> "Ollama unreachable" — and a model you haven't pulled surfaces as a
+> *"model not installed"* message naming the exact model. The low-RAM
+> profile avoids both by keeping Nova on a model your host can actually
+> run. Check the configured map and what's installed at a glance via the
+> admin-only `GET /admin/models/status`.
+
+---
+
+## Operator-installed models (no surprise downloads)
+
+Nova assumes **you** install the models it uses; it never downloads one
+implicitly. Every model-download switch is **off by default**, so a fresh
+stack pulls nothing until you ask:
+
+- **Weekly auto-update is off by default.** Older builds silently ran
+  `ollama pull` on the whole model map once a week. That is now gated
+  behind `NOVA_AUTO_UPDATE_MODELS=true` — leave it unset and Nova never
+  re-downloads models behind your back. (The manual "check for updates"
+  admin action still works whenever you trigger it.)
+- **Optional first-run bootstrap.** If you *want* Nova to pull a small
+  starter model on first boot, opt in explicitly:
+
+  ```env
+  NOVA_AUTO_PULL_MODELS=true
+  NOVA_BOOTSTRAP_MODELS=gemma3:1b
+  ```
+
+  When (and only when) auto-pull is on, Nova pulls the listed models in
+  the **background**, **logged**, and **without blocking startup** — and
+  skips anything already installed. With auto-pull off (the default),
+  nothing is fetched.
+
+Nova never runs model-generated shell commands and never escalates
+privilege to install a model — pulling a model is always an explicit
+Ollama action you (or an admin, through the model-pull surface) take.
 
 ---
 
