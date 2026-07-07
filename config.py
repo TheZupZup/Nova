@@ -333,12 +333,70 @@ NOVA_ALPHA_ALLOWED_USERS: frozenset[str] = frozenset(
     if u.strip()
 )
 
+
+# ── Model map (operator-configurable) ────────────────────────────────
+# Nova routes each turn to one of four *roles*; which concrete model
+# fills each role is the operator's choice, set per host via env vars.
+# Nova is model-flexible by design: it is a local assistant runtime, not
+# a fixed model or a fixed personality, so the operator installs the
+# models they want and points each role at one of them.
+#
+# The defaults below are unchanged from earlier Nova releases, so an
+# existing install upgrades with identical behaviour. A low-RAM host can
+# instead point every role at one small model (see docs/docker.md →
+# "Low-RAM profile"), e.g. NOVA_DEFAULT_MODEL=gemma3:1b, so Nova never
+# tries to load a large model like gemma4 / deepseek-coder-v2 /
+# qwen2.5:32b it cannot run. Nova never downloads these itself — the
+# operator installs the models they choose (see the operator-installed
+# model switches below).
+#
+#   NOVA_ROUTER_MODEL    — lightweight classifier / learner.
+#   NOVA_DEFAULT_MODEL   — general chat, vision, memory extraction.
+#   NOVA_CODE_MODEL      — code-focused requests.
+#   NOVA_ADVANCED_MODEL  — complex reasoning / long-context requests.
+def _model_from_env(var: str, default: str) -> str:
+    """A model-map value from ``var``, falling back to ``default``.
+
+    A blank / whitespace-only override is treated as unset so an empty
+    env line can never blank out a role (which would break routing).
+    """
+    return (os.getenv(var, "") or "").strip() or default
+
+
 MODELS = {
-    "router":   "gemma3:1b",        # lightweight classifier, learner
-    "default":  "gemma4",           # general chat, vision, memory extraction
-    "code":     "deepseek-coder-v2",
-    "advanced": "qwen2.5:32b",
+    "router":   _model_from_env("NOVA_ROUTER_MODEL", "gemma3:1b"),
+    "default":  _model_from_env("NOVA_DEFAULT_MODEL", "gemma4"),
+    "code":     _model_from_env("NOVA_CODE_MODEL", "deepseek-coder-v2"),
+    "advanced": _model_from_env("NOVA_ADVANCED_MODEL", "qwen2.5:32b"),
 }
+
+# ── Operator-installed models (explicit by default) ──────────────────
+# Nova assumes the operator installs the models they want and never
+# downloads a model implicitly. Every switch here is OFF by default, so
+# a fresh install performs no downloads until the operator asks for one:
+#
+#   * chat / routing only *use* installed models — a missing one surfaces
+#     a clear "model not installed" message (see core.chat), never a
+#     silent fetch;
+#   * NOVA_AUTO_UPDATE_MODELS gates the unattended weekly `ollama pull`
+#     refresh of the configured model map. OFF by default so Nova never
+#     re-downloads models behind the operator's back; the manual
+#     "check for updates" admin action is unaffected.
+#   * NOVA_AUTO_PULL_MODELS + NOVA_BOOTSTRAP_MODELS are an explicit,
+#     opt-in first-run bootstrap. Only when auto-pull is ON does Nova
+#     pull the named bootstrap models, and then only in the background,
+#     logged, and without blocking startup (see core.model_bootstrap).
+NOVA_AUTO_UPDATE_MODELS = (
+    os.getenv("NOVA_AUTO_UPDATE_MODELS", "false").strip().lower() == "true"
+)
+NOVA_AUTO_PULL_MODELS = (
+    os.getenv("NOVA_AUTO_PULL_MODELS", "false").strip().lower() == "true"
+)
+NOVA_BOOTSTRAP_MODELS: tuple[str, ...] = tuple(
+    m.strip()
+    for m in os.getenv("NOVA_BOOTSTRAP_MODELS", "").split(",")
+    if m.strip()
+)
 
 NOVA_MODEL_DEFAULT_NAME = "nova-assistant"
 

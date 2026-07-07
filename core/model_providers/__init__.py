@@ -11,6 +11,10 @@ provider's identity is never Nova's identity.
 """
 
 from .base import (
+    ERROR_BACKEND,
+    ERROR_MODEL_MISSING,
+    ERROR_MODEL_RUNTIME,
+    ERROR_UNREACHABLE,
     ModelChunk,
     ModelProvider,
     ModelProviderError,
@@ -39,6 +43,10 @@ from .registry import (
 __all__ = [
     "ModelProvider",
     "ModelProviderError",
+    "ERROR_UNREACHABLE",
+    "ERROR_MODEL_MISSING",
+    "ERROR_MODEL_RUNTIME",
+    "ERROR_BACKEND",
     "ModelRequest",
     "ModelResponse",
     "ModelChunk",

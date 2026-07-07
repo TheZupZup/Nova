@@ -78,6 +78,31 @@ and a fully local Python setup (no Docker at all) is documented in the
 
 ---
 
+## Running on a small or low-RAM machine
+
+Nova is model-flexible — you choose which local model it runs. Its
+full-size defaults (`gemma4`, `deepseek-coder-v2`, `qwen2.5:32b`) need a
+capable host, so on a modest **CPU-only** box (e.g. a Ryzen 5 3600 with
+16 GB RAM and no GPU) point every role at one small model instead. Add
+this to your `.env` and pull just that model:
+
+```env
+NOVA_ROUTER_MODEL=gemma3:1b
+NOVA_DEFAULT_MODEL=gemma3:1b
+NOVA_CODE_MODEL=gemma3:1b
+NOVA_ADVANCED_MODEL=gemma3:1b
+```
+
+```bash
+docker compose -f docker-compose.ghcr.yml exec ollama ollama pull gemma3:1b
+```
+
+Nova then never tries to load a model your host can't run. Full details,
+including per-role mixes and the opt-in bootstrap, are in
+[docs/docker.md → Low-RAM profile](docs/docker.md#low-ram-profile-small-machines).
+
+---
+
 ## Where your data lives
 
 Nova keeps all of its state in two named Docker volumes — never inside

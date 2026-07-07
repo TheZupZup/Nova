@@ -47,6 +47,46 @@ Model Provider Interface          core/model_providers/base.py
    └── future NovaModelProvider
 ```
 
+## The model map is operator-controlled
+
+Nova core is a **local assistant runtime**, not a fixed model or a fixed
+personality. Which concrete model fills each of Nova's four routing roles
+is the *operator's* choice, set per host via environment variables (the
+defaults are unchanged from earlier releases, so an existing install is
+unaffected):
+
+| Role | Env var | Default |
+|---|---|---|
+| Router | `NOVA_ROUTER_MODEL` | `gemma3:1b` |
+| Default | `NOVA_DEFAULT_MODEL` | `gemma4` |
+| Code | `NOVA_CODE_MODEL` | `deepseek-coder-v2` |
+| Advanced | `NOVA_ADVANCED_MODEL` | `qwen2.5:32b` |
+
+`config.MODELS` is built from these at startup. On a constrained host,
+point every role at one small model (e.g. `gemma3:1b`) so Nova never
+tries to load a model the host can't run — see
+[docs/docker.md → Low-RAM profile](docker.md#low-ram-profile-small-machines).
+
+**Downloads stay explicit.** Nova assumes the operator installs the
+models it uses and never fetches one implicitly:
+
+- chat / routing only *use* installed models (a missing one is the
+  `model_missing` reply above, naming the model — not a silent pull);
+- the weekly `ollama pull` refresh of the map is off unless
+  `NOVA_AUTO_UPDATE_MODELS=true`;
+- an optional first-run bootstrap (`NOVA_AUTO_PULL_MODELS` +
+  `NOVA_BOOTSTRAP_MODELS`, `core/model_bootstrap.py`) is opt-in,
+  background, logged, and non-blocking — and reuses the validated,
+  no-shell `core.model_pulls` path.
+
+Admins can review the whole picture read-only via
+`GET /admin/models/status` (`core/model_status.py`): the configured
+role→model map, whether the backend is reachable, the installed models,
+and which configured models are missing. It writes nothing, pulls
+nothing, and never runs a generation — an unreachable backend is a calm
+`reachable=false`, never a 500. This keeps model *selection* env-driven
+and operator-owned while making the resulting state visible.
+
 ## The contract
 
 `core/model_providers/base.py` defines small, backend-agnostic objects so
@@ -78,8 +118,16 @@ name → `config.MODEL_PROVIDER` (env `NOVA_MODEL_PROVIDER`, default
 - the legacy single-shot fallback when an old ollama-python lacks the
   `stream=` kwarg,
 - mapping `(ollama.ResponseError, ConnectionError, httpx.HTTPError, …)`
-  to `ModelProviderError`, which the chat path still turns into the
-  existing "Ollama is unreachable" reply / stream `error` event.
+  to `ModelProviderError`. The provider now also **classifies** the
+  failure (`kind`): a genuine transport failure is `unreachable`, a
+  model Ollama does not have is `model_missing`, and a model that fails
+  to load / crashes / is OOM-killed is `model_runtime`. The chat path
+  turns each into a distinct, honest reply — "Ollama is unreachable" only
+  for a real transport failure; a `model_missing` reply names the exact
+  model and how to install it; a `model_runtime` reply surfaces the crash
+  rather than mislabelling it as "unreachable". An unclassified backend
+  error keeps the calm "unreachable" wording, so existing behaviour is
+  unchanged for those.
 
 It resolves the shared `core.ollama_client.client` singleton lazily on
 every call, so changing `OLLAMA_HOST` needs no process restart and

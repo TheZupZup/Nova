@@ -38,6 +38,21 @@ Nova is built around four ideas:
   stay in a local SQLite file under your account. No cloud sync, no
   third-party analytics.
 
+**Model-flexible and operator-controlled.** Nova core is a local
+assistant *runtime*, not a fixed model or a fixed personality. You
+install the local models you want and choose which one Nova uses for each
+role — router, general chat, code, and advanced — through
+`NOVA_ROUTER_MODEL` / `NOVA_DEFAULT_MODEL` / `NOVA_CODE_MODEL` /
+`NOVA_ADVANCED_MODEL` (see [Configuring models](#configuring-models) and,
+for constrained hosts, the
+[Low-RAM profile](docs/docker.md#low-ram-profile-small-machines)). Nova
+assumes you install your own models and never downloads one without your
+say-so. It runs as an **assistant, not an autonomous agent**: it does not
+act on its own and never executes model-generated shell commands. Warmth,
+tone, and calm emotional-support features are **optional and bounded** —
+never a hardcoded AI-girlfriend, romantic, or dependency-forming persona
+(see the [Safety and Trust Contract](docs/nova-safety-and-trust-contract.md)).
+
 Nova is under active development. Most of what is described in this
 README ships today; the **Development status** section calls out what
 is still design work or experimental.
@@ -46,10 +61,11 @@ is still design work or experimental.
 
 Shipped today:
 
-- **Multi-model routing.** A lightweight classifier (`gemma3:1b`)
-  decides which local model handles each request: general chat,
-  code-focused, or advanced reasoning. The router falls back cleanly
-  when a model is missing.
+- **Multi-model routing.** A lightweight classifier (`gemma3:1b` by
+  default) decides which local model handles each request: general chat,
+  code-focused, or advanced reasoning. Every role is operator-configurable
+  (see [Configuring models](#configuring-models)), and the router falls
+  back cleanly when a model is missing.
 - **Streaming replies.** Assistant messages stream into the UI as they
   are generated, with a calm typing indicator while Nova is thinking.
   The browser coalesces incoming tokens on a short flush window
@@ -885,7 +901,10 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 3. Pull the required Ollama models
+### 3. Pull the Ollama models you want
+
+These are the **default** models for Nova's four roles. Pull the ones you
+plan to use — Nova never downloads them for you:
 
 ```bash
 ollama pull gemma3:1b
@@ -894,9 +913,22 @@ ollama pull deepseek-coder-v2
 ollama pull qwen2.5:32b
 ```
 
-`qwen2.5:32b` requires significant disk space and RAM. If your hardware
-is constrained, skip it; the router falls back to `gemma4` for advanced
-requests.
+`qwen2.5:32b` (and to a lesser degree `gemma4` / `deepseek-coder-v2`)
+need significant disk and RAM. **On a constrained, CPU-only host, don't
+pull them** — instead point every role at one small model and pull just
+that (see [Configuring models](#configuring-models)):
+
+```bash
+# .env
+NOVA_ROUTER_MODEL=gemma3:1b
+NOVA_DEFAULT_MODEL=gemma3:1b
+NOVA_CODE_MODEL=gemma3:1b
+NOVA_ADVANCED_MODEL=gemma3:1b
+```
+
+```bash
+ollama pull gemma3:1b
+```
 
 ### 4. Configure credentials
 
@@ -1019,6 +1051,13 @@ All configuration is read from `.env` at startup. Key variables:
 | `NOVA_DATA_DIR` | — | Optional absolute path that holds `nova.db`, backups, and reserved subdirectories. Blank = legacy layout (DB next to the checkout). See [`docs/data-directory.md`](docs/data-directory.md), or [`docs/portable-workspace.md`](docs/portable-workspace.md) for a self-contained parent layout that works for both systemd and Docker. |
 | `NOVA_DEV_WORKSPACE_ROOTS` | — | OS-path-separator- or comma-separated absolute directories that may contain repos a Project can link (read-only Phase 1). Blank = the Dev Workspace feature is off. Never set to `/`, `/home`, or a broad system path. See [`docs/dev-workspace.md`](docs/dev-workspace.md). |
 | `OLLAMA_HOST` | `http://localhost:11434` | Ollama API base URL |
+| `NOVA_ROUTER_MODEL` | `gemma3:1b` | Model for the request-routing classifier. See [Configuring models](#configuring-models). |
+| `NOVA_DEFAULT_MODEL` | `gemma4` | Model for general chat, vision, and memory extraction. |
+| `NOVA_CODE_MODEL` | `deepseek-coder-v2` | Model for code-focused requests. |
+| `NOVA_ADVANCED_MODEL` | `qwen2.5:32b` | Model for complex / long-context reasoning. |
+| `NOVA_AUTO_UPDATE_MODELS` | `false` | When `true`, a weekly background job runs `ollama pull` for the configured model map. Off by default — Nova never re-downloads models unattended. |
+| `NOVA_AUTO_PULL_MODELS` | `false` | When `true`, pull `NOVA_BOOTSTRAP_MODELS` once on first start (opt-in, background, non-blocking). |
+| `NOVA_BOOTSTRAP_MODELS` | — | Comma-separated models the opt-in bootstrap pulls (e.g. `gemma3:1b`). Ignored unless `NOVA_AUTO_PULL_MODELS=true`. |
 | `NOVA_MODEL_PROVIDER` | `ollama` | Model backend: `ollama` (default) or `llamacpp` (local GGUF, no Ollama). See [`docs/local-gguf.md`](docs/local-gguf.md). |
 | `NOVA_MODEL_DIR` | `/mnt/archive/nova-models` | Directory local `.gguf` files must live inside. Admins can set the model path from Settings → Models, or pick from a read-only, bounded listing of the `.gguf` files in this directory (the model library); only paths inside this directory are accepted (no traversal, no arbitrary files, no symlink escape). |
 | `NOVA_GGUF_MODEL_PATH` | — | Absolute path to a local `.gguf` model file (only used when `NOVA_MODEL_PROVIDER=llamacpp`). Nova never downloads it. Blank = provider unconfigured. An admin-set path (Settings → Models) takes precedence. |
@@ -1040,8 +1079,33 @@ All configuration is read from `.env` at startup. Key variables:
 | `NOVA_PIPER_VOICE_CONFIG` | — | Path to the `.onnx.json` config (blank = auto-discover sibling) |
 | `NOVA_PIPER_TIMEOUT_SECONDS` | `20` | Piper synthesis timeout, in seconds |
 
-Model assignments are defined in `config.py` in the `MODELS`
-dictionary. To swap a model, update that dictionary and restart Nova.
+### Configuring models
+
+Nova routes each turn to one of four **roles**; you choose which model
+fills each role. The defaults are unchanged from earlier releases
+(backward compatible), and each is overridable per host via an env var:
+
+| Role | Env var | Default | Used for |
+|---|---|---|---|
+| Router | `NOVA_ROUTER_MODEL` | `gemma3:1b` | lightweight request classifier |
+| Default | `NOVA_DEFAULT_MODEL` | `gemma4` | general chat, vision, memory |
+| Code | `NOVA_CODE_MODEL` | `deepseek-coder-v2` | code-focused requests |
+| Advanced | `NOVA_ADVANCED_MODEL` | `qwen2.5:32b` | complex / long-context reasoning |
+
+Set any of these in `.env` (or the container environment) and restart
+Nova. Leave one unset to keep its default. On a low-RAM host, point all
+four at `gemma3:1b` so Nova never tries to load a model the host can't run
+(see the [Low-RAM profile](docs/docker.md#low-ram-profile-small-machines)).
+`config.py` still holds these defaults if you'd rather edit them there.
+
+**Nova installs no models for you.** Downloads stay explicit: chat only
+*uses* models you've installed (a missing one produces a clear "model not
+installed" message naming it), the weekly auto-update job is off unless
+you set `NOVA_AUTO_UPDATE_MODELS=true`, and an optional first-run
+bootstrap (`NOVA_AUTO_PULL_MODELS` + `NOVA_BOOTSTRAP_MODELS`) is
+opt-in, background, and non-blocking. Admins can review the configured
+map, reachability, and installed-vs-missing models read-only via
+`GET /admin/models/status`.
 
 A note on language: the default system prompt and Nova's persona are
 written in French. Nova auto-detects the language of each message and

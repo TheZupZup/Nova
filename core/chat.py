@@ -3,6 +3,8 @@ import threading
 from typing import Iterator
 from config import NOVA_SYSTEM_PROMPT, CHAT_HISTORY_LIMIT
 from core.model_providers import (
+    ERROR_MODEL_MISSING,
+    ERROR_MODEL_RUNTIME,
     ModelProviderError,
     ModelRequest,
     get_provider,
@@ -45,6 +47,55 @@ from memory.store import save_memory as save_natural_memory
 logger = logging.getLogger(__name__)
 
 OLLAMA_UNAVAILABLE = "Ollama is unreachable. Make sure Ollama is running, then try again."
+
+
+def _model_missing_message(model: str | None) -> str:
+    """A calm reply naming the model that is not installed.
+
+    The operator installs their own models, so the honest fix is to
+    install this one or point the matching ``NOVA_*_MODEL`` at a model
+    they already have — never a silent auto-download.
+    """
+    name = (model or "").strip() or "the configured model"
+    return (
+        f"The model '{name}' is not installed on the model backend. "
+        f"Install it (for Ollama: `ollama pull {name}`), or set the "
+        f"matching NOVA_ROUTER_MODEL / NOVA_DEFAULT_MODEL / "
+        f"NOVA_CODE_MODEL / NOVA_ADVANCED_MODEL to a model you already "
+        f"have."
+    )
+
+
+def _model_runtime_message(model: str | None) -> str:
+    """A calm reply for a model that loaded-failed / crashed / was killed.
+
+    Surfaced as a runtime failure — not a false "backend unreachable" —
+    with the low-RAM hint that fixes it most often.
+    """
+    name = (model or "").strip() or "the model"
+    return (
+        f"The model '{name}' failed to run — it may have crashed or run "
+        f"out of memory. Check the model server's logs; on a low-RAM "
+        f"host, configure a lighter model (e.g. gemma3:1b)."
+    )
+
+
+def _provider_error_reply(exc: ModelProviderError) -> str:
+    """Map a provider failure to a distinct, honest user-facing message.
+
+    ``model_missing`` names the exact model and how to install it;
+    ``model_runtime`` surfaces a crash / OOM as a runtime failure (never
+    a false "unreachable"); every other kind — a real transport failure
+    or an unclassified backend error — keeps the calm "Ollama is
+    unreachable" reply, so existing behaviour is unchanged for those.
+    """
+    kind = getattr(exc, "kind", None)
+    model = getattr(exc, "model", None)
+    if kind == ERROR_MODEL_MISSING:
+        return _model_missing_message(model)
+    if kind == ERROR_MODEL_RUNTIME:
+        return _model_runtime_message(model)
+    return OLLAMA_UNAVAILABLE
 
 
 class RequestCancelled(Exception):
@@ -562,7 +613,7 @@ def chat(
 
     except ModelProviderError as e:
         logger.warning("Model provider unavailable during chat: %s", e)
-        return OLLAMA_UNAVAILABLE, resolve_default_model()
+        return _provider_error_reply(e), resolve_default_model()
 
 
 def chat_stream(
@@ -765,7 +816,7 @@ def chat_stream(
 
     except ModelProviderError as e:
         logger.warning("Model provider unavailable during chat stream: %s", e)
-        yield {"type": "error", "detail": OLLAMA_UNAVAILABLE}
+        yield {"type": "error", "detail": _provider_error_reply(e)}
 
 
 def _stream_and_accumulate(model: str, messages: list[dict],
