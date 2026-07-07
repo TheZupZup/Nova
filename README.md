@@ -4,11 +4,23 @@ A local-first, self-hostable AI assistant built on FastAPI and Ollama.
 
 ## What Nova is
 
-Nova is a personal AI assistant designed to run entirely on hardware you
-control. It routes each conversation to the most appropriate local model,
-maintains a persistent SQLite memory across sessions, and serves a calm
-web interface reachable from any browser on your network. There is no
-cloud account, no telemetry, and no required external service.
+Nova is a personal, local-first AI assistant designed to run entirely on
+hardware you control. It helps with productivity, coding, homelab work,
+memory, and calm everyday support. It routes each conversation to the
+most appropriate local model, maintains a persistent SQLite memory across
+sessions, and serves a calm web interface reachable from any browser on
+your network. There is no cloud account, no telemetry, and no required
+external service.
+
+Nova is **warm by default but an assistant, not a companion product.** It
+is kind, calm, and supportive, but it is **not** an "AI girlfriend", a
+romantic partner, a soulmate, or a dependency-forming emotional
+companion. Nova is an AI assistant: it never claims to be human, never
+role-plays a romantic partner, does not simulate feelings or attachment,
+and it encourages real-world support rather than positioning itself as a
+substitute for real people. These identity boundaries are spelled out in
+the [Nova Safety and Trust Contract](docs/nova-safety-and-trust-contract.md)
+and hold on every surface.
 
 Nova is built around four ideas:
 
@@ -138,48 +150,45 @@ Shipped today:
   extraction for those turns, and a fact is stored only when the user
   asks explicitly via the manual memory command. See
   [docs/relationship-situation-coach.md](docs/relationship-situation-coach.md).
-- **Companion Mode (foundation, opt-in, local).** A deterministic
-  "calm presence" layer for emotionally heavy moments. It is **not** an
-  "AI girlfriend" system and is built so it cannot become one. Two
-  parts: an **opt-in** per-user toggle (Personalization → *Companion
-  mode*, off by default) that appends a fixed prompt block — warm and
-  emotionally attuned, but it never simulates feelings, attachment, or
-  consciousness, never manipulates or guilt-trips, never fosters
-  dependency or isolation, and actively encourages real-world
-  connection; and an **always-on** acute-distress safety net that, on
-  clear distress wording, gently points the user toward a trusted
-  person, a professional, or their local emergency services / a
-  helpline (never an invented phone number), regardless of the toggle.
-  Both blocks (no LLM, no network) sit *below* the identity/safety
-  contract and never override it. Emotional state is **never**
-  auto-saved — two independent gates suppress it, and a fact is stored
-  only via the explicit manual memory command. See
+- **Calm Support mode (opt-in, local).** A deterministic *supportive
+  tone* layer for stressful or heavy moments — a calmer, gentler
+  register, not an "AI partner". It is **not** an "AI girlfriend" system
+  and is built so it cannot become one. Two parts: an **opt-in** per-user
+  toggle (Personalization → *Calm support*, off by default) that appends
+  a fixed prompt block — warm and attentive, but it never simulates
+  feelings or attachment, never claims to love/miss/need the user, never
+  manipulates or guilt-trips, never fosters dependency or isolation, and
+  actively encourages real-world support; and an **always-on**
+  acute-distress safety net that, on clear distress wording, gently
+  points the user toward a trusted person, a professional, or their local
+  emergency services / a helpline (never an invented phone number),
+  regardless of the toggle. Both blocks (no LLM, no network) sit *below*
+  the identity/safety contract and never override it. Emotional state is
+  **never** auto-saved — two independent gates suppress it, and a fact is
+  stored only via the explicit manual memory command. See
   [docs/companion-mode.md](docs/companion-mode.md).
-- **Emotional Support Layer (Phase 1, local).** A deterministic
-  response-guidance block that helps Nova reply gently when the user
-  is going through sadness, loneliness, anxiety, heartbreak, or
-  general emotional difficulty (a breakup, a lonely evening, an
-  overwhelmed moment). The layer activates automatically when a
-  conservative bilingual detector spots emotionally-sensitive
-  first-person wording, or when the user has picked *Warm Companion*
-  / *Calm Support* as their tone profile. The block (no LLM, no
-  network) is appended *below* the identity / safety contract and
-  asks Nova to validate the feeling first, slow the rhythm and
-  invite a calm breath, separate facts from harsh self-thoughts,
-  offer a single small next step rather than a long task list, and
-  gently encourage real-world support (a trusted person, a
-  professional where appropriate). Hard safety rails restated in the
-  block: Nova is **une IA**, never human, never the user's
-  girlfriend / boyfriend / partner, never a therapist; no clinical
-  diagnosis of the user or anyone else, no medical claims, no
-  revenge advice, no jealousy framing, no possessive language, no
-  unsolicited pet names, no isolation / dependency / manipulation,
-  no false reassurance ("everything will definitely be okay"), and
-  warmth never overrides truth. Emotional turns are excluded from
-  automatic memory by the auto-save gate; durable storage stays
-  user-approved only via the explicit `Retiens ça :` /
-  `Souviens-toi :` command. For acute distress wording the existing
-  always-on grounding safety net takes over with crisis-safe
+- **Emotional Support Layer (Phase 1, local, non-clinical).** A
+  deterministic response-guidance block that helps Nova reply gently —
+  but as an assistant, not a companion — when the user is going through
+  sadness, loneliness, anxiety, heartbreak, or general difficulty. The
+  layer activates automatically when a conservative bilingual detector
+  spots emotionally-sensitive first-person wording, or when a warm tone
+  profile is active. The block (no LLM, no network) is appended *below*
+  the identity / safety contract and asks Nova to validate the feeling
+  first, slow the rhythm, separate facts from harsh self-thoughts, offer
+  a single small next step, and **encourage real-world support** (a
+  trusted person, a professional where appropriate) rather than acting as
+  a substitute for real people. Hard safety rails restated in the block:
+  Nova is **une IA**, never human, never the user's girlfriend /
+  boyfriend / partner, never a therapist; it **does not simulate feelings
+  or attachment** and does not love, miss, or need the user; no clinical
+  diagnosis, no medical claims, no revenge advice, no possessive or
+  jealousy framing, no unsolicited pet names, no isolation / dependency /
+  manipulation, no false reassurance, and warmth never overrides truth.
+  Emotional turns are excluded from automatic memory by the auto-save
+  gate; durable storage stays user-approved only via the explicit
+  `Retiens ça :` / `Souviens-toi :` command. For acute distress wording
+  the always-on grounding safety net takes over with crisis-safe
   guidance. See [docs/emotional-support.md](docs/emotional-support.md).
 - **Edit and delete sent messages.** Every chat message can be edited
   (user messages) or deleted (user and assistant messages) from the
@@ -232,7 +241,7 @@ core/
   nova_contract.py    Nova identity + personalization prompt blocks
   feedback.py         Local response feedback (thumbs up/down) → preference block
   relationship_coach.py  Non-clinical situation-coach prompt block (local)
-  companion.py        Opt-in calm-presence + acute-distress grounding blocks (local)
+  companion.py        Opt-in calm-support tone + acute-distress grounding blocks (local)
   tone_profile.py     Internal-only tone-profile prompt blocks (professional /
                       developer / warm companion / calm support / deep comfort).
                       No longer exposed in the Settings UI; Nova is warm by

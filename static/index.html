@@ -3629,8 +3629,8 @@
                     <div class="settings-row">
                         <div class="settings-row-head">
                             <div class="settings-row-label">
-                                <span class="settings-row-title" id="pers-companion-title">Companion mode</span>
-                                <span class="settings-row-hint" id="pers-companion-hint">An optional calm, steady presence for emotionally heavy moments. Off by default. Not a therapist or a substitute for real people — Nova still encourages real-world support.</span>
+                                <span class="settings-row-title" id="pers-companion-title">Calm support</span>
+                                <span class="settings-row-hint" id="pers-companion-hint">An optional, gentler supportive tone for stressful or heavy moments. Off by default. Nova stays an AI assistant — not a companion, romantic partner, or a substitute for real people — and still encourages real-world support.</span>
                             </div>
                             <label style="display:flex;align-items:center;gap:8px;white-space:nowrap;">
                                 <input type="checkbox" id="pers-companion-toggle" onchange="saveCompanionMode(this.checked)" />
@@ -4168,8 +4168,8 @@
             pers_emoji_opt_expressive: "Expressif",
             pers_instr_title: "Instructions personnalisées",
             pers_instr_hint: "Une note courte que Nova garde en tête pour tes messages.",
-            pers_companion_title: "Mode compagnon",
-            pers_companion_hint: "Une présence calme et posée, optionnelle, pour les moments émotionnellement lourds. Désactivé par défaut. Ni thérapeute ni substitut à de vraies personnes — Nova encourage toujours le soutien réel.",
+            pers_companion_title: "Soutien calme",
+            pers_companion_hint: "Un ton de soutien plus doux, optionnel, pour les moments de stress ou difficiles. Désactivé par défaut. Nova reste un assistant IA — ni compagnon, ni partenaire amoureux, ni substitut à de vraies personnes — et encourage toujours le soutien réel.",
             coming_soon: "bientôt",
             memory_note: "Nova retient les faits que tu as partagés. Ces mémoires sont privées à ton compte.",
             mem_search_placeholder: "Rechercher dans les mémoires...",
@@ -4410,8 +4410,8 @@
             pers_emoji_opt_expressive: "Expressive",
             pers_instr_title: "Custom instructions",
             pers_instr_hint: "A short note Nova should keep in mind for your messages.",
-            pers_companion_title: "Companion mode",
-            pers_companion_hint: "An optional calm, steady presence for emotionally heavy moments. Off by default. Not a therapist or a substitute for real people — Nova still encourages real-world support.",
+            pers_companion_title: "Calm support",
+            pers_companion_hint: "An optional, gentler supportive tone for stressful or heavy moments. Off by default. Nova stays an AI assistant — not a companion, romantic partner, or a substitute for real people — and still encourages real-world support.",
             coming_soon: "coming soon",
             memory_note: "Nova remembers facts you've shared. These memories are private to your account.",
             mem_search_placeholder: "Search memories...",
@@ -8780,10 +8780,12 @@
         }
     }
 
-    // Companion mode — a per-user opt-in boolean, deliberately separate
-    // from the personalization enums (it gates a tone block, not a
-    // style value). Mirrors savePersonalizationField's snap-back on
-    // rejection so the checkbox always reflects the persisted state.
+    // Calm support (stored as the companion_mode_enabled key for
+    // backward compatibility) — a per-user opt-in boolean, deliberately
+    // separate from the personalization enums (it gates a supportive-tone
+    // block, not a style value). Mirrors savePersonalizationField's
+    // snap-back on rejection so the checkbox always reflects the
+    // persisted state.
     function applyCompanionModeUI(data) {
         const el = document.getElementById("pers-companion-toggle");
         if (el) el.checked = !!data.companion_mode_enabled;
