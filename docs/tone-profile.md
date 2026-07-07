@@ -76,7 +76,7 @@ The available values are:
 | `default`         | Default           | No extra block. The baseline `RESPONSE_STYLE_BLOCK` already carries balanced warmth, patience, and emotional awareness. |
 | `professional`    | Professional      | Calm, courteous, precise. More formal and direct than the default; no filler, no flattery, no over-friendly small-talk. |
 | `developer`       | Developer         | Sober technical register. Maintainer-focused, direct, exact, assumption-aware, no preamble. |
-| `warm_companion`  | Warm Companion    | Warmer than the default. Encouraging and present; helps the user feel less alone — honestly.          |
+| `warm_companion`  | Warm             | Warmer than the default. Encouraging and present; honest about being an AI assistant, never a partner.  |
 | `calm_support`    | Calm Support      | Particularly soft and reassuring. Slows the rhythm, offers one small next step. |
 | `deep_comfort`    | Deep Comfort      | Deeply tender for difficult emotional moments. "You are safe here" warmth, protective but never controlling. |
 

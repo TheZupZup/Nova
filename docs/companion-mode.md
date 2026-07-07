@@ -1,20 +1,25 @@
-# Companion Mode
+# Calm Support mode (formerly "Companion Mode")
 
 > **Status: shipped (foundation), opt-in, local-first.** This document
-> describes the deterministic "calm presence" layer that helps a user
-> feel a little less alone and a little more grounded — without
-> pretending to be a person, a partner, or a therapist. It lives
-> strictly inside the boundaries set by
+> describes the deterministic *supportive-tone* layer that helps a user
+> feel a little more grounded during a stressful or heavy moment —
+> without pretending to be a person, a partner, a companion, or a
+> therapist. It is a calmer, gentler register, **not** an "AI partner".
+> It lives strictly inside the boundaries set by
 > [`docs/nova-safety-and-trust-contract.md`](nova-safety-and-trust-contract.md);
 > nothing here grants Nova a new capability, contacts the network, or
 > changes storage / migration / Ollama behaviour. It is **not** an "AI
 > girlfriend" system and is built so it cannot become one.
+>
+> The user-facing toggle is labelled **Calm support**; the underlying
+> per-user setting key stays `companion_mode_enabled` for backward
+> compatibility.
 
 ## What it is
 
 Some of what people need from an assistant is not a task: a steady,
-non-judgemental presence when they are stressed or anxious, or just
-want to think out loud without being alone with it. Companion Mode lets
+non-judgemental tone when they are stressed or anxious, or just
+want to think out loud. Calm Support mode lets
 Nova offer that the same calm, deterministic way it already offers the
 [Relationship Situation Coach](relationship-situation-coach.md): a
 small, fixed context block that shapes *how* Nova answers, with hard
@@ -22,28 +27,28 @@ safety rails baked into the wording itself.
 
 It has two parts:
 
-1. **The companion presence (opt-in).** A per-user Settings toggle
-   (Personalization → *Companion mode*, off by default). When on, a
+1. **The calm-support tone (opt-in).** A per-user Settings toggle
+   (Personalization → *Calm support*, off by default). When on, a
    fixed deterministic block is appended to the system prompt, *below*
    the identity / safety contract. It frames Nova as a calm, stable,
-   emotionally **attuned** presence that — fully consistent with the
+   attentive assistant that — fully consistent with the
    identity contract's existing rule — never simulates its own
-   emotions, attachment, or consciousness, never fosters dependency or
-   isolation, and never positions itself as a substitute for human
-   relationships.
+   emotions or attachment, never claims to love, miss, or need the
+   user, never fosters dependency or isolation, and never positions
+   itself as a substitute for human relationships.
 
 2. **The acute-distress grounding safety net (always on).** A
    conservative, deterministic detector watches for clear acute-distress
    wording in the user's message. When it matches, a separate fixed
-   grounding block is appended **whether or not** companion mode is
+   grounding block is appended **whether or not** calm support is
    enabled, so a person in genuine difficulty is met warmly and gently
    pointed toward real human, professional, or emergency help. This part
    is not behind the toggle on purpose: turning a comfort feature *off*
    must not turn the safety net off.
 
-## The companion block
+## The calm-support block
 
-When companion mode is on, the block asks Nova to:
+When calm support is on, the block asks Nova to:
 
 - be soft, calm, non-judgemental, with a steady rhythm and stable,
   consistent personality;
@@ -130,7 +135,7 @@ missing real distress.
 The blocks are fixed constants — no LLM in the loop, deterministic,
 byte-identical every time — and `build_messages` adds them **after**
 `IDENTITY_CONTRACT` and the safety / security blocks. Ordering is the
-guarantee: a companion or grounding block can never dilute or override
+guarantee: a calm-support or grounding block can never dilute or override
 Nova's identity, safety, or capability rules, exactly like the
 personalization, feedback, and relationship-coach blocks. The block
 text is French to match the voice of the identity / safety contract;
@@ -170,7 +175,7 @@ emotional state without confirmation.*
 
 ## Relationship to the Safety and Trust Contract
 
-Companion Mode adds an emotionally sensitive surface, so it is worth
+Calm Support mode adds an emotionally sensitive surface, so it is worth
 stating which contract boundaries it sits inside (it relaxes none of
 them, so — like the relationship coach — it does **not** edit the
 contract itself):
@@ -178,7 +183,7 @@ contract itself):
 - **§1 Human safety and human control / §2 Honesty.** The block forbids
   manipulation, guilt, and possessiveness, restates that Nova never
   simulates feelings or pretends to be human, and steers toward real
-  human help. Companion mode is opt-in and the user can turn it off or
+  human help. Calm Support mode is opt-in and the user can turn it off or
   stop at any time; the grounding net never overrides that autonomy.
 - **§3 No harm, no abuse.** A "comfort" feature is exactly where dark
   patterns (dependency, isolation, emotional lock-in) would creep in.
@@ -189,7 +194,8 @@ contract itself):
   resistance.** Both blocks are fixed deterministic constants appended
   *below* `IDENTITY_CONTRACT` and the safety blocks. They add no
   capability and cannot reorder or weaken the contract; a request for
-  "companion mode" can never be used to talk Nova past its rules.
+  "calm support" (or "companion mode") can never be used to talk Nova
+  past its rules.
 - **§10 Auditability / privacy.** No new write path, no network, no new
   storage. Emotional turns are excluded from automatic memory by two
   independent gates; durable storage stays user-approved only.
@@ -210,7 +216,7 @@ contract itself):
 
 ## Roadmap (explicitly deferred, with the boundary each must satisfy)
 
-The vision for a calming companion presence is broader than one PR. The
+The vision for a calm, supportive tone is broader than one PR. The
 items below are **not** shipped here. They are recorded now so that
 *if* they land, they land with the right boundaries from day one (the
 same way the quarantine boundaries are pre-committed in the safety

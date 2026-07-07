@@ -1,6 +1,34 @@
 # Changelog
 
 ## Unreleased
+### Changed
+- **Re-centred Nova as a local-first AI assistant, not a companion
+  product.** A docs/safety pass that keeps Nova's warmth but removes the
+  "AI girlfriend / emotional companion" framing. The **Nova Safety and
+  Trust Contract** ([`docs/nova-safety-and-trust-contract.md`](docs/nova-safety-and-trust-contract.md))
+  gains an explicit *"Nova is an assistant, not a companion product"*
+  section: Nova is an AI assistant, is not human, is not a romantic
+  partner, does not love/miss/need/attach to the user, does not simulate
+  feelings or attachment, does not create dependency, and encourages
+  real-world support. The README top now states the same boundary and
+  links to the contract. The opt-in **Companion Mode** toggle is
+  relabelled **Calm support** in the Settings UI (its per-user setting
+  key stays `companion_mode_enabled` for backward compatibility — no
+  migration, no behaviour change); the deterministic prompt fragments are
+  retitled away from "companion" wording (`MODE SOUTIEN CALME`,
+  `STYLE CHALEUREUX`) and every warm fragment now restates that Nova does
+  not love, miss, need, or attach to the user. The Warm/Calm/Deep tone
+  registers, the emotional-support layer, and the relationship situation
+  coach are unchanged in behaviour and keep their existing safety rails;
+  emotionally-sensitive turns are still never auto-saved. New
+  [`tests/test_assistant_framing.py`](tests/test_assistant_framing.py)
+  pins the assistant-not-companion positioning across the contract, the
+  README, the Settings labels, and the system-prompt fragments. Docs
+  ([`docs/companion-mode.md`](docs/companion-mode.md),
+  [`docs/tone-profile.md`](docs/tone-profile.md),
+  [`docs/emotional-support.md`](docs/emotional-support.md)) updated to
+  match. No Docker or model-provider code changed.
+
 ### Added
 - **Nova Memory Pack — portable chat/memory export & import.** Nova can
   now export a `.zip` of *structured JSON* (not a raw database dump) so a

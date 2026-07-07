@@ -236,7 +236,7 @@ identity and safety always win:
 | Tone profile (`core/tone_profile.py`) | When the user picked `professional` / `developer` / `warm_companion` / `calm_support` / `deep_comfort` | Shapes register. Warm registers (`warm_companion` / `calm_support` / `deep_comfort`) also activate the Emotional Support Layer. |
 | Relationship Situation Coach (`core/relationship_coach.py`) | Conservative detector on relationship-specific multi-word phrases | Non-clinical method for answering a sensitive partner message. |
 | **Emotional Support Layer (this doc)** | Conservative detector on first-person emotional wording OR warm tone profile | Warm validation, slow-down / breathe, one small step, encourage real-world help. |
-| Companion Mode (`core/companion.py`) | Per-user opt-in toggle | A calm, steady presence layer for emotionally heavy moments. |
+| Calm Support mode (`core/companion.py`, `companion_mode_enabled`) | Per-user opt-in toggle | A calmer, gentler supportive-tone layer for stressful or heavy moments. |
 | Acute-distress grounding (`core/companion.py`) | Always on; conservative detector on acute distress phrasing | Always-on safety net: warmth + gentle pointer to real help. |
 
 Multiple blocks may coexist. A breakup message often appends the
