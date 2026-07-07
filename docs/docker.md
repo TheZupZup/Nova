@@ -127,10 +127,17 @@ Don't want to build Nova yourself? A prebuilt image is published to the
 tag:
 
 ```
-ghcr.io/thezupzup/nova:latest      # tracks the main branch
-ghcr.io/thezupzup/nova:1.2.3        # a specific release (recommended for servers)
-ghcr.io/thezupzup/nova:sha-abc1234  # an exact commit
+ghcr.io/thezupzup/nova:latest        # tracks main — moves on every merge (Watchtower follows this)
+ghcr.io/thezupzup/nova:v1.2.3        # a specific release (recommended for servers)
+ghcr.io/thezupzup/nova:1.2.3         # same release, without the leading v
+ghcr.io/thezupzup/nova:main-abc1234  # an exact main commit
 ```
+
+`latest` only ever moves when a change is **merged to main** (CI validates
+it first). A pull request is built to prove the image still compiles, but
+it is **never published** — no PR can move `latest` or ship code to your
+server. Release tags (`vX.Y.Z`) are versioned snapshots and do **not**
+touch `latest`.
 
 The repo ships a ready-made compose file, `docker-compose.ghcr.yml`, that
 is identical to the default stack except it **pulls** the Nova image
@@ -355,6 +362,31 @@ Trade-offs to understand before enabling it:
 
 Only the `nova` container opts in (via a label); Ollama and Watchtower
 itself are never auto-updated.
+
+### Update channels (planned)
+
+Today there is **one published channel**: `:latest`, built from `main`
+after every merge (and validated by CI first). That is the stable image
+normal users track — directly, or via Watchtower.
+
+The tagging scheme leaves room for parallel channels off other branches,
+each its own GHCR tag, so you could opt into how much change you want by
+picking a tag in `.env`:
+
+| Channel | Tag | Source | For |
+|---|---|---|---|
+| Stable | `ghcr.io/thezupzup/nova:latest` | `main` | everyone (default) |
+| Beta | `ghcr.io/thezupzup/nova:beta` | `beta` branch | early testers |
+| Alpha | `ghcr.io/thezupzup/nova:alpha` | experimental branch | developers |
+
+Switching would be a one-line change (`NOVA_IMAGE_TAG=beta`) with no data
+migration — every channel uses the same `nova-data` / `ollama-models`
+volumes.
+
+> **`beta` and `alpha` are not published yet.** Only `:latest` and the
+> per-release version tags (`:vX.Y.Z`, `:X.Y.Z`) exist today. This section
+> documents the intended direction, not a switch you can flip now — pulling
+> `:beta` currently just fails to find the tag.
 
 ---
 

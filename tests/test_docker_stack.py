@@ -311,11 +311,51 @@ class TestDockerPublishWorkflow:
         assert "if: github.event_name != 'pull_request'" in body
 
     def test_generates_required_tags(self):
+        # The tag scheme, per event:
+        #   main → :latest + :main-<short-sha>   (both default-branch only)
+        #   v*   → :vX.Y.Z + :X.Y.Z + :X.Y       (never :latest)
+        #   PR   → build-validation reference tag (never pushed)
         body = _read(self.PATH)
-        # latest tracks main; git SHA always; semver on v* tags.
         assert "type=raw,value=latest,enable={{is_default_branch}}" in body
-        assert "type=sha" in body
-        assert "type=semver,pattern={{version}}" in body
+        assert (
+            "type=sha,prefix=main-,format=short,enable={{is_default_branch}}"
+            in body
+        )
+        assert "type=ref,event=tag" in body                       # vX.Y.Z
+        assert "type=semver,pattern={{version}}" in body          # X.Y.Z
+        assert "type=semver,pattern={{major}}.{{minor}}" in body  # X.Y
+        assert "type=ref,event=pr" in body
+
+    def test_main_push_publishes_latest_and_commit_tag(self):
+        # Requirement: a merge to main publishes the stable :latest image
+        # that Docker installs (and Watchtower) follow, plus a
+        # :main-<short-sha> tag for exact-commit pinning. `latest=false`
+        # turns off metadata-action's implicit latest so :latest is applied
+        # only by the is_default_branch-gated raw tag.
+        body = _read(self.PATH)
+        assert "latest=false" in body
+        assert "type=raw,value=latest,enable={{is_default_branch}}" in body
+        assert "type=sha,prefix=main-" in body
+
+    def test_release_tags_publish_versioned_images(self):
+        # A v* tag publishes the v-prefixed tag (vX.Y.Z) and the bare semver
+        # (X.Y.Z), plus the rolling X.Y — none of which is :latest.
+        body = _read(self.PATH)
+        assert "type=ref,event=tag" in body                       # vX.Y.Z
+        assert "type=semver,pattern={{version}}" in body          # X.Y.Z
+        assert "type=semver,pattern={{major}}.{{minor}}" in body  # X.Y
+
+    def test_pull_requests_do_not_publish_latest(self):
+        # Requirement: PR builds validate the image but never publish. The
+        # push step is disabled for PRs, and every :latest enablement is
+        # gated on the default branch, so no PR ref can move :latest.
+        body = _read(self.PATH)
+        assert "push: ${{ github.event_name != 'pull_request' }}" in body
+        for line in body.splitlines():
+            if "value=latest" in line and not line.lstrip().startswith("#"):
+                assert "enable={{is_default_branch}}" in line, (
+                    f":latest must be default-branch gated: {line!r}"
+                )
 
     def test_no_docker_hub_publishing(self):
         # Requirement: do not introduce Docker Hub publishing.
@@ -325,3 +365,124 @@ class TestDockerPublishWorkflow:
             assert forbidden not in body, (
                 f"workflow must not add Docker Hub publishing: {forbidden!r}"
             )
+
+    def test_no_ssh_or_live_server_deploy(self):
+        # Non-goal: the pipeline validates and publishes images only. It
+        # must never SSH anywhere or deploy to a live server from CI.
+        body = _read(self.PATH).lower()
+        for forbidden in ("ssh ", "scp ", "ssh-action", "appleboy",
+                          "known_hosts", "ssh_private_key", "deploy_host"):
+            assert forbidden not in body, (
+                f"workflow must not deploy to a server: {forbidden!r}"
+            )
+
+
+# ── docker-compose.watchtower.yml (auto-update overlay) ─────────────
+
+
+class TestWatchtowerOverlay:
+    """The opt-in auto-update overlay: Watchtower watches GHCR and, when
+    :latest changes, pulls the new image and recreates *only* the Nova
+    container — without ever removing the data / model volumes.
+    """
+
+    PATH = "docker-compose.watchtower.yml"
+
+    def test_file_exists(self):
+        assert (_REPO_ROOT / self.PATH).is_file()
+
+    def test_uses_watchtower(self):
+        assert "containrrr/watchtower" in _read(self.PATH)
+
+    def test_only_updates_opted_in_containers(self):
+        # LABEL_ENABLE makes Watchtower ignore every container that does not
+        # carry the enable label, so it never touches unrelated apps on the
+        # same host.
+        body = _read(self.PATH)
+        assert 'WATCHTOWER_LABEL_ENABLE: "true"' in body
+        assert "com.centurylinklabs.watchtower.enable" in body
+
+    def test_nova_opts_in_ollama_does_not(self):
+        # The enable label is attached to the nova service only; ollama is
+        # not re-declared here, so the model server is never auto-updated.
+        joined = "\n".join(_uncommented_lines(_read(self.PATH)))
+        assert "nova:" in joined
+        assert "ollama:" not in joined
+
+    def test_poll_interval_is_configurable(self):
+        assert "WATCHTOWER_POLL_INTERVAL" in _read(self.PATH)
+
+    def test_cleanup_removes_images_not_data(self):
+        # CLEANUP deletes the *superseded image* to save disk. The overlay
+        # must never be wired to delete volumes or run a destructive down.
+        body = _read(self.PATH)
+        assert 'WATCHTOWER_CLEANUP: "true"' in body
+        for forbidden in ("down -v", "docker volume rm", "--volumes",
+                          "WATCHTOWER_REMOVE_VOLUMES"):
+            assert forbidden not in body, (
+                f"watchtower overlay must not delete data: {forbidden!r}"
+            )
+
+
+# ── docs/docker.md (auto-update + persistence guide) ────────────────
+
+
+class TestDockerDocsAutoUpdate:
+    """docs/docker.md must document the auto-update story end to end: the
+    Watchtower overlay, the manual fallback, the update channels, and the
+    volume-safety rules (an image update never deletes data; `down -v`
+    does).
+    """
+
+    PATH = "docs/docker.md"
+
+    def test_documents_watchtower_auto_update(self):
+        body = _read(self.PATH)
+        assert "Watchtower" in body
+        # The exact opt-in command from the requirement.
+        assert (
+            "docker compose -f docker-compose.ghcr.yml "
+            "-f docker-compose.watchtower.yml up -d"
+        ) in body
+
+    def test_explains_watchtower_pulls_and_recreates(self):
+        # Watchtower checks GHCR, pulls the newer image, and recreates the
+        # container when :latest changes. Collapse whitespace so a phrase
+        # that wraps across lines in the Markdown still matches.
+        body = " ".join(_read(self.PATH).lower().split())
+        assert "checks ghcr" in body
+        assert "pulls a newer image" in body
+        assert "recreates the container" in body
+
+    def test_documents_manual_update_fallback(self):
+        # The manual pull/up path must be present for users who do not want
+        # Watchtower.
+        body = _read(self.PATH)
+        assert "docker compose -f docker-compose.ghcr.yml pull" in body
+        assert "docker compose -f docker-compose.ghcr.yml up -d" in body
+
+    def test_updates_keep_data_and_models(self):
+        # Updating the image must not wipe memory / settings / models: both
+        # named volumes are documented as surviving an update.
+        body = _read(self.PATH)
+        assert "nova-data" in body
+        assert "ollama-models" in body
+        assert "never touched by an" in body  # "...never touched by an update"
+
+    def test_warns_against_deleting_volumes(self):
+        # `down -v` is the one destructive command and must be flagged as
+        # deleting the volumes (database, conversations, models).
+        raw = _read(self.PATH)
+        assert "docker compose down -v" in raw
+        # Collapse whitespace so the warning matches even when it wraps.
+        assert "deletes the volumes" in " ".join(raw.split())
+
+    def test_documents_latest_as_stable_channel(self):
+        # Requirement: :latest = stable main. The channels section names the
+        # planned beta/alpha tags and marks them as not yet published so no
+        # one pulls a tag that does not exist.
+        body = _read(self.PATH)
+        assert ":latest" in body
+        assert "beta" in body
+        assert "alpha" in body
+        assert "not published yet" in body
