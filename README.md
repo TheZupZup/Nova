@@ -847,6 +847,11 @@ feature exists.
 
 ## Running locally
 
+> **Just want to use Nova?** The recommended install is Docker — see
+> **[INSTALL.md](INSTALL.md)** (and [docs/docker-desktop.md](docs/docker-desktop.md)
+> if you manage containers with Docker Desktop). The steps below are the
+> from-source path, aimed at contributors and developers.
+
 ### Requirements
 
 - Linux (tested on Fedora).
@@ -943,7 +948,9 @@ docker compose exec ollama ollama pull gemma3:1b
 No `.env` is required — the stack starts with safe defaults. Copy
 `.env.example` to `.env` only when you want to change the admin login,
 ports, or enable integrations (and **do** change the admin password before
-exposing Nova beyond localhost).
+exposing Nova beyond localhost — note that `NOVA_USERNAME` /
+`NOVA_PASSWORD` seed the account on the very first start only; on a
+running install, reset the password from the in-app admin Users panel).
 
 **Don't want to build?** A prebuilt image is published to the GitHub
 Container Registry on every push to `main` and every release tag, so you

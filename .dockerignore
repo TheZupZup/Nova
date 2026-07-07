@@ -1,3 +1,17 @@
+# Keeps the build context small and the image clean. Two kinds of rules:
+#   1. SECRETS / RUNTIME DATA that must never be baked into the image
+#      (env files, databases, exports, backups) — the image ships code
+#      only; state lives on the /data volume at runtime.
+#   2. Local junk that would bloat the context (caches, editors, docs,
+#      archives, models) — excluded so builds stay fast everywhere.
+# Note on semantics: unlike .gitignore, a dockerignore pattern without a
+# leading `**/` only matches at the context root, so file globs that
+# must apply at any depth are written as `**/*.ext`.
+# The image needs: requirements.txt, *.py, core/, memory/, static/,
+# CHANGELOG.md (read at runtime for version stamping), and
+# docker/entrypoint.sh. Never exclude those (in particular, do not add
+# a bare `docker*` rule — it would drop docker/entrypoint.sh).
+
 # VCS
 .git
 .gitignore
@@ -6,23 +20,58 @@
 # Python
 .venv/
 venv/
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/*.pyd
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.tox/
+.nox/
 *.egg-info/
+.coverage
+.coverage.*
+coverage/
+htmlcov/
+.cache/
+
+# Node / build tooling output (nothing in the image is built with Node)
+node_modules/
+build/
+dist/
 
 # Local secrets and runtime data — MUST NOT be baked into the image
-.env
-.env.*
+# (mirrors .gitignore: .env, .env.*, and any *.env at any depth)
+**/.env
+**/.env.*
+**/*.env
 !.env.example
-*.db
-*.db.*
-*.backup
-*.save
+**/*.db
+**/*.db.*
+**/*.sqlite
+**/*.sqlite3
+**/*.backup
+**/*.save
+
+# Local runtime/workspace directories — in Docker this data lives on the
+# nova-data volume (/data), never in the image (mirrors .gitignore)
+data/
+NovaData/
+NovaPortable/
+backups/
+exports/
+memory-packs/
+logs/
+tmp/
+
+# Large local artefacts: model files, archives, dumps
+**/*.gguf
+**/*.tar
+**/*.tar.gz
+**/*.tgz
+**/*.zip
+**/*.log
 
 # Editor / OS
 .vscode/
@@ -30,12 +79,21 @@ __pycache__/
 .DS_Store
 Thumbs.db
 
-# CI / docs that aren't needed at runtime
+# CI / lint / tests / docs — not needed inside the runtime image
+# (CHANGELOG.md is deliberately NOT listed here: the app parses it at
+# runtime to stamp exports with the Nova version)
 .github/
+.flake8
 tests/
 docs/
+deploy/
+scripts/
+README.md
+CONTRIBUTING.md
+INSTALL.md
 
-# Docker meta
+# Docker metadata — used to BUILD/RUN the stack, not needed inside the
+# image itself (docker/entrypoint.sh IS needed and stays included)
 Dockerfile
-docker-compose.yml
+docker-compose*.yml
 .dockerignore
