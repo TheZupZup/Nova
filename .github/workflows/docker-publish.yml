@@ -6,10 +6,14 @@ name: Publish Docker image
 # image section of docs/docker.md.
 #
 # Publishing matrix:
-#   push to main              -> ghcr.io/thezupzup/nova:latest + :sha-<short>
-#   push of a v* tag          -> :<version> + :<major>.<minor> + :sha-<short>
+#   push to main              -> ghcr.io/thezupzup/nova:latest + :main-<short-sha>
+#   push of a v* tag          -> :vX.Y.Z + :X.Y.Z + :X.Y  (does NOT move :latest)
 #   pull request              -> build only (validation), nothing is pushed
 #   manual (workflow_dispatch)-> same tags as the ref it runs on
+#
+# `:latest` moves only on a merge to main, so a Docker install that tracks
+# `:latest` (directly or via Watchtower) always lands on validated main code
+# — never on unmerged PR code and never on a release tag.
 #
 # Secrets: none. Authentication to GHCR uses the automatically provided
 # GITHUB_TOKEN with `packages: write`. No Docker Hub, no external registry.
@@ -69,14 +73,20 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           # `latest` tracks the main branch only; release (v*) tags get
-          # semver tags but do NOT move `latest`.
+          # versioned tags but do NOT move `latest`.
           flavor: |
             latest=false
           tags: |
+            # main branch → :latest (what Watchtower follows) + :main-<short-sha>
             type=raw,value=latest,enable={{is_default_branch}}
-            type=sha
+            type=sha,prefix=main-,format=short,enable={{is_default_branch}}
+            # v* release tag → :vX.Y.Z (raw tag) + :X.Y.Z + :X.Y. `latest`
+            # is gated on is_default_branch above, so a tag never moves it.
+            type=ref,event=tag
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
+            # pull request → build-validation reference tag only; the push
+            # step below is disabled for PRs, so nothing is published.
             type=ref,event=pr
 
       - name: Build and push
