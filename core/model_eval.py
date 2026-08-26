@@ -414,6 +414,7 @@ CREATE TABLE IF NOT EXISTS model_eval_results (
     constraints_total  INTEGER NOT NULL DEFAULT 0,
     constraints_json   TEXT    NOT NULL DEFAULT '[]',
     output             TEXT    NOT NULL DEFAULT '',
+    output_truncated   INTEGER NOT NULL DEFAULT 0,
     error              TEXT    NOT NULL DEFAULT '',
     human_rating       INTEGER,
     human_note         TEXT    NOT NULL DEFAULT '',
@@ -458,6 +459,11 @@ def _ensure_result_snapshot_columns(conn: sqlite3.Connection) -> None:
         conn.execute(
             "ALTER TABLE model_eval_results ADD COLUMN "
             "case_source TEXT NOT NULL DEFAULT ''"
+        )
+    if "output_truncated" not in columns:
+        conn.execute(
+            "ALTER TABLE model_eval_results ADD COLUMN "
+            "output_truncated INTEGER NOT NULL DEFAULT 0"
         )
 
 
@@ -553,6 +559,7 @@ def _result_to_dict(row: dict) -> dict:
         "constraints_total": int(row["constraints_total"]),
         "constraints": constraints,
         "output": row["output"],
+        "output_truncated": bool(row["output_truncated"]),
         "error": row["error"],
         "human_rating": row["human_rating"],
         "human_note": row["human_note"],
@@ -751,13 +758,22 @@ def run_case(case: EvalCase, model: str) -> dict:
 
     started = time.monotonic()
     output = ""
+    full_output = ""
+    output_truncated = False
     error = ""
     context_size: Optional[int] = None
     try:
         response = provider.generate(
             ModelRequest(model=model, messages=messages)
         )
-        output = (response.content or "")[:MAX_OUTPUT_CHARS]
+        # Keep the full response for scoring and cap only what is
+        # stored. Capping first lets the storage limit manufacture a
+        # pass: a 40,001-character answer against ``max_chars: 40000``
+        # becomes exactly 40,000 and satisfies the constraint it
+        # actually violated.
+        full_output = response.content or ""
+        output_truncated = len(full_output) > MAX_OUTPUT_CHARS
+        output = full_output[:MAX_OUTPUT_CHARS]
         context_size = _runtime_context_size(recorded_model, provider)
     except ModelProviderError as exc:
         kind = getattr(exc, "kind", "") or "backend_error"
@@ -766,7 +782,7 @@ def run_case(case: EvalCase, model: str) -> dict:
         error = f"unexpected_error: {type(exc).__name__}"
     elapsed_ms = int((time.monotonic() - started) * 1000)
 
-    scored = evaluate_output(case, output)
+    scored = evaluate_output(case, full_output)
     return {
         "case_id": case.id,
         "case_title": case.title,
@@ -779,11 +795,19 @@ def run_case(case: EvalCase, model: str) -> dict:
         "requested_model": model,
         "context_size": context_size,
         "elapsed_ms": elapsed_ms,
-        "success": bool(not error and output.strip() and scored["all_passed"]),
+        "success": bool(
+            not error and full_output.strip() and scored["all_passed"]
+        ),
         "constraints": scored["constraints"],
         "constraints_passed": scored["constraints_passed"],
         "constraints_total": scored["constraints_total"],
         "output": output,
+        # True when the stored text is shorter than what the model
+        # returned. The score above reflects the *full* response; this
+        # flags that the stored copy is incomplete, which blocks dataset
+        # export — an incomplete completion must not become a training
+        # example.
+        "output_truncated": output_truncated,
         "error": error,
     }
 
@@ -926,8 +950,9 @@ def _execute_run(
                         "(run_id, case_id, case_title, prompt_snapshot, case_source, "
                         "model, requested_model, context_size, elapsed_ms, "
                         "success, constraints_passed, "
-                        "constraints_total, constraints_json, output, error, created_at) "
-                        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        "constraints_total, constraints_json, output, "
+                        "output_truncated, error, created_at) "
+                        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                         (
                             run_id, result["case_id"], result["case_title"],
                             result["prompt_snapshot"], result["case_source"],
@@ -937,7 +962,9 @@ def _execute_run(
                             result["constraints_passed"],
                             result["constraints_total"],
                             json.dumps(result["constraints"]),
-                            result["output"], result["error"], _now_iso(),
+                            result["output"],
+                            1 if result["output_truncated"] else 0,
+                            result["error"], _now_iso(),
                         ),
                     )
                     completed += 1

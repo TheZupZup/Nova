@@ -173,6 +173,12 @@ def build_examples(
             raise DatasetExportError(
                 f"Result {raw} recorded a backend error and has no usable output."
             )
+        if result.get("output_truncated"):
+            raise DatasetExportError(
+                f"Result {raw} stored only a truncated copy of the model's "
+                f"answer, so exporting it would teach an answer that stops "
+                f"mid-thought. Re-run the case if you need this example."
+            )
 
         # Never reconstruct from the current case definition. Cases are
         # operator-editable and may disappear; only the prompt stored with
@@ -191,9 +197,39 @@ def build_examples(
         if len(prompt) + len(completion) > MAX_EXAMPLE_CHARS:
             raise DatasetExportError(f"Result {raw} is too large to export.")
 
+        # Provenance is stored on the result row (never re-read from a
+        # case file that may since have changed).
+        case_source = result.get("case_source") or ""
+        metadata = {
+            "result_id": result["id"],
+            "run_id": result["run_id"],
+            "case_id": result["case_id"],
+            "case_source": case_source,
+            "model": result["model"],
+            "context_size": result["context_size"],
+            "elapsed_ms": result["elapsed_ms"],
+            "constraints_passed": result["constraints_passed"],
+            "constraints_total": result["constraints_total"],
+            "human_rating": result["human_rating"],
+            "approved_at": result["approved_at"],
+        }
+
+        # Scan everything that will actually be written — not just the
+        # two big fields. Provenance is free-form operator text: a case
+        # ``source`` naming a reporter's email would otherwise ride into
+        # the corpus untouched, straight past this gate. Scanning the
+        # metadata generically (rather than naming one field) keeps that
+        # true for any field added later.
+        #
         # The system prompt is deliberately absent from what we scan and
         # from what we write — it is never part of an exported example.
         found = _scan_for_secrets(prompt) or _scan_for_secrets(completion)
+        if found is None:
+            for value in metadata.values():
+                if isinstance(value, str):
+                    found = _scan_for_secrets(value)
+                    if found is not None:
+                        break
         if found is not None:
             raise DatasetExportError(
                 f"Result {raw} contains content matching a credential or "
@@ -204,19 +240,7 @@ def build_examples(
         examples.append(DatasetExample(
             prompt=prompt,
             completion=completion,
-            metadata={
-                "result_id": result["id"],
-                "run_id": result["run_id"],
-                "case_id": result["case_id"],
-                "case_source": result.get("case_source") or "",
-                "model": result["model"],
-                "context_size": result["context_size"],
-                "elapsed_ms": result["elapsed_ms"],
-                "constraints_passed": result["constraints_passed"],
-                "constraints_total": result["constraints_total"],
-                "human_rating": result["human_rating"],
-                "approved_at": result["approved_at"],
-            },
+            metadata=metadata,
         ))
     return examples
 

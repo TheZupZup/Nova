@@ -36,12 +36,20 @@ an empty list.
   harness preamble are all omitted. An exported example is a bare
   `user` / `assistant` pair.
 - **Memory.** Neither structured nor natural memories are read.
+- **Truncated answers.** A result whose stored output was cut by the
+  storage cap is refused: an incomplete completion would teach an answer
+  that stops mid-thought.
 - **Credentials and personal data.** Every example is scanned for
   secret-shaped content — long hex strings, JWTs, GitHub/GitLab/AWS/
   OpenAI-style keys, `password=`-style assignments, PEM private-key
   headers, and bare email addresses. A match **refuses the whole
   export** rather than silently dropping the record, so an operator
   always finds out that something sensitive was in their data.
+  The scan covers **everything written to the file**, including the
+  provenance metadata — a case `source` naming a reporter's email
+  would otherwise ride into the corpus straight past this gate. It
+  is applied generically to every string field, so a field added
+  later is covered without a code change.
 - **Repository contents.** Code-mode repository briefings are built
   per-turn and never stored, so they cannot reach an export.
 

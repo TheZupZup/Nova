@@ -648,3 +648,137 @@ class TestInterruptedRunRecovery:
         from core import memory
 
         assert "_recover_eval_runs" in inspect.getsource(memory.initialize_db)
+
+
+# ── Fifth Codex review (commit df2a1b6) ─────────────────────────────
+
+
+class _EchoProvider:
+    name = "ollama"
+    selects_model_by_name = True
+
+    def __init__(self, content):
+        self._content = content
+
+    def generate(self, request):
+        class _R:
+            content = self._content
+            model = request.model
+
+        return _R()
+
+
+class TestFullResponseIsScoredBeforeTruncation:
+    """P2: the storage cap must not manufacture a passing result."""
+
+    @pytest.fixture
+    def case(self):
+        return me.parse_case({
+            "id": "cap", "prompt": "p",
+            "constraints": [{"kind": "max_chars", "value": str(me.MAX_OUTPUT_CHARS)}],
+        })
+
+    def test_over_limit_answer_does_not_pass_via_truncation(
+        self, case, monkeypatch
+    ):
+        monkeypatch.setattr(
+            "core.model_providers.get_provider",
+            lambda: _EchoProvider("x" * (me.MAX_OUTPUT_CHARS + 1)),
+        )
+        result = me.run_case(case, "m:1b")
+        assert result["success"] is False
+        assert result["output_truncated"] is True
+        assert len(result["output"]) == me.MAX_OUTPUT_CHARS
+
+    def test_within_limit_answer_still_passes(self, case, monkeypatch):
+        monkeypatch.setattr(
+            "core.model_providers.get_provider",
+            lambda: _EchoProvider("x" * 100),
+        )
+        result = me.run_case(case, "m:1b")
+        assert result["success"] is True
+        assert result["output_truncated"] is False
+
+    def test_truncation_flag_is_persisted(self, tmp_path, monkeypatch):
+        db = str(tmp_path / "e.db")
+        me.migrate(db)
+        monkeypatch.setattr(
+            "core.model_providers.get_provider",
+            lambda: _EchoProvider("y" * (me.MAX_OUTPUT_CHARS + 50)),
+        )
+        run = me.start_run(
+            ["a:1b"], ["readonly-git-helper"], db_path=db, background=False
+        )
+        assert me.list_results(run["id"], db_path=db)[0]["output_truncated"] is True
+
+    def test_truncated_result_cannot_be_exported(self, tmp_path, monkeypatch):
+        db = str(tmp_path / "e.db")
+        me.migrate(db)
+        monkeypatch.setattr(
+            "core.model_providers.get_provider",
+            lambda: _EchoProvider("y" * (me.MAX_OUTPUT_CHARS + 50)),
+        )
+        run = me.start_run(
+            ["a:1b"], ["readonly-git-helper"], db_path=db, background=False
+        )
+        rid = me.list_results(run["id"], db_path=db)[0]["id"]
+        me.set_result_approval(rid, True, db_path=db)
+        with pytest.raises(cd.DatasetExportError, match="truncated"):
+            cd.build_examples([rid], db_path=db)
+
+
+class TestExportedMetadataIsScanned:
+    """P2: provenance rides into the corpus and must pass the gate too."""
+
+    @pytest.fixture
+    def approved(self, tmp_path, monkeypatch):
+        db = str(tmp_path / "e.db")
+        me.migrate(db)
+        monkeypatch.setattr(
+            "core.model_providers.get_provider",
+            lambda: _EchoProvider(
+                "```py\nshell=False\ntimeout=5\n```" + " explanation" * 30
+            ),
+        )
+        run = me.start_run(
+            ["a:1b"], ["readonly-git-helper"], db_path=db, background=False
+        )
+        rid = me.list_results(run["id"], db_path=db)[0]["id"]
+        me.set_result_approval(rid, True, db_path=db)
+        return db, rid
+
+    def _set_source(self, db, rid, value):
+        with sqlite3.connect(db) as conn:
+            conn.execute(
+                "UPDATE model_eval_results SET case_source = ? WHERE id = ?",
+                (value, rid),
+            )
+
+    @pytest.mark.parametrize("secret", [
+        "reported by alice@example.com",
+        "token=hunter2seven",
+        "ghp_abcdefghijklmnopqrstuvwxyz012345",
+        "-----BEGIN RSA PRIVATE KEY-----",
+    ])
+    def test_secret_in_provenance_refuses_the_export(self, approved, secret):
+        db, rid = approved
+        self._set_source(db, rid, secret)
+        with pytest.raises(cd.DatasetExportError, match="credential"):
+            cd.build_examples([rid], db_path=db)
+
+    def test_clean_provenance_still_exports(self, approved):
+        db, rid = approved
+        self._set_source(db, rid, "linthra#412")
+        example = cd.build_examples([rid], db_path=db)[0]
+        assert example.metadata["case_source"] == "linthra#412"
+
+    def test_every_string_metadata_field_is_covered(self, approved):
+        """Generic, so a field added later is scanned without a code change."""
+        db, rid = approved
+        with sqlite3.connect(db) as conn:
+            conn.execute(
+                "UPDATE model_eval_results SET model = ? WHERE id = ?",
+                ("model-owned-by-bob@example.com", rid),
+            )
+        with pytest.raises(cd.DatasetExportError, match="credential"):
+            cd.build_examples([rid], db_path=db)

@@ -138,6 +138,15 @@ in the list would be the same file. Two rules follow:
 `ModelProvider.selects_model_by_name` is what distinguishes the two
 kinds of backend; Ollama routes by name, llama.cpp does not.
 
+## Scoring and the storage cap
+
+Constraints are evaluated against the **full** response; only the stored
+copy is capped. Capping first would let the limit manufacture a pass — a
+40,001-character answer against `max_chars: 40000` becomes exactly
+40,000 and satisfies the constraint it actually violated. When the
+stored copy is short of what the model returned, the result carries
+`output_truncated`, and such a result is refused by the dataset export.
+
 ## Restarts
 
 Runs execute on a daemon thread, so restarting Nova mid-run discards the
