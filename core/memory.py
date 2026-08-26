@@ -21,6 +21,7 @@ from core.model_pulls import migrate as _migrate_model_pulls
 from core.model_access import migrate as _migrate_model_access
 from core.local_models import migrate as _migrate_local_models
 from core.feedback import migrate as _migrate_feedback
+from core.model_eval import migrate as _migrate_model_eval
 from core.projects import migrate as _migrate_projects
 
 logger = logging.getLogger(__name__)
@@ -153,6 +154,10 @@ def initialize_db():
     _migrate_model_access(DB_PATH)
     _migrate_local_models(DB_PATH)
     _migrate_feedback(DB_PATH)
+    # Local model evaluation harness. Purely additive tables; an
+    # existing install gains them silently on the next start and needs
+    # no operator action.
+    _migrate_model_eval(DB_PATH)
     # Projects (Nova Projects/Workspaces Phase 1). The table migration
     # is purely additive; the project_id column migrations below are
     # idempotent ALTERs that never backfill or reclassify existing

@@ -293,8 +293,13 @@ class TestModuleSafetyContract:
             "revert", "gc", "prune", "fsck", "init", "config",
             "switch", "restore", "worktree", "submodule",
         }
+        # ``ls-files`` prints the index and is as read-only as
+        # ``status``; it is what lets code-mode grounding resolve a
+        # filename without ever scanning the filesystem.
         for argv in dw._ALLOWED_GIT_ARGV:
-            assert argv[0] in {"status", "branch", "log", "diff"}
+            assert argv[0] in {
+                "status", "branch", "log", "diff", "ls-files",
+            }
             assert not (set(argv) & forbidden)
 
     def test_run_git_refuses_non_allowlisted_argv(self, real_repo):

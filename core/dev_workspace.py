@@ -81,6 +81,7 @@ import difflib
 import logging
 import os
 import shutil
+import stat
 import subprocess
 import uuid
 from dataclasses import dataclass, field
@@ -110,6 +111,19 @@ _MAX_DIFF_LINES = 100
 _MAX_CHANGED_FILES = 200
 _MAX_LINE_CHARS = 300
 _MAX_RAW_PATH_CHARS = 4096
+
+# Caps for the read-only file-snippet reader used to ground Code mode.
+# A snippet is *reference material for the model*, not a file browser:
+# small, bounded, and always a strict subset of what the user already
+# has open in their own editor.
+_MAX_TRACKED_FILES = 4000    # ``git ls-files`` rows kept
+_MAX_SNIPPET_BYTES = 262_144  # bytes read from disk for one snippet
+_MAX_SNIPPET_LINES = 400      # lines returned for one snippet
+_MAX_SNIPPET_CHARS = 20_000   # characters returned for one snippet
+
+#: Public alias so sibling modules (``core.code_context``) can size a
+#: request without reaching for a private name.
+MAX_SNIPPET_CHARS = _MAX_SNIPPET_CHARS
 
 # Resolved absolute paths a repo may *never* be, regardless of the
 # configured roots. An operator who points a root at one of these (or
@@ -154,6 +168,11 @@ _ALLOWED_GIT_ARGV: frozenset[tuple[str, ...]] = frozenset(
         ("branch", "--show-current"),
         ("log", "--oneline", "-n", "20"),
         ("diff", "--stat"),
+        # Read-only listing of *tracked* paths (the index), used to
+        # resolve a filename the user mentioned without ever scanning
+        # the filesystem. It writes nothing, touches no lock, and makes
+        # no network call — the same class of read as ``status``.
+        ("ls-files",),
     }
 )
 
@@ -504,6 +523,150 @@ def git_changed_files(repo_path: str) -> tuple[dict, ...]:
         if len(entries) >= _MAX_CHANGED_FILES:
             break
     return tuple(entries)
+
+
+def git_tracked_files(repo_path: str) -> tuple[str, ...]:
+    """Repo-relative paths of tracked files, capped.
+
+    Reads git's *index* (``git ls-files``) rather than walking the
+    filesystem, so untracked build output, ``node_modules``, and
+    anything ``.gitignore``d is invisible to Nova by construction.
+    Read-only: no lock is taken and nothing is written.
+    """
+    rc, out, _ = _run_git(["ls-files"], repo_path=repo_path)
+    if rc != 0:
+        return ()
+    rows: list[str] = []
+    for line in out.splitlines():
+        path = line.strip()
+        if not path:
+            continue
+        rows.append(path)
+        if len(rows) >= _MAX_TRACKED_FILES:
+            break
+    return tuple(rows)
+
+
+class RepoReadError(ValueError):
+    """A read-only file read was refused.
+
+    Carries a short, frontend-safe reason. Never embeds absolute paths
+    beyond the validated repo, environment values, or stack traces.
+    """
+
+
+@dataclass(frozen=True)
+class FileSnippet:
+    """A bounded, read-only excerpt of one tracked file.
+
+    ``truncated`` is True when the file was longer than the caps allow,
+    so a caller (and the model) is always told it is looking at a
+    fragment rather than the whole file.
+    """
+
+    path: str
+    text: str
+    start_line: int
+    end_line: int
+    total_lines: int
+    truncated: bool
+
+    def as_dict(self) -> dict:
+        return {
+            "path": self.path,
+            "text": self.text,
+            "start_line": self.start_line,
+            "end_line": self.end_line,
+            "total_lines": self.total_lines,
+            "truncated": self.truncated,
+        }
+
+
+def read_text_snippet(
+    repo_path: str | os.PathLike[str],
+    rel_path: object,
+    *,
+    max_lines: int = 200,
+    max_chars: int = 8_000,
+    roots: Optional[Sequence[Path]] = None,
+) -> FileSnippet:
+    """Read a bounded text excerpt of one file inside a linked repo.
+
+    This is the *only* file-content read in Nova's Dev Workspace, and it
+    is deliberately narrow:
+
+      * the repo path is re-validated through :func:`validate_repo_path`
+        (allowed roots, no traversal, no system directory);
+      * ``rel_path`` goes through :func:`validate_proposed_path`, so it
+        must be repo-relative, traversal-free, non-secret
+        (``.env``, keys, tokens, databases, ``.git`` internals …) and
+        resolve *inside* the repo — symlinks included;
+      * only regular files are read (a symlink, directory, FIFO, or
+        device is refused);
+      * at most :data:`_MAX_SNIPPET_BYTES` are read from disk and the
+        result is capped by ``max_lines`` / ``max_chars``;
+      * binary content is refused outright — the same control-character
+        rule the patch preview uses, so nothing that could rewrite a
+        terminal on paste ever reaches the UI or the model.
+
+    Read-only in the strongest sense: it opens the file for reading and
+    nothing else. Raises :class:`RepoReadError` with a short, safe
+    reason on any failure.
+    """
+    try:
+        repo_root = validate_repo_path(repo_path, roots=roots)
+    except RepoPathError as exc:
+        raise RepoReadError(str(exc)) from None
+
+    try:
+        rel = validate_proposed_path(repo_root, rel_path)
+    except PatchProposalError as exc:
+        raise RepoReadError(str(exc)) from None
+
+    target = repo_root / rel
+    try:
+        # ``lstat`` (not ``stat``) so a symlink is rejected as a symlink
+        # rather than followed to whatever it points at.
+        info = target.lstat()
+    except OSError:
+        raise RepoReadError("file not found in the linked repository") from None
+    if not stat.S_ISREG(info.st_mode):
+        raise RepoReadError("only regular files can be read")
+
+    try:
+        with open(target, "rb") as handle:
+            raw = handle.read(_MAX_SNIPPET_BYTES)
+    except OSError:
+        raise RepoReadError("file could not be read") from None
+
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        raise RepoReadError("file is not UTF-8 text") from None
+    if _looks_binary(text):
+        raise RepoReadError("file does not look like text")
+
+    file_truncated = info.st_size > len(raw)
+    lines = text.splitlines()
+    total_lines = len(lines)
+    line_cap = max(1, min(int(max_lines or 1), _MAX_SNIPPET_LINES))
+    char_cap = max(1, min(int(max_chars or 1), _MAX_SNIPPET_CHARS))
+
+    kept = lines[:line_cap]
+    truncated = file_truncated or len(kept) < total_lines
+    body = "\n".join(kept)
+    if len(body) > char_cap:
+        body = body[:char_cap]
+        truncated = True
+        kept = body.splitlines()
+    return FileSnippet(
+        path=rel,
+        text=body,
+        start_line=1,
+        end_line=len(kept),
+        total_lines=total_lines,
+        truncated=truncated,
+    )
 
 
 # ── Snapshot ────────────────────────────────────────────────────────

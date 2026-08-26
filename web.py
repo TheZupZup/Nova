@@ -1,4 +1,5 @@
 import json
+import logging as _logging
 import time
 import secrets as _secrets
 import uvicorn
@@ -71,6 +72,11 @@ from core import provider_status as _provider_status
 from core import model_settings as _model_settings
 from core import model_status as _model_status
 from core import model_bootstrap as _model_bootstrap
+from core import model_profiles as _model_profiles
+from core import model_health as _model_health
+from core import code_context as _code_context
+from core import model_eval as _model_eval
+from core import coder_dataset as _coder_dataset
 from core import gguf_settings as _gguf_settings
 from core import data_export as _data_export
 from core import memory_pack as _memory_pack
@@ -1047,6 +1053,44 @@ def _resolve_forced_model(request: ChatRequest, user: CurrentUser) -> str | None
     return MODE_MAP.get(request.mode)
 
 
+def _resolve_code_context(
+    request: ChatRequest,
+    user: CurrentUser,
+    active_project_id: int | None,
+) -> str | None:
+    """The read-only repository briefing for a Code-mode turn, or ``None``.
+
+    Attached only when *all* of these already hold, so nothing new is
+    exposed by default:
+
+      * the request explicitly asks for Code mode (never on ``auto`` —
+        the user chose it),
+      * the conversation belongs to a project the caller owns,
+      * that project has a repository the user deliberately linked, and
+      * ``core.code_context`` is enabled and the path still validates
+        against the operator's ``NOVA_DEV_WORKSPACE_ROOTS``.
+
+    The briefing is assembled by ``core.code_context`` from the
+    allowlisted read-only Dev Workspace helpers: bounded, secret-free,
+    and framed to the model as untrusted reference data. Any failure
+    degrades to ``None`` — a coding turn without repo grounding, exactly
+    the pre-existing behaviour — never to an error.
+    """
+    if request.mode != "code" or active_project_id is None:
+        return None
+    try:
+        repo_path = _projects.get_local_repo_path(active_project_id, user.id)
+        if not repo_path:
+            return None
+        context = _code_context.build_code_context(repo_path, request.message)
+        return context.as_prompt_block() or None
+    except Exception:  # never let repo grounding break a chat turn
+        _logging.getLogger(__name__).warning(
+            "code context unavailable for this turn"
+        )
+        return None
+
+
 def _check_forced_model_access(forced_model: str | None, user: CurrentUser) -> None:
     if forced_model is None:
         return
@@ -1097,6 +1141,7 @@ def chat_endpoint(request: ChatRequest, user: CurrentUser = Depends(get_current_
 
     forced_model = _resolve_forced_model(request, user)
     _check_forced_model_access(forced_model, user)
+    code_context = _resolve_code_context(request, user, active_project_id)
 
     request_id = tracker._request_id()
     cancel_event = tracker._register_active_generation(
@@ -1112,6 +1157,7 @@ def chat_endpoint(request: ChatRequest, user: CurrentUser = Depends(get_current_
             project_id=active_project_id,
             request_id=request_id,
             cancel_event=cancel_event,
+            code_context=code_context,
         )
     except RequestCancelled:
         raise HTTPException(status_code=503, detail="Chat generation cancelled.")
@@ -1213,6 +1259,7 @@ def chat_stream_endpoint(
 
     forced_model = _resolve_forced_model(request, user)
     _check_forced_model_access(forced_model, user)
+    code_context = _resolve_code_context(request, user, active_project_id)
 
     cancel_event = tracker._register_active_generation(
         request_id, user.id, conversation_id
@@ -1231,6 +1278,7 @@ def chat_stream_endpoint(
             project_id=active_project_id,
             request_id=request_id,
             cancel_event=cancel_event,
+            code_context=code_context,
         )
 
         final_reply = ""
@@ -2099,6 +2147,182 @@ def admin_get_pull(
     if job is None:
         raise HTTPException(status_code=404, detail="Pull job not found.")
     return job
+
+
+# ── ADMIN: MODEL PROFILES / RUNTIME HEALTH ──────────────────────────
+# Read-only views over the model-profile abstraction and the local model
+# runtime. Neither endpoint writes, pulls, loads, or generates — they
+# report what is already configured and what the backend volunteers.
+
+@app.get("/admin/models/profiles")
+def admin_model_profiles(_: CurrentUser = Depends(require_admin)):
+    """Resolved profile per routing role + the operator overlay path.
+
+    A profile describes a model (role, recommended context, tool-use,
+    coding specialisation, resource class, notes). It grants nothing:
+    routing, access control, and the safety contract are unchanged by
+    anything reported here.
+    """
+    return _model_profiles.describe_profiles()
+
+
+@app.get("/admin/models/health")
+def admin_model_health(_: CurrentUser = Depends(require_admin)):
+    """Installed / loaded / context-size view of the local model runtime.
+
+    Read-only: ``/api/tags``, ``/api/ps`` and ``/api/show`` only. Never
+    downloads a model to answer, makes no assumption about any GPU
+    vendor, and reports an unreachable backend as data rather than a 500.
+    """
+    return _model_health.get_model_health()
+
+
+# ── ADMIN: LOCAL MODEL EVALUATION ───────────────────────────────────
+# A local benchmark harness for comparing configured models on the same
+# coding tasks. Model output is scored by deterministic text checks and
+# is **never executed** — no shell, no file writes, no repository access.
+# Results stay in Nova's local database.
+
+class AdminEvalRunRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    models: list[str] = Field(min_length=1, max_length=6)
+    case_ids: list[str] | None = None
+    label: str = Field(default="", max_length=200)
+
+
+class AdminEvalRatingRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    rating: int | None = Field(default=None, ge=1, le=5)
+    note: str = Field(default="", max_length=500)
+
+
+class AdminEvalApprovalRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    approved: bool
+
+
+class AdminDatasetExportRequest(BaseModel):
+    """Body for the opt-in ``nova-coder`` dataset export.
+
+    ``result_ids`` is mandatory and explicit: there is no "export
+    everything" form of this request, and every named result must
+    already carry an operator approval.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    result_ids: list[int] = Field(min_length=1, max_length=500)
+    filename: str | None = Field(default=None, max_length=80)
+
+
+@app.get("/admin/eval/cases")
+def admin_eval_cases(_: CurrentUser = Depends(require_admin)):
+    cases, problems = _model_eval.load_cases()
+    return {
+        "cases": [c.as_dict() for c in cases],
+        "problems": problems,
+        "constraint_kinds": list(_model_eval.CONSTRAINT_KINDS),
+        "builtin_dir": str(_model_eval.builtin_cases_dir()),
+        "operator_dir": str(_model_eval.operator_cases_dir() or ""),
+    }
+
+
+@app.post("/admin/eval/runs", status_code=202)
+def admin_start_eval_run(
+    req: AdminEvalRunRequest,
+    _: CurrentUser = Depends(require_admin),
+):
+    """Start an evaluation run on a background thread.
+
+    Validation is synchronous, so a bad request is a clean 400 with
+    nothing written. A model that is not installed produces a recorded
+    failure — never a download.
+    """
+    try:
+        return _model_eval.start_run(req.models, req.case_ids, req.label)
+    except _model_eval.TooManyRunsInProgress as exc:
+        raise HTTPException(
+            status_code=429,
+            detail=f"An evaluation run is already in progress (cap={exc.cap}).",
+        )
+    except _model_eval.EvalError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.get("/admin/eval/runs")
+def admin_list_eval_runs(_: CurrentUser = Depends(require_admin)):
+    return _model_eval.list_runs()
+
+
+@app.get("/admin/eval/runs/{run_id}")
+def admin_get_eval_run(run_id: int, _: CurrentUser = Depends(require_admin)):
+    run = _model_eval.get_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Evaluation run not found.")
+    return {
+        "run": run,
+        "results": _model_eval.list_results(run_id),
+        "summary": _model_eval.summarize_run(run_id),
+    }
+
+
+@app.post("/admin/eval/results/{result_id}/rating")
+def admin_rate_eval_result(
+    result_id: int,
+    req: AdminEvalRatingRequest,
+    _: CurrentUser = Depends(require_admin),
+):
+    try:
+        return _model_eval.rate_result(result_id, req.rating, req.note)
+    except _model_eval.EvalError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@app.post("/admin/eval/results/{result_id}/approval")
+def admin_approve_eval_result(
+    result_id: int,
+    req: AdminEvalApprovalRequest,
+    _: CurrentUser = Depends(require_admin),
+):
+    """Mark one evaluation result as approved for dataset export.
+
+    This is the only way a record becomes exportable, and it is set one
+    result at a time, by a human, after reading the output.
+    """
+    try:
+        return _model_eval.set_result_approval(result_id, req.approved)
+    except _model_eval.EvalError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@app.get("/admin/eval/dataset")
+def admin_dataset_readiness(_: CurrentUser = Depends(require_admin)):
+    """How many results are approved and where an export would land.
+
+    Read-only. Starts no export and reports counts, never content.
+    """
+    return _coder_dataset.describe_export_readiness()
+
+
+@app.post("/admin/eval/dataset/export")
+def admin_export_dataset(
+    req: AdminDatasetExportRequest,
+    _: CurrentUser = Depends(require_admin),
+):
+    """Write the named, operator-approved results to a local JSONL file.
+
+    Nothing is uploaded anywhere. Chat conversations, memory, and
+    system/safety prompts are unreachable from this path; an example is
+    a bare user/assistant pair plus provenance metadata. A credential- or
+    personal-data-shaped match refuses the whole export.
+    """
+    try:
+        return _coder_dataset.export_jsonl(req.result_ids, req.filename)
+    except _coder_dataset.DatasetExportError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 # ── ADMIN: OPTIONAL GITHUB CONNECTOR (read-only, #119) ─────────────

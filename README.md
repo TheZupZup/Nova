@@ -95,6 +95,33 @@ Shipped today:
   commit, push, branch, fetch, file writes, sudo, or GitHub/Codeberg
   calls. Hard path validation keeps links inside an operator-allowed
   root. See [docs/dev-workspace.md](docs/dev-workspace.md).
+- **Grounded Code mode.** When a project has a linked repository and you
+  pick **Code** mode, Nova attaches a small read-only briefing to that
+  turn — branch, dirty state, changed files, recent commits, and a few
+  bounded excerpts of the files you named or are editing. It is capped
+  on every axis (no repository dumps), reads git's index rather than
+  scanning the filesystem, can never excerpt a secret file, and is
+  inserted *below* the safety contract as explicitly untrusted data.
+  Nova still cannot write, commit, or run anything.
+- **Model profiles.** Each routing role resolves to a profile — role,
+  recommended context size, tool-use, coding specialisation, resource
+  class, operator notes — instead of a bare model name. Inferred
+  locally, overridable with an optional JSON file, and purely
+  descriptive: a profile grants nothing. See
+  [docs/model-profiles.md](docs/model-profiles.md).
+- **Local model evaluation.** An admin-only harness that runs the same
+  coding cases against the models you have and records model, context
+  size, elapsed time, success, which requested constraints were
+  followed, the output, and an optional human rating. Model output is
+  scored as text and **never executed**; results stay local. See
+  [docs/model-evaluation.md](docs/model-evaluation.md).
+- **Local model health.** Installed vs loaded vs not-installed per role,
+  the context size the runtime actually reports, and useful errors when
+  the backend or a model is unavailable — read-only, no downloads, and
+  no assumption about any GPU vendor. Surfaced as an admin-only
+  **Settings → Models → "Model roles & health"** card with a Refresh
+  button and no write control. See
+  [docs/model-health.md](docs/model-health.md).
 - **Session continuity.** A small, deterministic "continue where we
   left off" summary surfaces recent conversation topics on return.
   Derived from data already in the sidebar, dismissable, never
@@ -839,6 +866,11 @@ All configuration is read from `.env` at startup. Key variables:
 | `NOVA_AUTO_UPDATE_MODELS` | `false` | When `true`, a weekly background job runs `ollama pull` for the configured model map. Off by default — Nova never re-downloads models unattended. |
 | `NOVA_AUTO_PULL_MODELS` | `false` | When `true`, pull `NOVA_BOOTSTRAP_MODELS` once on first start (opt-in, background, non-blocking). |
 | `NOVA_BOOTSTRAP_MODELS` | — | Comma-separated models the opt-in bootstrap pulls (e.g. `gemma3:1b`). Ignored unless `NOVA_AUTO_PULL_MODELS=true`. |
+| `NOVA_MODEL_PROFILES_PATH` | — | Optional JSON file overriding/adding [model profiles](docs/model-profiles.md). Blank looks for `model-profiles.json` beside Nova's data; an absent file is normal. Read-only, never written by Nova. |
+| `NOVA_CODE_CONTEXT_ENABLED` | `true` | Attach the read-only repository briefing on explicit Code-mode turns for a project with a linked repo. Inert without `NOVA_DEV_WORKSPACE_ROOTS`. |
+| `NOVA_CODE_CONTEXT_FILES` | `4` | Files excerpted per Code-mode turn (ceiling 8). |
+| `NOVA_CODE_CONTEXT_BUDGET` | `12000` | Total character budget for those excerpts (ceiling 40000). |
+| `NOVA_EVAL_CASES_DIR` | — | Directory of your own `*.json` [evaluation cases](docs/model-evaluation.md); overrides shipped cases by id. Blank uses only `evals/cases/`. |
 | `NOVA_MODEL_PROVIDER` | `ollama` | Model backend: `ollama` (default) or `llamacpp` (local GGUF, no Ollama). See [`docs/local-gguf.md`](docs/local-gguf.md). |
 | `NOVA_MODEL_DIR` | `/mnt/archive/nova-models` | Directory local `.gguf` files must live inside. Admins can set the model path from Settings → Models, or pick from a read-only, bounded listing of the `.gguf` files in this directory (the model library); only paths inside this directory are accepted (no traversal, no arbitrary files, no symlink escape). |
 | `NOVA_GGUF_MODEL_PATH` | — | Absolute path to a local `.gguf` model file (only used when `NOVA_MODEL_PROVIDER=llamacpp`). Nova never downloads it. Blank = provider unconfigured. An admin-set path (Settings → Models) takes precedence. |
@@ -876,7 +908,28 @@ you set `NOVA_AUTO_UPDATE_MODELS=true`, and an optional first-run
 bootstrap (`NOVA_AUTO_PULL_MODELS` + `NOVA_BOOTSTRAP_MODELS`) is
 opt-in, background, and non-blocking. Admins can review the configured
 map, reachability, and installed-vs-missing models read-only via
-`GET /admin/models/status`.
+`GET /admin/models/status`, and the richer installed / loaded /
+context-size view via `GET /admin/models/health`.
+
+The full picture of how these pieces fit together is
+[docs/model-platform.md](docs/model-platform.md).
+
+**A model is a profile, not just a name.** Each role resolves to a
+[model profile](docs/model-profiles.md) — recommended context size,
+tool-use, coding specialisation, resource class, operator notes —
+inferred locally from the model name and overridable with an optional
+JSON file. Profiles are descriptive: none of it grants a capability.
+Compare the models you have on the same coding tasks with the
+[evaluation harness](docs/model-evaluation.md).
+
+**Running a future `nova-coder`.** A Nova-specific fine-tuned coding
+model needs no code change to adopt: install it yourself, then set
+`NOVA_CODE_MODEL=nova-coder:14b`. It resolves to a coding-specialised,
+large-context profile out of the box, and Nova stays model-flexible —
+swapping it back out is one variable. Nova will never download it for
+you. The safe, opt-in path for producing training data is described in
+[docs/nova-coder-dataset.md](docs/nova-coder-dataset.md); **no model is
+trained by Nova and nothing is ever exported automatically.**
 
 A note on language: the default system prompt and Nova's persona are
 written in French. Nova auto-detects the language of each message and
@@ -893,9 +946,11 @@ pytest
 pytest tests/test_router.py -v
 ```
 
-The test suite covers model routing, memory storage and parsing,
-manual memory commands, rate limiting, the identity contract,
-personalization, session continuity, and the systemd unit shape.
+The test suite covers model routing, model profiles, Code-mode
+repository grounding, the local evaluation harness and dataset-export
+gate, model runtime health, memory storage and parsing, manual memory
+commands, rate limiting, the identity contract, personalization,
+session continuity, and the systemd unit shape.
 
 ## Contributing
 
