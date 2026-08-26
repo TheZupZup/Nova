@@ -70,6 +70,19 @@ produced each answer, which case it came from, how it scored, and who
 rated it. It carries no user id, no conversation id, and no prompt Nova
 would not show the user.
 
+Two provenance guarantees are worth stating explicitly:
+
+- **`model` is what actually ran.** On a backend that ignores the
+  requested model name (llama.cpp serves one configured `.gguf`), this
+  records the backend's own model id rather than the label the run asked
+  for — so the corpus can never carry invented provenance.
+- **The prompt is the one stored with the result**, captured when the
+  answer was produced, never re-read from the case file at export time.
+  Editing a case afterwards would otherwise pair an approved answer with
+  a task it never answered, and deleting a case would strand a valid
+  approved result. Both are prevented; a legacy result with no stored
+  snapshot fails closed with a clear message rather than guessing.
+
 ## Producing a file
 
 ```

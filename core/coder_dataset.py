@@ -300,7 +300,10 @@ def describe_export_readiness(db_path: Optional[str] = None) -> dict:
     """
     from core import model_eval
 
-    approved = [r for r in model_eval.list_results(db_path=db_path) if r["approved"]]
+    # Uncapped on purpose: filtering the newest-N browsing list would
+    # drop older approved rows from the only endpoint that discovers
+    # them, so an operator could not find an id that is still exportable.
+    approved = model_eval.list_approved_results(db_path=db_path)
     return {
         "approved_count": len(approved),
         "approved_result_ids": [r["id"] for r in approved],

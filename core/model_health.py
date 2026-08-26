@@ -220,6 +220,22 @@ def get_model_health(*, include_context_sizes: bool = True) -> dict:
         if runtime_error:
             errors.append(runtime_error)
 
+    # A single-model backend (llama.cpp) serves one configured file for
+    # every role and ignores the role's model *name*. Detect it once so
+    # the per-role branch below can describe that honestly instead of
+    # tag-matching names the backend never looks at.
+    single_model_backend = False
+    backend_model = ""
+    try:
+        from core.model_providers import get_provider
+
+        active = get_provider()
+        single_model_backend = not getattr(active, "selects_model_by_name", True)
+        if single_model_backend:
+            backend_model = active.backend_model_id() or ""
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("model health: provider capability read failed: %s", exc)
+
     profiles = model_profiles.role_profiles()
     roles: list[dict] = []
     context_cache: dict[str, Optional[int]] = {}
@@ -247,7 +263,32 @@ def get_model_health(*, include_context_sizes: bool = True) -> dict:
             continue
 
         loaded_state: Optional[bool]
-        if not reachable:
+        if single_model_backend:
+            # This backend ignores the role's model *name* and serves one
+            # configured file. Tag-matching the role name against that
+            # file's basename would mark every working role
+            # "not installed" and advise an `ollama pull` on a host that
+            # does not run Ollama.
+            served = backend_model or "its configured model"
+            if reachable:
+                state = STATE_LOADED
+                loaded_state = True
+                hint = (
+                    f"This provider serves one configured model "
+                    f"({served}) for every role and ignores the role's "
+                    f"model name, so '{model}' is not selected here. "
+                    f"Change the provider's configured model to change "
+                    f"what runs."
+                )
+            else:
+                state = STATE_UNKNOWN
+                loaded_state = None
+                hint = (
+                    "The model backend is unreachable, so Nova cannot "
+                    "say what it would serve. Start the backend and "
+                    "refresh."
+                )
+        elif not reachable:
             state = STATE_UNKNOWN
             loaded_state = None
             hint = (

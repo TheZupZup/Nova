@@ -401,6 +401,7 @@ CREATE TABLE IF NOT EXISTS model_eval_results (
     case_title         TEXT    NOT NULL DEFAULT '',
     prompt_snapshot    TEXT    NOT NULL DEFAULT '',
     case_source        TEXT    NOT NULL DEFAULT '',
+    requested_model    TEXT    NOT NULL DEFAULT '',
     model              TEXT    NOT NULL,
     context_size       INTEGER,
     elapsed_ms         INTEGER NOT NULL DEFAULT 0,
@@ -443,6 +444,11 @@ def _ensure_result_snapshot_columns(conn: sqlite3.Connection) -> None:
         conn.execute(
             "ALTER TABLE model_eval_results ADD COLUMN "
             "prompt_snapshot TEXT NOT NULL DEFAULT ''"
+        )
+    if "requested_model" not in columns:
+        conn.execute(
+            "ALTER TABLE model_eval_results ADD COLUMN "
+            "requested_model TEXT NOT NULL DEFAULT ''"
         )
     if "case_source" not in columns:
         conn.execute(
@@ -497,6 +503,10 @@ def _result_to_dict(row: dict) -> dict:
         "case_title": row["case_title"],
         "prompt_snapshot": row.get("prompt_snapshot") or "",
         "case_source": row.get("case_source") or "",
+        # The label the operator asked for. Equal to ``model`` on a
+        # name-routing backend; on a single-model one it records what was
+        # requested while ``model`` records what actually ran.
+        "requested_model": row.get("requested_model") or "",
         "model": row["model"],
         "context_size": row["context_size"],
         "elapsed_ms": int(row["elapsed_ms"]),
@@ -568,6 +578,26 @@ def list_results(
                 "ORDER BY id ASC LIMIT ?",
                 (int(run_id), capped),
             )
+    return [_result_to_dict(r) for r in rows]
+
+
+def list_approved_results(db_path: Optional[str] = None) -> list[dict]:
+    """Every approved result, oldest first — deliberately uncapped.
+
+    :func:`list_results` returns the newest N rows, which is right for a
+    browsing view and wrong for "what is approved?": once a host has run
+    more than that many evaluations, an older approved row would silently
+    vanish from the only surface that discovers it, under-reporting the
+    count and hiding an id that is still perfectly exportable when named
+    directly. Approved rows are a small, operator-curated subset, so
+    listing all of them is cheap and honest.
+    """
+    with _open(db_path) as conn:
+        rows = _rows(
+            conn,
+            "SELECT * FROM model_eval_results WHERE approved = 1 "
+            "ORDER BY id ASC",
+        )
     return [_result_to_dict(r) for r in rows]
 
 
@@ -665,6 +695,22 @@ def run_case(case: EvalCase, model: str) -> dict:
     ]
 
     provider = get_provider()
+
+    # Provenance must name what actually ran. A single-model backend
+    # (llama.cpp) ignores ``request.model`` and serves its one configured
+    # ``.gguf``, so recording the requested label would attribute one
+    # backend's output to whatever name the caller happened to pass —
+    # silently faking a two-model comparison and poisoning any dataset
+    # exported from it. Record the backend's real id instead.
+    recorded_model = model
+    if not getattr(provider, "selects_model_by_name", True):
+        backend_id = ""
+        try:
+            backend_id = provider.backend_model_id() or ""
+        except Exception:  # pragma: no cover - defensive
+            backend_id = ""
+        recorded_model = backend_id or f"{getattr(provider, 'name', 'provider')}:configured-model"
+
     started = time.monotonic()
     output = ""
     error = ""
@@ -674,7 +720,7 @@ def run_case(case: EvalCase, model: str) -> dict:
             ModelRequest(model=model, messages=messages)
         )
         output = (response.content or "")[:MAX_OUTPUT_CHARS]
-        context_size = _runtime_context_size(model, provider)
+        context_size = _runtime_context_size(recorded_model, provider)
     except ModelProviderError as exc:
         kind = getattr(exc, "kind", "") or "backend_error"
         error = f"{kind}: {str(exc)[:200]}"
@@ -688,7 +734,11 @@ def run_case(case: EvalCase, model: str) -> dict:
         "case_title": case.title,
         "prompt_snapshot": case.prompt,
         "case_source": case.source,
-        "model": model,
+        # What actually produced this answer (see above): the requested
+        # label on a name-routing backend, the backend's own model id on
+        # a single-model one.
+        "model": recorded_model,
+        "requested_model": model,
         "context_size": context_size,
         "elapsed_ms": elapsed_ms,
         "success": bool(not error and output.strip() and scored["all_passed"]),
@@ -728,6 +778,25 @@ def _validate_models(models: Iterable[object]) -> list[str]:
         raise EvalError("at least one model is required.")
     if len(out) > MAX_MODELS_PER_RUN:
         raise EvalError(f"at most {MAX_MODELS_PER_RUN} models per run.")
+
+    # A backend that ignores the requested name cannot run a comparison:
+    # every "model" in the list would be the same configured file, and the
+    # run would report a difference that does not exist. Refuse it up
+    # front rather than producing a meaningless benchmark.
+    try:
+        from core.model_providers import get_provider
+
+        provider = get_provider()
+        selects = getattr(provider, "selects_model_by_name", True)
+    except Exception:  # never block a run on a registry hiccup
+        selects = True
+    if not selects and len(out) > 1:
+        raise EvalError(
+            "The active model provider serves a single configured model "
+            "and ignores the requested model name, so comparing several "
+            "names would evaluate the same model repeatedly. Run one "
+            "model at a time on this provider."
+        )
     return out
 
 
@@ -817,13 +886,15 @@ def _execute_run(
                     conn.execute(
                         "INSERT INTO model_eval_results "
                         "(run_id, case_id, case_title, prompt_snapshot, case_source, "
-                        "model, context_size, elapsed_ms, success, constraints_passed, "
+                        "model, requested_model, context_size, elapsed_ms, "
+                        "success, constraints_passed, "
                         "constraints_total, constraints_json, output, error, created_at) "
-                        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                         (
                             run_id, result["case_id"], result["case_title"],
                             result["prompt_snapshot"], result["case_source"],
-                            result["model"], result["context_size"],
+                            result["model"], result["requested_model"],
+                            result["context_size"],
                             result["elapsed_ms"], 1 if result["success"] else 0,
                             result["constraints_passed"],
                             result["constraints_total"],
@@ -961,5 +1032,6 @@ __all__ = [
     "builtin_cases_dir", "operator_cases_dir",
     "migrate", "list_runs", "get_run", "list_results", "get_result",
     "evaluate_output", "run_case", "start_run",
+    "list_approved_results",
     "rate_result", "set_result_approval", "summarize_run",
 ]

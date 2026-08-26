@@ -122,6 +122,22 @@ Caps: 6 models, 50 cases per run.
 The per-model summary reports pass rate, mean latency, error count, and
 mean human rating, sorted best-first.
 
+## Single-model backends
+
+A provider that ignores the requested model name — llama.cpp, which
+serves one configured `.gguf` — cannot host a comparison: every "model"
+in the list would be the same file. Two rules follow:
+
+- **A multi-model run is refused** with a clear reason, rather than
+  producing a benchmark whose difference is imaginary.
+- **Provenance names what actually ran.** The result records the
+  backend's real model id in `model`, and the label you asked for in
+  `requested_model`. An exported dataset therefore never attributes one
+  backend's output to a name it never used.
+
+`ModelProvider.selects_model_by_name` is what distinguishes the two
+kinds of backend; Ollama routes by name, llama.cpp does not.
+
 ## Known limits of this first iteration
 
 - **No cancellation.** A started run finishes its (model × case) matrix.
@@ -133,8 +149,9 @@ mean human rating, sorted best-first.
 - **No repository context.** Evaluation turns are deliberately
   self-contained, so a case cannot measure how well a model uses the
   Code-mode briefing. Write cases that stand alone.
-- **The readiness summary reads the most recent 500 results.** Approve
-  and export in batches rather than accumulating indefinitely.
+- **A single export is capped at 500 examples.** Discovery of approved
+  results is *not* capped, so nothing goes missing from the readiness
+  view — only one export call's size is bounded.
 
 ## What comes next
 

@@ -137,6 +137,26 @@ class ModelProvider(ABC):
     #: Stable backend label. NOT Nova's identity.
     name: str = "base"
 
+    #: Whether ``ModelRequest.model`` actually selects what runs.
+    #:
+    #: Ollama routes each request to the named model, so this is True.
+    #: A single-model backend (llama.cpp, which serves one configured
+    #: ``.gguf``) ignores the field and runs its one model whatever the
+    #: request says. Callers that *report* which model produced something
+    #: — the evaluation harness, the health surface — must consult this
+    #: before treating a requested name as provenance, or they will
+    #: attribute one backend's output to several different "models".
+    selects_model_by_name: bool = True
+
+    def backend_model_id(self) -> str:
+        """The model this backend actually runs, when it serves only one.
+
+        Meaningful only when :attr:`selects_model_by_name` is False;
+        returns ``""`` for name-routing backends, where the answer is
+        simply whatever the request asked for. Never raises.
+        """
+        return ""
+
     @abstractmethod
     def generate(self, request: ModelRequest) -> ModelResponse:
         """Return the full reply, or raise :class:`ModelProviderError`."""

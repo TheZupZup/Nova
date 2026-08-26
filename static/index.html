@@ -8655,9 +8655,18 @@
         }
     }
 
-    function modelRoleStateTag(state) {
+    // `loaded` is tri-state: true / false / null, where null means the
+    // runtime's loaded-model view could not be read. An installed model
+    // whose residency is unknown must not render as a bare "installed"
+    // (which reads as "not loaded") — the backend went to the trouble of
+    // saying it does not know, so say that.
+    function modelRoleStateTag(state, loaded) {
         if (state === "loaded") return '<span class="admin-tag installed">loaded</span>';
-        if (state === "installed") return '<span class="admin-tag">installed</span>';
+        if (state === "installed") {
+            return loaded === null
+                ? '<span class="admin-tag">installed · load state unknown</span>'
+                : '<span class="admin-tag">installed · not loaded</span>';
+        }
         if (state === "not_installed") return '<span class="admin-tag error">not installed</span>';
         return '<span class="admin-tag">unknown</span>';
     }
@@ -8692,7 +8701,7 @@
                 `<div class="admin-model-row">` +
                 `<div class="admin-model-head">` +
                 `<span class="admin-model-display">${escapeHtml(role.role || "")}</span>` +
-                modelRoleStateTag(role.state) +
+                modelRoleStateTag(role.state, role.loaded) +
                 `</div>` +
                 `<div class="admin-model-name">${model}</div>` +
                 `<div class="admin-progress-meta">context — Nova assumes: <code>${escapeHtml(String(role.profile_context_size || "—"))}</code> · runtime reports: <code>${escapeHtml(runtimeCtx)}</code></div>` +

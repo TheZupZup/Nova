@@ -117,8 +117,13 @@ Three properties are worth stating plainly:
    git state.** The model cannot request a file, cannot widen the
    selection, and cannot cause a read on a later turn.
 2. **File discovery reads git's index** (`git ls-files`), not the
-   filesystem — so ignored and untracked paths are invisible by
-   construction, and every excerpt path goes through the same
+   filesystem — there is no directory walk. **Contents are only ever
+   read from files in that index.** `git status` also reports untracked
+   files, and an untracked file (a scratch note, a local dump, a
+   generated artefact) is exactly what must not reach a prompt, so
+   changed-file candidates are intersected with the tracked set before
+   anything is read — being un-`.gitignore`d is not enough to get a file
+   excerpted. Every excerpt path additionally goes through the same
    secret-path validation a patch proposal does. `.env`, keys, tokens,
    databases and `.git` internals can never be excerpted. Symlinks,
    non-regular files, and non-UTF-8 or control-character content are

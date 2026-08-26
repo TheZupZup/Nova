@@ -59,6 +59,15 @@ Two numbers are reported side by side and never conflated:
 `runtime_context_size` is `null` when the runtime did not report one.
 Nova does not invent a number to fill the field.
 
+## Single-model backends
+
+When the active provider serves one configured model for every role and
+ignores the role's model *name* (llama.cpp), tag-matching those names
+against the backend's file would mark every working role
+`not_installed` and advise an `ollama pull` on a host that does not run
+Ollama. Instead each role reports the configured backend model and says
+plainly that the role's name is not a selector there.
+
 ## Errors
 
 `errors` carries stable machine-readable codes rather than prose:
