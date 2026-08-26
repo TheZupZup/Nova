@@ -641,11 +641,34 @@ def read_text_snippet(
     if not stat.S_ISREG(info.st_mode):
         raise RepoReadError("only regular files can be read")
 
+    # Open without following symlinks, then re-check the *descriptor*.
+    # The ``lstat`` above and this open are two separate syscalls: a
+    # process that replaces the file with a symlink in between would
+    # otherwise have the open follow it, defeating both the symlink
+    # rejection and the containment check that ran on the path. O_NOFOLLOW
+    # makes that race fail closed, and fstat validates what was actually
+    # opened rather than what the path pointed at a moment ago.
     try:
-        with open(target, "rb") as handle:
+        fd = os.open(target, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    except OSError:
+        raise RepoReadError("file could not be read") from None
+    try:
+        opened = os.fstat(fd)
+        if not stat.S_ISREG(opened.st_mode):
+            raise RepoReadError("only regular files can be read")
+        if (opened.st_dev, opened.st_ino) != (info.st_dev, info.st_ino):
+            raise RepoReadError("file changed while it was being read")
+        with os.fdopen(fd, "rb") as handle:
+            fd = -1  # ownership transferred to the file object
             raw = handle.read(_MAX_SNIPPET_BYTES)
     except OSError:
         raise RepoReadError("file could not be read") from None
+    finally:
+        if fd >= 0:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
 
     try:
         text = raw.decode("utf-8")

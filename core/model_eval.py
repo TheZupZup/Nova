@@ -360,6 +360,12 @@ def load_cases(
     else:
         dirs = list(directories)
 
+    # Merge every directory first, then cap. Capping inside the loop let
+    # the limit decide *which definition wins*: with the cap already
+    # reached, a later operator directory could not override a shipped
+    # case of the same id, silently contradicting the documented
+    # later-directory-wins rule — and doing so without increasing the
+    # total, since an override replaces rather than adds.
     merged: dict[str, EvalCase] = {}
     problems: list[str] = []
     for directory in dirs:
@@ -367,9 +373,14 @@ def load_cases(
         problems.extend(issues)
         for case in found:
             merged[case.id] = case
-            if len(merged) >= MAX_CASES:
-                break
-    return list(merged.values()), problems
+
+    cases = list(merged.values())
+    if len(cases) > MAX_CASES:
+        problems.append(
+            f"{len(cases)} cases found; only the first {MAX_CASES} are used."
+        )
+        cases = cases[:MAX_CASES]
+    return cases, problems
 
 
 def get_case(case_id: str) -> Optional[EvalCase]:

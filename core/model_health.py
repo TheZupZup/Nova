@@ -390,7 +390,13 @@ def get_model_health(*, include_context_sizes: bool = True) -> dict:
             # capacity whenever the loaded-model view was unavailable —
             # residency stayed unknown (correctly) but two unrelated
             # facts went missing with it.
-            if runtime_ctx is None or context_capacity is None:
+            #
+            # It must still not run for a single-model backend: those
+            # ignore the role's model *name*, so asking Ollama about that
+            # name would publish an unrelated model's numbers for a
+            # llama.cpp role whenever an Ollama daemon happens to be
+            # reachable on the same host.
+            if (runtime_ctx is None or context_capacity is None) and not single_model_backend:
                 if model not in context_cache:
                     context_cache[model] = _runtime_context_size(model)
                 configured, capacity = context_cache[model]

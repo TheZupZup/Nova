@@ -7,6 +7,9 @@ stable reproducer independent of the broader model-platform suite.
 from __future__ import annotations
 
 import json
+import subprocess
+import os
+import pathlib
 import sqlite3
 
 import pytest
@@ -875,3 +878,200 @@ class TestEvaluationDocsMatchTheCode:
         assert "_runtime_context_size(" in source
         # The profile's own context must not be what gets recorded.
         assert "profile.context_size" not in source
+
+
+# ── Seventh Codex review (commit 5856e86) ───────────────────────────
+
+
+class TestSnippetOpenIsRaceSafe:
+    """P2: lstat() and open() are two syscalls; the gap is exploitable.
+
+    A process that swaps the file for a symlink between the two would
+    otherwise have the open follow it, defeating both the symlink
+    rejection and the containment check that ran on the path.
+    """
+
+    @pytest.fixture
+    def repo(self, tmp_path, monkeypatch):
+        root = tmp_path / "ws"
+        root.mkdir()
+        checkout = root / "proj"
+        checkout.mkdir()
+        subprocess.run(["git", "init", "-q"], cwd=checkout, check=True)
+        subprocess.run(
+            ["git", "config", "user.email", "t@example.com"],
+            cwd=checkout, check=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "T"], cwd=checkout, check=True
+        )
+        (checkout / "app.py").write_text("real = 1\n", encoding="utf-8")
+        subprocess.run(["git", "add", "-A"], cwd=checkout, check=True)
+        subprocess.run(
+            ["git", "commit", "-q", "-m", "i"], cwd=checkout, check=True
+        )
+        monkeypatch.setenv(dw.ENV_ROOTS, str(root))
+        return checkout, tmp_path
+
+    def test_symlink_present_before_validation_is_refused(self, repo):
+        """Baseline: path validation catches a symlink that is already there."""
+        checkout, tmp_path = repo
+        secret = tmp_path / "outside_secret.txt"
+        secret.write_text("OUT_OF_ROOT_SECRET\n", encoding="utf-8")
+        (checkout / "app.py").unlink()
+        try:
+            os.symlink(secret, checkout / "app.py")
+        except (OSError, NotImplementedError):  # pragma: no cover
+            pytest.skip("symlinks unavailable")
+        with pytest.raises(dw.RepoReadError):
+            dw.read_text_snippet(str(checkout), "app.py")
+
+    def test_symlink_swapped_inside_the_race_window_is_refused(
+        self, repo, monkeypatch
+    ):
+        """The actual TOCTOU: the swap happens *after* validation+lstat.
+
+        Validation and ``lstat`` both saw a regular file; the file is
+        replaced by a symlink before ``open``. Only no-follow semantics
+        on the open itself can stop this, so this is what a plain
+        ``open()`` would fail.
+        """
+        checkout, tmp_path = repo
+        secret = tmp_path / "outside_secret.txt"
+        secret.write_text("OUT_OF_ROOT_SECRET\n", encoding="utf-8")
+        target = checkout / "app.py"
+        genuine = target.lstat()
+
+        try:
+            os.symlink(secret, tmp_path / "_probe")
+        except (OSError, NotImplementedError):  # pragma: no cover
+            pytest.skip("symlinks unavailable")
+
+        # ``Path.lstat()`` is the last observation the reader makes
+        # before opening, so patching it is exactly the race window.
+        real_lstat = pathlib.Path.lstat
+
+        def _racing_lstat(self):
+            # os-level calls only: pathlib helpers would re-enter here.
+            if str(self) == str(target) and not os.path.islink(str(target)):
+                # Validation has passed and the caller is about to open.
+                # Swap the file for a symlink and hand back the stat of
+                # the regular file it used to be.
+                os.unlink(str(target))
+                os.symlink(str(secret), str(target))
+                return genuine
+            return real_lstat(self)
+
+        monkeypatch.setattr(pathlib.Path, "lstat", _racing_lstat)
+
+        with pytest.raises(dw.RepoReadError):
+            dw.read_text_snippet(str(checkout), "app.py")
+
+    def test_ordinary_reads_still_work(self, repo):
+        checkout, _ = repo
+        snippet = dw.read_text_snippet(str(checkout), "app.py")
+        assert "real = 1" in snippet.text
+
+
+class TestSingleModelBackendSkipsOllamaMetadata:
+    """P2: a regression introduced by the round-6 fix.
+
+    Removing the ps gate made the /api/show lookup unconditional, so a
+    llama.cpp host with an Ollama daemon also running would publish an
+    unrelated Ollama model's numbers for every llama.cpp role.
+    """
+
+    class _Provider:
+        name = "llamacpp"
+        selects_model_by_name = False
+
+        def backend_model_id(self):
+            return "nova-coder.gguf"
+
+        def is_model_resident(self):
+            return False
+
+    def test_ollama_show_is_not_called_for_single_model_roles(
+        self, monkeypatch
+    ):
+        from core import ollama_client
+
+        calls = []
+
+        def _show(name, host=None):
+            calls.append(name)
+            return {"parameters": "num_ctx 8192"}
+
+        monkeypatch.setattr(
+            "core.provider_status.probe_provider_health",
+            lambda name=None: {
+                "ok": True, "provider": "llamacpp", "detail": "",
+                "models": ["nova-coder.gguf"],
+            },
+        )
+        monkeypatch.setattr(
+            "core.model_providers.get_provider", lambda: self._Provider()
+        )
+        monkeypatch.setattr(ollama_client, "show_model", _show)
+
+        health = mh.get_model_health()
+        assert calls == []
+        for role in health["roles"]:
+            assert role["runtime_context_size"] is None
+            assert role["context_capacity"] is None
+
+    def test_ollama_roles_still_get_their_metadata(self, monkeypatch):
+        """The round-6 fix must survive: a real Ollama host still reports."""
+        from core import ollama_client
+
+        monkeypatch.setattr(
+            "core.provider_status.probe_provider_health",
+            lambda name=None: {
+                "ok": True, "provider": "ollama", "detail": "",
+                "models": ["gemma4"],
+            },
+        )
+        monkeypatch.setattr(ollama_client, "list_running_models", lambda: [])
+        monkeypatch.setattr(
+            ollama_client, "show_model",
+            lambda n, host=None: {"parameters": "num_ctx 8192"},
+        )
+        monkeypatch.setattr(
+            "core.model_profiles.configured_role_models",
+            lambda: {"router": "", "chat": "gemma4", "code": "", "advanced": ""},
+        )
+        role = next(
+            r for r in mh.get_model_health()["roles"] if r["role"] == "chat"
+        )
+        assert role["runtime_context_size"] == 8192
+
+
+class TestOverridesMergeBeforeTheCap:
+    """P2: the cap decided which definition won, not just how many."""
+
+    def test_a_late_override_still_replaces_a_shipped_case(
+        self, tmp_path, monkeypatch
+    ):
+        for i in range(me.MAX_CASES - 3):
+            (tmp_path / f"a{i:04d}.json").write_text(
+                json.dumps({"id": f"aaa{i:04d}", "prompt": "p"}),
+                encoding="utf-8",
+            )
+        (tmp_path / "zz.json").write_text(
+            json.dumps({"id": "readonly-git-helper", "prompt": "OVERRIDDEN"}),
+            encoding="utf-8",
+        )
+        monkeypatch.setenv(me.ENV_CASES_DIR, str(tmp_path))
+        cases = {c.id: c for c in me.load_cases()[0]}
+        assert cases["readonly-git-helper"].prompt == "OVERRIDDEN"
+
+    def test_the_total_is_still_capped(self, tmp_path, monkeypatch):
+        for i in range(me.MAX_CASES + 20):
+            (tmp_path / f"c{i:04d}.json").write_text(
+                json.dumps({"id": f"ccc{i:04d}", "prompt": "p"}),
+                encoding="utf-8",
+            )
+        monkeypatch.setenv(me.ENV_CASES_DIR, str(tmp_path))
+        cases, problems = me.load_cases()
+        assert len(cases) == me.MAX_CASES
+        assert any("only the first" in p for p in problems)
