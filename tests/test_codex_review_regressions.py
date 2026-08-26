@@ -1,4 +1,8 @@
-"""Regression coverage for findings from the PR #231 Codex review."""
+"""Regression coverage for findings from the PR #231 Codex review.
+
+These tests stay deliberately narrow so each reviewed failure mode has a
+stable reproducer independent of the broader model-platform suite.
+"""
 
 from __future__ import annotations
 
