@@ -13,8 +13,10 @@ record what happened.
 
 For every (case, model) pair:
 
-- the **model** and the **context size** Nova assumed for it (from its
-  [profile](model-profiles.md)),
+- the **model** that actually produced the answer (and, separately, the
+  label that was requested — see [Single-model backends](#single-model-backends)),
+- the **context size the runtime reported** — observed, never assumed;
+  see [below](#what-the-context-field-means),
 - **elapsed time** in milliseconds,
 - **success / failure**,
 - **which requested constraints were followed**, per constraint, with a
@@ -25,6 +27,23 @@ For every (case, model) pair:
 Runs and results live in two additive SQLite tables in Nova's own
 database (`model_eval_runs`, `model_eval_results`). They are created
 automatically on the next start; there is nothing to migrate.
+
+## <a id="what-the-context-field-means"></a>What the context field means
+
+`context_size` on a result is **observed, not assumed**. For Ollama it is
+read from the loaded model's own `/api/ps` report after generation; a
+provider that cannot report one stores `null`.
+
+It is deliberately *not* taken from the model's
+[profile](model-profiles.md). A profile's `context_size` is Nova's
+recommendation, and no provider applies it to a request — the Ollama
+provider calls `client.chat(model, messages)`, and llama.cpp uses its own
+process-wide `n_ctx`. Recording a recommendation as though it were the
+window the model was actually given would be a fabricated comparison
+field, which is exactly what a benchmark must not have.
+
+So read `null` as *"the runtime did not say"* — **not** as "the profile
+size was used".
 
 ## Hard boundaries
 

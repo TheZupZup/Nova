@@ -782,3 +782,96 @@ class TestExportedMetadataIsScanned:
             )
         with pytest.raises(cd.DatasetExportError, match="credential"):
             cd.build_examples([rid], db_path=db)
+
+
+# ── Sixth Codex review (commit d4bc141) ─────────────────────────────
+
+
+class TestShowMetadataSurvivesPsFailure:
+    """P2: /api/ps and /api/show fail independently.
+
+    ps says what is *resident*; show says what a model is *configured*
+    with. Gating show on ps having worked discarded a good `num_ctx` and
+    architecture capacity whenever the loaded-model view was down.
+    """
+
+    def _role(self, monkeypatch, *, ps_ok):
+        from core import ollama_client
+
+        show = {
+            "model_info": {"llama.context_length": 131072},
+            "parameters": "num_ctx 8192",
+        }
+        monkeypatch.setattr(
+            "core.provider_status.probe_provider_health",
+            lambda name=None: {
+                "ok": True, "provider": "ollama", "detail": "",
+                "models": ["gemma4"],
+            },
+        )
+        if ps_ok:
+            monkeypatch.setattr(ollama_client, "list_running_models", lambda: [])
+        else:
+            def _boom():
+                raise ollama_client.OllamaUnavailable("ps down")
+
+            monkeypatch.setattr(ollama_client, "list_running_models", _boom)
+        monkeypatch.setattr(
+            ollama_client, "show_model", lambda n, host=None: show
+        )
+        monkeypatch.setattr(
+            "core.model_profiles.configured_role_models",
+            lambda: {"router": "", "chat": "gemma4", "code": "", "advanced": ""},
+        )
+        return next(
+            r for r in mh.get_model_health()["roles"] if r["role"] == "chat"
+        )
+
+    def test_context_metadata_survives_a_ps_failure(self, monkeypatch):
+        role = self._role(monkeypatch, ps_ok=False)
+        assert role["runtime_context_size"] == 8192
+        assert role["context_capacity"] == 131072
+
+    def test_residency_still_unknown_when_ps_fails(self, monkeypatch):
+        """Recovering metadata must not resurrect a residency claim."""
+        role = self._role(monkeypatch, ps_ok=False)
+        assert role["loaded"] is None
+
+    def test_working_ps_is_unaffected(self, monkeypatch):
+        role = self._role(monkeypatch, ps_ok=True)
+        assert role["runtime_context_size"] == 8192
+        assert role["context_capacity"] == 131072
+        assert role["loaded"] is False
+
+
+class TestEvaluationDocsMatchTheCode:
+    """P2: the docs described a behaviour the code no longer has.
+
+    Documentation drift has now been a finding twice in this PR, so the
+    claim that matters most is pinned against the implementation rather
+    than left to review to catch a third time.
+    """
+
+    @pytest.fixture
+    def doc(self):
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parent.parent
+        return (root / "docs" / "model-evaluation.md").read_text(encoding="utf-8")
+
+    def test_docs_do_not_claim_the_profile_size_is_recorded(self, doc):
+        lowered = doc.lower()
+        assert "context size** nova assumed" not in lowered
+        assert "observed, not assumed" in lowered
+
+    def test_docs_explain_a_null_context(self, doc):
+        assert "the runtime did not say" in doc
+
+    def test_run_case_records_a_runtime_value_not_a_profile_value(self):
+        """The code half of the claim the docs now make."""
+        import inspect
+
+        source = inspect.getsource(me.run_case)
+        assert "_runtime_context_size(" in source
+        # The profile's own context must not be what gets recorded.
+        assert "profile.context_size" not in source

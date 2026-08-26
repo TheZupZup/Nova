@@ -383,7 +383,14 @@ def get_model_health(*, include_context_sizes: bool = True) -> dict:
             if isinstance(candidate, int) and candidate > 0:
                 # A loaded model's own report is the ground truth.
                 runtime_ctx = candidate
-            if (runtime_ctx is None or context_capacity is None) and runtime_error is None:
+            # ``/api/ps`` and ``/api/show`` answer different questions and
+            # fail independently: ps says what is *resident*, show says
+            # what a model is *configured* with. Gating show on ps having
+            # worked threw away a perfectly good num_ctx and architecture
+            # capacity whenever the loaded-model view was unavailable —
+            # residency stayed unknown (correctly) but two unrelated
+            # facts went missing with it.
+            if runtime_ctx is None or context_capacity is None:
                 if model not in context_cache:
                     context_cache[model] = _runtime_context_size(model)
                 configured, capacity = context_cache[model]

@@ -52,7 +52,8 @@ and the missing-model hint states plainly that Nova will not download it.
 Two numbers are reported side by side and never conflated:
 
 - `profile_context_size` — what Nova *recommends* for that model, from
-  its profile.
+  its profile. A recommendation only: no provider applies it to a
+  request, and an evaluation never records it as the context used.
 - `runtime_context_size` — what the runtime *says* it is configured
   with, read from `/api/ps` or `/api/show`.
 
