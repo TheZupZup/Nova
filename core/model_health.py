@@ -97,20 +97,19 @@ def _load_runtime_details() -> tuple[dict[str, dict], Optional[str]]:
     return loaded, None
 
 
-def _context_size_from_show(payload: dict) -> Optional[int]:
-    """A context length from an ``/api/show`` payload, when it says one.
+def _configured_context_from_show(payload: dict) -> Optional[int]:
+    """The context the runtime is *configured* to use, from ``/api/show``.
 
-    Ollama reports the architecture-specific key inside ``model_info``
-    (e.g. ``llama.context_length``), and some versions also carry a
-    ``num_ctx`` parameter. Both are optional; ``None`` means "the runtime
-    did not tell us" — never a fabricated default.
+    Only ``num_ctx`` answers this. The architecture key inside
+    ``model_info`` (e.g. ``llama.context_length``) is the model's
+    **maximum capability**, not the window the runtime will allocate: a
+    Modelfile carrying ``num_ctx 8192`` on a model whose architecture
+    supports 131072 runs at 8192. Reading the larger number as the
+    runtime configuration would overstate the context by 16x, so this
+    deliberately does not fall back to it — see
+    :func:`_context_capacity_from_show`, which reports it under its own
+    name. ``None`` means "the runtime did not say".
     """
-    info = payload.get("model_info")
-    if isinstance(info, dict):
-        for key, value in info.items():
-            if isinstance(key, str) and key.endswith(".context_length"):
-                if isinstance(value, int) and value > 0:
-                    return value
     params = payload.get("parameters")
     if isinstance(params, str):
         for line in params.splitlines():
@@ -125,8 +124,29 @@ def _context_size_from_show(payload: dict) -> Optional[int]:
     return None
 
 
-def _runtime_context_size(model: str) -> Optional[int]:
-    """Best-effort configured context size for ``model``. Never raises."""
+def _context_capacity_from_show(payload: dict) -> Optional[int]:
+    """The architecture's maximum context, when ``/api/show`` reports it.
+
+    A capability, not a configuration — kept separate so it can be shown
+    without being mistaken for the window actually in use.
+    """
+    info = payload.get("model_info")
+    if isinstance(info, dict):
+        for key, value in info.items():
+            if isinstance(key, str) and key.endswith(".context_length"):
+                if isinstance(value, int) and value > 0:
+                    return value
+    return None
+
+
+def _runtime_context_size(model: str) -> tuple[Optional[int], Optional[int]]:
+    """``(configured, capacity)`` for ``model``. Never raises.
+
+    ``configured`` is the window the runtime will actually use, and is
+    ``None`` unless the runtime states it. ``capacity`` is the
+    architecture maximum, reported separately so it can never be mistaken
+    for the configured value.
+    """
     try:
         from core.ollama_client import show_model
 
@@ -136,8 +156,11 @@ def _runtime_context_size(model: str) -> Optional[int]:
             "model health: /api/show unavailable for a model (%s)",
             type(exc).__name__,
         )
-        return None
-    return _context_size_from_show(payload)
+        return None, None
+    return (
+        _configured_context_from_show(payload),
+        _context_capacity_from_show(payload),
+    )
 
 
 def _match_installed(model: str, installed: set[str]) -> bool:
@@ -184,7 +207,8 @@ def get_model_health(*, include_context_sizes: bool = True) -> dict:
               "state": str,              # STATE_* above
               "loaded": bool|None,       # None => residency unavailable
               "profile_context_size": int,   # Nova's recommendation
-              "runtime_context_size": int|None,  # what the runtime says
+              "runtime_context_size": int|None,  # configured window
+              "context_capacity": int|None,      # architecture maximum
               "resource_class": str,
               "code_specialized": bool,
               "supports_tools": bool,    # profile claim, grants nothing
@@ -352,15 +376,20 @@ def get_model_health(*, include_context_sizes: bool = True) -> dict:
             )
 
         runtime_ctx: Optional[int] = None
+        context_capacity: Optional[int] = None
         if include_context_sizes and state in (STATE_LOADED, STATE_INSTALLED):
             row = _match_loaded(model, loaded_map) or {}
             candidate = row.get("context_size")
             if isinstance(candidate, int) and candidate > 0:
+                # A loaded model's own report is the ground truth.
                 runtime_ctx = candidate
-            elif runtime_error is None:
+            if (runtime_ctx is None or context_capacity is None) and runtime_error is None:
                 if model not in context_cache:
                     context_cache[model] = _runtime_context_size(model)
-                runtime_ctx = context_cache[model]
+                configured, capacity = context_cache[model]
+                if runtime_ctx is None:
+                    runtime_ctx = configured
+                context_capacity = capacity
 
         roles.append({
             "role": role,
@@ -369,6 +398,8 @@ def get_model_health(*, include_context_sizes: bool = True) -> dict:
             "loaded": loaded_state,
             "profile_context_size": profile.context_size,
             "runtime_context_size": runtime_ctx,
+            # Architecture maximum, never the configured window.
+            "context_capacity": context_capacity,
             "resource_class": profile.resource_class,
             "code_specialized": profile.code_specialized,
             "supports_tools": profile.supports_tools,

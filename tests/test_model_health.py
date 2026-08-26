@@ -133,13 +133,23 @@ class TestContextSizes:
         )
         assert _role(mh.get_model_health(), "chat")["runtime_context_size"] == 4096
 
-    def test_show_supplies_the_context_length_when_ps_does_not(self, stub_backend):
+    def test_architecture_length_is_capacity_not_runtime_context(
+        self, stub_backend
+    ):
+        """The architecture maximum is a capability, not a setting.
+
+        This test previously asserted the opposite — that
+        ``model_info.*.context_length`` supplied ``runtime_context_size``
+        — which pinned the very overstatement the field must not make.
+        """
         stub_backend(
             installed=["gemma4"],
             loaded=[{"name": "gemma4"}],
             show={"model_info": {"gemma3.context_length": 8192}},
         )
-        assert _role(mh.get_model_health(), "chat")["runtime_context_size"] == 8192
+        role = _role(mh.get_model_health(), "chat")
+        assert role["runtime_context_size"] is None
+        assert role["context_capacity"] == 8192
 
     def test_num_ctx_parameter_is_understood(self, stub_backend):
         stub_backend(

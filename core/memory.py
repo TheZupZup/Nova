@@ -22,6 +22,7 @@ from core.model_access import migrate as _migrate_model_access
 from core.local_models import migrate as _migrate_local_models
 from core.feedback import migrate as _migrate_feedback
 from core.model_eval import migrate as _migrate_model_eval
+from core.model_eval import recover_interrupted_runs as _recover_eval_runs
 from core.projects import migrate as _migrate_projects
 
 logger = logging.getLogger(__name__)
@@ -158,6 +159,11 @@ def initialize_db():
     # existing install gains them silently on the next start and needs
     # no operator action.
     _migrate_model_eval(DB_PATH)
+    # Startup is the one moment when no evaluation worker of this
+    # process is live, so any row still marked active is orphaned by a
+    # restart. Close those out rather than leaving a job that can never
+    # finish.
+    _recover_eval_runs(DB_PATH)
     # Projects (Nova Projects/Workspaces Phase 1). The table migration
     # is purely additive; the project_id column migrations below are
     # idempotent ALTERs that never backfill or reclassify existing

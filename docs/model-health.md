@@ -59,6 +59,14 @@ Two numbers are reported side by side and never conflated:
 `runtime_context_size` is `null` when the runtime did not report one.
 Nova does not invent a number to fill the field.
 
+A third value, `context_capacity`, reports the **architecture maximum**
+when `/api/show` states one. It is kept strictly separate because it is
+a capability, not a setting: a Modelfile carrying `num_ctx 8192` on a
+model whose architecture supports 131072 runs at 8192, so presenting the
+larger number as the runtime context would overstate it by 16x. Only
+`num_ctx` — or a loaded model's own report from `/api/ps`, which wins —
+answers "what window is actually in use".
+
 ## Single-model backends
 
 When the active provider serves one configured model for every role and

@@ -503,3 +503,148 @@ class TestTrackedSetIsNotSilentlyTruncated:
         assert ctx.tracked_truncated is False
         assert ctx.tracked_count == 2
         assert "truncated" not in ctx.as_prompt_block()
+
+
+# ── Fourth Codex review (commit e8452b9) ────────────────────────────
+
+
+class TestConfiguredContextIsNotArchitectureMax:
+    """P2: the architecture maximum is a capability, not a setting.
+
+    A Modelfile carrying `num_ctx 8192` on a model whose architecture
+    supports 131072 runs at 8192. Reporting the larger number as
+    `runtime_context_size` overstates the context by 16x.
+    """
+
+    def test_num_ctx_wins_over_architecture_length(self):
+        payload = {
+            "model_info": {"llama.context_length": 131072},
+            "parameters": "stop <eos>\nnum_ctx 8192",
+        }
+        assert mh._configured_context_from_show(payload) == 8192
+        assert mh._context_capacity_from_show(payload) == 131072
+
+    def test_architecture_length_alone_is_not_a_configuration(self):
+        payload = {"model_info": {"llama.context_length": 131072}}
+        assert mh._configured_context_from_show(payload) is None
+        assert mh._context_capacity_from_show(payload) == 131072
+
+    def test_num_ctx_alone_is_the_configuration(self):
+        payload = {"parameters": "num_ctx 4096"}
+        assert mh._configured_context_from_show(payload) == 4096
+        assert mh._context_capacity_from_show(payload) is None
+
+    def test_role_reports_configured_and_capacity_separately(self, monkeypatch):
+        from core import ollama_client
+
+        show = {
+            "model_info": {"llama.context_length": 131072},
+            "parameters": "num_ctx 8192",
+        }
+        monkeypatch.setattr(
+            "core.provider_status.probe_provider_health",
+            lambda name=None: {
+                "ok": True, "provider": "ollama", "detail": "",
+                "models": ["gemma4"],
+            },
+        )
+        monkeypatch.setattr(ollama_client, "list_running_models", lambda: [])
+        monkeypatch.setattr(
+            ollama_client, "show_model", lambda n, host=None: show
+        )
+        monkeypatch.setattr(
+            "core.model_profiles.configured_role_models",
+            lambda: {"router": "", "chat": "gemma4", "code": "", "advanced": ""},
+        )
+        role = next(
+            r for r in mh.get_model_health()["roles"] if r["role"] == "chat"
+        )
+        assert role["runtime_context_size"] == 8192
+        assert role["context_capacity"] == 131072
+
+    def test_loaded_models_own_report_still_wins(self, monkeypatch):
+        from core import ollama_client
+
+        monkeypatch.setattr(
+            "core.provider_status.probe_provider_health",
+            lambda name=None: {
+                "ok": True, "provider": "ollama", "detail": "",
+                "models": ["gemma4"],
+            },
+        )
+        monkeypatch.setattr(
+            ollama_client, "list_running_models",
+            lambda: [{"name": "gemma4", "context_size": 2048}],
+        )
+        monkeypatch.setattr(
+            ollama_client, "show_model",
+            lambda n, host=None: {"parameters": "num_ctx 8192"},
+        )
+        monkeypatch.setattr(
+            "core.model_profiles.configured_role_models",
+            lambda: {"router": "", "chat": "gemma4", "code": "", "advanced": ""},
+        )
+        role = next(
+            r for r in mh.get_model_health()["roles"] if r["role"] == "chat"
+        )
+        assert role["runtime_context_size"] == 2048
+
+
+class TestInterruptedRunRecovery:
+    """P2: a restart must not leave a job that can never finish."""
+
+    def _seed(self, db, status, completed=0):
+        with sqlite3.connect(db) as conn:
+            conn.execute(
+                "INSERT INTO model_eval_runs "
+                "(label, models, case_ids, status, total, completed, created_at) "
+                "VALUES (?,?,?,?,?,?,?)",
+                ("l", "a:1b", "c", status, 5, completed, "t"),
+            )
+
+    def test_active_rows_are_closed_out_at_startup(self, tmp_path):
+        db = str(tmp_path / "e.db")
+        me.migrate(db)
+        self._seed(db, me.STATUS_RUNNING, completed=2)
+        self._seed(db, me.STATUS_QUEUED)
+
+        assert me.recover_interrupted_runs(db) == 2
+        for run in me.list_runs(db_path=db):
+            assert run["status"] == me.STATUS_INTERRUPTED
+            assert run["finished_at"]
+            assert "restarted" in run["error"]
+
+    def test_partial_results_are_kept(self, tmp_path):
+        db = str(tmp_path / "e.db")
+        me.migrate(db)
+        self._seed(db, me.STATUS_RUNNING, completed=3)
+        me.recover_interrupted_runs(db)
+        assert me.list_runs(db_path=db)[0]["completed"] == 3
+
+    def test_terminal_runs_are_untouched(self, tmp_path):
+        db = str(tmp_path / "e.db")
+        me.migrate(db)
+        self._seed(db, me.STATUS_DONE, completed=5)
+        self._seed(db, me.STATUS_ERROR)
+        assert me.recover_interrupted_runs(db) == 0
+        statuses = {r["status"] for r in me.list_runs(db_path=db)}
+        assert statuses == {me.STATUS_DONE, me.STATUS_ERROR}
+
+    def test_recovery_is_idempotent(self, tmp_path):
+        db = str(tmp_path / "e.db")
+        me.migrate(db)
+        self._seed(db, me.STATUS_RUNNING)
+        assert me.recover_interrupted_runs(db) == 1
+        assert me.recover_interrupted_runs(db) == 0
+
+    def test_recovery_never_raises_on_a_broken_db(self, tmp_path):
+        missing = str(tmp_path / "nope" / "e.db")
+        assert me.recover_interrupted_runs(missing) == 0
+
+    def test_startup_wires_the_recovery(self):
+        """initialize_db must actually call it, not just define it."""
+        import inspect
+
+        from core import memory
+
+        assert "_recover_eval_runs" in inspect.getsource(memory.initialize_db)

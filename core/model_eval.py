@@ -87,6 +87,10 @@ STATUS_QUEUED = "queued"
 STATUS_RUNNING = "running"
 STATUS_DONE = "done"
 STATUS_ERROR = "error"
+#: A run whose worker vanished — the process restarted while it was
+#: queued or in flight. Terminal, and distinct from ``error`` so an
+#: operator can tell "the run failed" from "Nova was restarted under it".
+STATUS_INTERRUPTED = "interrupted"
 
 # ── Caps ────────────────────────────────────────────────────────────
 MAX_CASE_ID_LEN = 80
@@ -464,6 +468,40 @@ def migrate(db_path: str) -> None:
         conn.execute(_RESULTS_SQL)
         _ensure_result_snapshot_columns(conn)
         conn.execute(_RESULTS_RUN_INDEX_SQL)
+
+
+def recover_interrupted_runs(db_path: str) -> int:
+    """Close out runs whose worker died with the process. Returns the count.
+
+    Runs execute on daemon threads, so a restart discards the worker
+    while its row stays ``queued``/``running`` forever — surfacing a job
+    that can never finish, sometimes with partial results attached. Call
+    this once at startup, when by definition no worker of this process is
+    live, so any active row is orphaned.
+
+    Deliberately separate from :func:`migrate`: that is a schema
+    operation and may run at other times, while this rewrites *state* and
+    is only sound at startup. Never raises.
+    """
+    try:
+        with sqlite3.connect(db_path) as conn:
+            cur = conn.execute(
+                "UPDATE model_eval_runs SET status = ?, finished_at = ?, "
+                "error = ? WHERE status IN (?, ?)",
+                (
+                    STATUS_INTERRUPTED, _now_iso(),
+                    "Nova restarted while this run was in progress; it was "
+                    "not resumed. Any results already recorded are kept.",
+                    STATUS_QUEUED, STATUS_RUNNING,
+                ),
+            )
+            return int(cur.rowcount or 0)
+    except sqlite3.Error as exc:
+        logger.warning(
+            "evaluation: interrupted-run recovery failed (%s)",
+            type(exc).__name__,
+        )
+        return 0
 
 
 def _open(db_path: Optional[str] = None) -> sqlite3.Connection:
@@ -1027,6 +1065,7 @@ def summarize_run(run_id: int, db_path: Optional[str] = None) -> dict:
 __all__ = [
     "ENV_CASES_DIR", "EVAL_SYSTEM_PROMPT", "CONSTRAINT_KINDS",
     "STATUS_QUEUED", "STATUS_RUNNING", "STATUS_DONE", "STATUS_ERROR",
+    "STATUS_INTERRUPTED", "recover_interrupted_runs",
     "EvalError", "TooManyRunsInProgress", "Constraint", "EvalCase",
     "parse_case", "load_cases", "get_case",
     "builtin_cases_dir", "operator_cases_dir",

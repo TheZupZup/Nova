@@ -138,9 +138,20 @@ in the list would be the same file. Two rules follow:
 `ModelProvider.selects_model_by_name` is what distinguishes the two
 kinds of backend; Ollama routes by name, llama.cpp does not.
 
+## Restarts
+
+Runs execute on a daemon thread, so restarting Nova mid-run discards the
+worker. At startup any row still marked `queued` or `running` is
+therefore orphaned, and is closed out as **`interrupted`** — a terminal
+status distinct from `error`, so an operator can tell "the run failed"
+from "Nova was restarted under it". Results already recorded are kept.
+Runs are not resumed; start a new one.
+
 ## Known limits of this first iteration
 
-- **No cancellation.** A started run finishes its (model × case) matrix.
+- **No cancellation, and no resume.** A started run finishes its
+  (model × case) matrix, and an interrupted one is closed out rather
+  than continued.
   With slow models and the caps at their maximum (6 models × 50 cases)
   that can be a long wall-clock time. Start small, and use `label` to
   keep runs identifiable.
