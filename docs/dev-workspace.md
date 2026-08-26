@@ -127,7 +127,11 @@ Three properties are worth stating plainly:
    secret-path validation a patch proposal does. `.env`, keys, tokens,
    databases and `.git` internals can never be excerpted. Symlinks,
    non-regular files, and non-UTF-8 or control-character content are
-   refused.
+   refused. The index listing is bounded only to keep memory finite on a
+   pathological repository; if that bound is ever hit the briefing says
+   the listing was truncated rather than under-reporting the count, and
+   a path it could not confirm as tracked is excluded (a missed excerpt,
+   never a leak).
 3. **The block is untrusted data.** It is inserted *below* Nova's
    identity and safety contract and opens with an explicit frame saying
    so, so a comment inside a source file or a commit message can never

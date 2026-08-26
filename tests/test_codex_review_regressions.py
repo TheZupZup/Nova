@@ -394,3 +394,112 @@ class TestApprovedDiscoveryIsUncapped:
         readiness = cd.describe_export_readiness(db_path=db)
         assert readiness["approved_count"] == 1
         assert readiness["approved_result_ids"] == [1]
+
+
+# ── Third Codex review (commit c04888f) ─────────────────────────────
+
+
+class TestSingleModelResidency:
+    """P2: reachable is not resident.
+
+    A single-model backend's health probe deliberately does not load the
+    model, so treating "configured and reachable" as "loaded" hides the
+    cold start the next request will pay. This was a regression
+    introduced by the previous round's fix.
+    """
+
+    class _Provider:
+        name = "llamacpp"
+        selects_model_by_name = False
+
+        def __init__(self, resident):
+            self._resident = resident
+
+        def backend_model_id(self):
+            return "nova-coder-14b.Q4_K_M.gguf"
+
+        def is_model_resident(self):
+            return self._resident
+
+    def _role(self, monkeypatch, resident):
+        monkeypatch.setattr(
+            "core.provider_status.probe_provider_health",
+            lambda name=None: {
+                "ok": True, "provider": "llamacpp", "detail": "",
+                "models": ["nova-coder-14b.Q4_K_M.gguf"],
+            },
+        )
+        monkeypatch.setattr(
+            "core.model_providers.get_provider",
+            lambda: self._Provider(resident),
+        )
+        return mh.get_model_health()["roles"][0]
+
+    def test_configured_but_never_generated_is_not_called_loaded(
+        self, monkeypatch
+    ):
+        role = self._role(monkeypatch, False)
+        assert role["loaded"] is False
+        assert role["state"] == mh.STATE_INSTALLED
+        assert "cold start" in role["hint"]
+
+    def test_actually_resident_is_reported_loaded(self, monkeypatch):
+        role = self._role(monkeypatch, True)
+        assert role["loaded"] is True
+        assert role["state"] == mh.STATE_LOADED
+
+    def test_provider_that_cannot_answer_stays_unknown(self, monkeypatch):
+        role = self._role(monkeypatch, None)
+        assert role["loaded"] is None
+        assert "could not be determined" in role["hint"]
+
+    def test_llamacpp_reports_residency_from_its_handle(self):
+        from core.model_providers import LlamaCppProvider
+
+        provider = LlamaCppProvider(model_path="")
+        # health() never loads, so before any generation the handle is
+        # unset and residency is a definite False, not None.
+        assert provider.is_model_resident() is False
+
+    def test_base_contract_defaults_to_unknown(self):
+        from core.model_providers.base import ModelProvider
+
+        assert ModelProvider.is_model_resident(object()) is None
+
+
+class TestTrackedSetIsNotSilentlyTruncated:
+    """P2: the membership set decides what may be excerpted at all."""
+
+    def test_cap_is_high_enough_for_real_repositories(self):
+        # The Linux kernel is ~80k tracked files; the bound exists only
+        # to keep memory finite, not to limit ordinary repositories.
+        assert dw.MAX_TRACKED_FILES >= 100_000
+
+    def test_truncation_is_reported_rather_than_silent(self, monkeypatch):
+        """A partial index listing must not masquerade as complete."""
+        fake = tuple(f"src/file{i}.py" for i in range(dw.MAX_TRACKED_FILES))
+        monkeypatch.setattr(cc.dev_workspace, "git_tracked_files", lambda p: fake)
+
+        status = dw.RepoStatus(
+            state=dw.STATE_READY, repo_path="/repo", branch="main", clean=True,
+        )
+        monkeypatch.setattr(
+            cc.dev_workspace, "read_status", lambda p, roots=None: status
+        )
+        ctx = cc.build_code_context("/repo", "hello")
+        assert ctx.tracked_truncated is True
+        assert "truncated" in ctx.as_prompt_block()
+
+    def test_untruncated_listing_reports_an_exact_count(self, monkeypatch):
+        fake = ("a.py", "b.py")
+        monkeypatch.setattr(cc.dev_workspace, "git_tracked_files", lambda p: fake)
+        status = dw.RepoStatus(
+            state=dw.STATE_READY, repo_path="/repo", branch="main", clean=True,
+        )
+        monkeypatch.setattr(
+            cc.dev_workspace, "read_status", lambda p, roots=None: status
+        )
+        ctx = cc.build_code_context("/repo", "hello")
+        assert ctx.tracked_truncated is False
+        assert ctx.tracked_count == 2
+        assert "truncated" not in ctx.as_prompt_block()

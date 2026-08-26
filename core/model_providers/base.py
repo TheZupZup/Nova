@@ -148,6 +148,19 @@ class ModelProvider(ABC):
     #: attribute one backend's output to several different "models".
     selects_model_by_name: bool = True
 
+    def is_model_resident(self) -> Optional[bool]:
+        """Whether the backend currently holds its model in memory.
+
+        Deliberately distinct from :meth:`health`: a provider can be
+        perfectly configured and reachable while having loaded nothing
+        yet, so the next request still pays a cold start. Returns True /
+        False when the backend can actually answer, and ``None`` when it
+        cannot — callers must render ``None`` as *unknown* rather than
+        as "not loaded". The default is ``None``: a backend that says
+        nothing about residency is not evidence of either answer.
+        """
+        return None
+
     def backend_model_id(self) -> str:
         """The model this backend actually runs, when it serves only one.
 

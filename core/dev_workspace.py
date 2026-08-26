@@ -116,7 +116,15 @@ _MAX_RAW_PATH_CHARS = 4096
 # A snippet is *reference material for the model*, not a file browser:
 # small, bounded, and always a strict subset of what the user already
 # has open in their own editor.
-_MAX_TRACKED_FILES = 4000    # ``git ls-files`` rows kept
+# ``git ls-files`` rows kept. This set is used for *membership* — "is
+# this path tracked?" — which decides whether a file may be excerpted at
+# all, so truncating it low silently mislabels real tracked files as
+# untracked and drops them from Code mode. The bound exists only to keep
+# memory finite on a pathological repository (the Linux kernel is
+# ~80k files); a caller can detect that it was hit by comparing the
+# returned length against ``MAX_TRACKED_FILES`` and degrade visibly.
+MAX_TRACKED_FILES = 200_000
+_MAX_TRACKED_FILES = MAX_TRACKED_FILES  # legacy internal alias
 _MAX_SNIPPET_BYTES = 262_144  # bytes read from disk for one snippet
 _MAX_SNIPPET_LINES = 400      # lines returned for one snippet
 _MAX_SNIPPET_CHARS = 20_000   # characters returned for one snippet

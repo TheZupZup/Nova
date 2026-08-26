@@ -226,6 +226,7 @@ def get_model_health(*, include_context_sizes: bool = True) -> dict:
     # tag-matching names the backend never looks at.
     single_model_backend = False
     backend_model = ""
+    backend_resident: Optional[bool] = None
     try:
         from core.model_providers import get_provider
 
@@ -233,6 +234,14 @@ def get_model_health(*, include_context_sizes: bool = True) -> dict:
         single_model_backend = not getattr(active, "selects_model_by_name", True)
         if single_model_backend:
             backend_model = active.backend_model_id() or ""
+            # Reachable != resident. A single-model backend's health
+            # probe deliberately does not load the model, so ask it
+            # directly; ``None`` stays unknown rather than becoming a
+            # claim in either direction.
+            try:
+                backend_resident = active.is_model_resident()
+            except Exception:  # pragma: no cover - defensive
+                backend_resident = None
     except Exception as exc:  # pragma: no cover - defensive
         logger.debug("model health: provider capability read failed: %s", exc)
 
@@ -271,14 +280,28 @@ def get_model_health(*, include_context_sizes: bool = True) -> dict:
             # does not run Ollama.
             served = backend_model or "its configured model"
             if reachable:
-                state = STATE_LOADED
-                loaded_state = True
+                loaded_state = backend_resident
+                if backend_resident is True:
+                    state = STATE_LOADED
+                    residency = "It is loaded and resident."
+                elif backend_resident is False:
+                    state = STATE_INSTALLED
+                    residency = (
+                        "It is configured but not yet loaded — the next "
+                        "request pays a cold start."
+                    )
+                else:
+                    state = STATE_INSTALLED
+                    residency = (
+                        "Whether it is currently resident could not be "
+                        "determined."
+                    )
                 hint = (
                     f"This provider serves one configured model "
                     f"({served}) for every role and ignores the role's "
                     f"model name, so '{model}' is not selected here. "
-                    f"Change the provider's configured model to change "
-                    f"what runs."
+                    f"{residency} Change the provider's configured model "
+                    f"to change what runs."
                 )
             else:
                 state = STATE_UNKNOWN

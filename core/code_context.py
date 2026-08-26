@@ -251,6 +251,7 @@ class CodeContext:
     changed_files: tuple[str, ...] = field(default_factory=tuple)
     recent_commits: tuple[str, ...] = field(default_factory=tuple)
     tracked_count: int = 0
+    tracked_truncated: bool = False
     top_level_dirs: tuple[str, ...] = field(default_factory=tuple)
     snippets: tuple[dev_workspace.FileSnippet, ...] = field(default_factory=tuple)
     skipped_files: tuple[str, ...] = field(default_factory=tuple)
@@ -270,6 +271,7 @@ class CodeContext:
             "changed_files": list(self.changed_files),
             "recent_commits": list(self.recent_commits),
             "tracked_count": self.tracked_count,
+            "tracked_truncated": self.tracked_truncated,
             "top_level_dirs": list(self.top_level_dirs),
             "snippets": [s.as_dict() for s in self.snippets],
             "skipped_files": list(self.skipped_files),
@@ -301,8 +303,13 @@ class CodeContext:
         ]
         if self.tracked_count:
             layout = ", ".join(self.top_level_dirs) or "(flat)"
+            counted = (
+                f"{self.tracked_count}+ (index listing truncated; some "
+                f"files may not be offered)"
+                if self.tracked_truncated else str(self.tracked_count)
+            )
             lines.append(
-                f"Tracked files: {self.tracked_count} · top level: {layout}"
+                f"Tracked files: {counted} · top level: {layout}"
             )
         if self.changed_files:
             lines.append("")
@@ -392,6 +399,13 @@ def build_code_context(
     # selection are filtered through the tracked set before reaching the
     # prompt.
     tracked_set = set(tracked)
+    # The index listing is bounded only to keep memory finite on a
+    # pathological repository. If that bound was actually hit the
+    # membership set is partial, so a genuinely tracked file could be
+    # mistaken for an untracked one. Excluding it is the safe direction
+    # (a missed excerpt, never a leak) but it must not be silent — the
+    # reported count and the prompt block both say the listing was cut.
+    tracked_truncated = len(tracked) >= dev_workspace.MAX_TRACKED_FILES
     changed = tuple(
         path for path in _changed_paths(status) if path in tracked_set
     )[:_MAX_CHANGED_FILES_LISTED]
@@ -435,6 +449,7 @@ def build_code_context(
         changed_files=changed,
         recent_commits=commits,
         tracked_count=len(tracked),
+        tracked_truncated=tracked_truncated,
         top_level_dirs=_top_level_dirs(tracked),
         snippets=tuple(snippets),
         skipped_files=tuple(skipped),

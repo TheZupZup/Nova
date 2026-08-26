@@ -254,6 +254,17 @@ class LlamaCppProvider(ModelProvider):
 
     # ── health ──────────────────────────────────────────────────────
 
+    def is_model_resident(self) -> Optional[bool]:
+        """True once the ``.gguf`` is actually loaded into memory.
+
+        ``health()`` deliberately never loads the model, so being
+        configured and reachable says nothing about residency: until the
+        first :meth:`generate` / :meth:`stream` the handle is unset and
+        the next request pays a full model load. Reading the handle is
+        cheap and loads nothing.
+        """
+        return self._llama is not None
+
     def backend_model_id(self) -> str:
         """Basename of the configured ``.gguf``, or ``""`` if unset.
 

@@ -68,6 +68,13 @@ against the backend's file would mark every working role
 Ollama. Instead each role reports the configured backend model and says
 plainly that the role's name is not a selector there.
 
+**Reachable is not resident.** Such a backend's health probe
+deliberately does not load the model, so "configured and reachable"
+says nothing about whether the next request pays a cold start.
+Residency comes from `ModelProvider.is_model_resident()`, which returns
+True/False when the backend can answer and `None` when it cannot —
+rendered as unknown, never as "not loaded".
+
 ## Errors
 
 `errors` carries stable machine-readable codes rather than prose:
