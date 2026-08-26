@@ -195,12 +195,16 @@ def select_files(
     tracked: Sequence[str],
     limit: int,
 ) -> tuple[str, ...]:
-    """Which files to inline, most relevant first.
+    """Which tracked files to inline, most relevant first.
 
     Deterministic and bounded: files the user named win, then files they
-    are currently changing. Nothing else is read — Nova does not go
-    looking through a repository on its own.
+    are currently changing. Dirty paths are intersected with git's index
+    before they are eligible, so an untracked file reported by
+    ``git status --porcelain`` can never be read into the prompt.
+    Nothing else is read — Nova does not go looking through a repository
+    on its own.
     """
+    tracked_set = set(tracked)
     selected: list[str] = []
     for path in mentioned_paths(message, tracked):
         if _is_inlineable(path) and path not in selected:
@@ -208,6 +212,8 @@ def select_files(
         if len(selected) >= limit:
             return tuple(selected)
     for path in _changed_paths(status):
+        if path not in tracked_set:
+            continue
         if _is_inlineable(path) and path not in selected:
             selected.append(path)
         if len(selected) >= limit:
@@ -381,7 +387,14 @@ def build_code_context(
         logger.debug("code context: ls-files failed: %s", exc)
         tracked = ()
 
-    changed = _changed_paths(status)[:_MAX_CHANGED_FILES_LISTED]
+    # ``git status`` includes untracked files. The Code-mode trust boundary
+    # is index-only, so both the rendered changed-file list and snippet
+    # selection are filtered through the tracked set before reaching the
+    # prompt.
+    tracked_set = set(tracked)
+    changed = tuple(
+        path for path in _changed_paths(status) if path in tracked_set
+    )[:_MAX_CHANGED_FILES_LISTED]
     commits = tuple(status.recent_commits[:_MAX_COMMITS_LISTED])
 
     snippets: list[dev_workspace.FileSnippet] = []

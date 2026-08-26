@@ -13,7 +13,7 @@ The gate
 Exportable means *all* of:
 
 1. the record is a :mod:`core.model_eval` result — an operator-authored
-   task prompt and the model's answer, never a user conversation;
+   task prompt snapshot and the model's answer, never a user conversation;
 2. an operator set ``approved = 1`` on it deliberately
    (:func:`core.model_eval.set_result_approval`); and
 3. the operator names its id in the export request.
@@ -24,8 +24,8 @@ or anything else. There is no "export everything" call.
 What is never exported
 ----------------------
 * **Chat conversations.** No user message, assistant reply, or thread
-  from ``/chat`` is reachable from here. The export reads exactly two
-  tables' worth of evaluation data.
+  from ``/chat`` is reachable from here. The export reads evaluation
+  results only through :mod:`core.model_eval`.
 * **System and safety prompts.** Nova's identity contract, the safety
   contract, personalization blocks, and the harness preamble are all
   omitted — an exported example is a bare ``user`` / ``assistant`` pair.
@@ -37,6 +37,11 @@ What is never exported
   something sensitive was in their data.
 * **Repository file contents.** Code-mode repository briefings are built
   per-turn and are never stored, so they cannot reach an export.
+
+The prompt paired with an answer is the immutable snapshot stored on the
+evaluation result at generation time. Editing, overriding, or deleting a
+case later can therefore never silently pair an approved answer with a
+different task.
 
 Everything is written under Nova's own exports directory, with a
 validated filename, on the local filesystem. There is no upload, no
@@ -133,9 +138,10 @@ def build_examples(
     """Turn explicitly-named, operator-approved results into examples.
 
     Refuses — with nothing produced — when an id is unknown, is not
-    approved, produced no usable output, or when any content looks like a
-    credential or a personal identifier. A refusal names the reason
-    without echoing the offending text.
+    approved, lacks the immutable prompt snapshot, produced no usable
+    output, or when any content looks like a credential or a personal
+    identifier. A refusal names the reason without echoing offending
+    content.
     """
     from core import model_eval
 
@@ -168,16 +174,19 @@ def build_examples(
                 f"Result {raw} recorded a backend error and has no usable output."
             )
 
-        case = model_eval.get_case(result["case_id"])
-        if case is None:
+        # Never reconstruct from the current case definition. Cases are
+        # operator-editable and may disappear; only the prompt stored with
+        # the result is guaranteed to be the prompt that produced this
+        # completion. Empty snapshots identify legacy rows from an earlier
+        # branch revision and are refused rather than guessed.
+        prompt = _clean(result.get("prompt_snapshot")).strip()
+        if not prompt:
             raise DatasetExportError(
-                f"Result {raw} refers to case '{result['case_id']}', which is "
-                f"no longer available. Its prompt cannot be reconstructed."
+                f"Result {raw} predates prompt snapshots and cannot be exported "
+                f"safely. Re-run that evaluation case and approve the new result."
             )
-
-        prompt = _clean(case.prompt).strip()
         completion = _clean(result["output"]).strip()
-        if not prompt or not completion:
+        if not completion:
             raise DatasetExportError(f"Result {raw} has no usable prompt/answer pair.")
         if len(prompt) + len(completion) > MAX_EXAMPLE_CHARS:
             raise DatasetExportError(f"Result {raw} is too large to export.")
@@ -188,8 +197,8 @@ def build_examples(
         if found is not None:
             raise DatasetExportError(
                 f"Result {raw} contains content matching a credential or "
-                f"personal-data pattern. Nothing was exported. Review and "
-                f"edit the case or withdraw its approval."
+                f"personal-data pattern. Nothing was exported. Review the "
+                f"evaluation result or withdraw its approval."
             )
 
         examples.append(DatasetExample(
@@ -199,7 +208,7 @@ def build_examples(
                 "result_id": result["id"],
                 "run_id": result["run_id"],
                 "case_id": result["case_id"],
-                "case_source": case.source,
+                "case_source": result.get("case_source") or "",
                 "model": result["model"],
                 "context_size": result["context_size"],
                 "elapsed_ms": result["elapsed_ms"],

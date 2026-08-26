@@ -38,11 +38,13 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-#: Per-model states surfaced to the operator.
+#: Per-model states surfaced to the operator. ``STATE_INSTALLED`` means
+#: installation is known; consult the separate ``loaded`` field to tell
+#: whether residency is true, false, or unknown (``None``).
 STATE_LOADED = "loaded"              # installed and resident in memory
-STATE_INSTALLED = "installed"        # installed, not currently loaded
+STATE_INSTALLED = "installed"        # installed; residency may be known or unknown
 STATE_NOT_INSTALLED = "not_installed"  # backend up, model absent
-STATE_UNKNOWN = "unknown"            # backend down; nothing can be claimed
+STATE_UNKNOWN = "unknown"            # installation itself cannot be claimed
 
 #: Why the runtime could not answer, in stable machine-readable form.
 ERROR_BACKEND_UNREACHABLE = "backend_unreachable"
@@ -180,7 +182,7 @@ def get_model_health(*, include_context_sizes: bool = True) -> dict:
               "role": str,
               "model": str,
               "state": str,              # STATE_* above
-              "loaded": bool,
+              "loaded": bool|None,       # None => residency unavailable
               "profile_context_size": int,   # Nova's recommendation
               "runtime_context_size": int|None,  # what the runtime says
               "resource_class": str,
@@ -193,8 +195,9 @@ def get_model_health(*, include_context_sizes: bool = True) -> dict:
         }
 
     ``runtime_context_size`` is ``None`` whenever the runtime did not
-    report one — Nova never invents a number and never claims a model is
-    missing while the backend is unreachable.
+    report one. Likewise ``loaded`` is ``None`` when the loaded-model
+    view is unavailable: Nova never turns missing runtime evidence into a
+    false cold-start claim.
     """
     from core import model_profiles
     from core.provider_status import probe_provider_health
@@ -229,7 +232,7 @@ def get_model_health(*, include_context_sizes: bool = True) -> dict:
                 "role": role,
                 "model": "",
                 "state": STATE_UNKNOWN,
-                "loaded": False,
+                "loaded": None,
                 "profile_context_size": profile.context_size,
                 "runtime_context_size": None,
                 "resource_class": profile.resource_class,
@@ -243,26 +246,42 @@ def get_model_health(*, include_context_sizes: bool = True) -> dict:
             })
             continue
 
+        loaded_state: Optional[bool]
         if not reachable:
             state = STATE_UNKNOWN
+            loaded_state = None
             hint = (
                 "The model backend is unreachable, so Nova cannot say "
-                "whether this model is installed. Start the backend and "
-                "refresh."
+                "whether this model is installed or loaded. Start the "
+                "backend and refresh."
             )
         elif not _match_installed(model, installed_set):
             state = STATE_NOT_INSTALLED
+            loaded_state = False
             hint = (
                 f"'{model}' is not installed. Install it on the backend "
                 f"(for Ollama: `ollama pull {model}`), or point "
                 f"{model_profiles.ROLE_ENV_VARS[role]} at a model you "
                 f"already have. Nova never downloads it for you."
             )
+        elif runtime_error is not None:
+            # Installation is known from the provider health probe, but
+            # the loaded-model view failed or is unsupported. Do not turn
+            # an empty loaded_map into the false statement "not loaded".
+            state = STATE_INSTALLED
+            loaded_state = None
+            hint = (
+                "Installed, but the runtime did not provide loaded-state "
+                "details. Nova cannot tell whether this model is already "
+                "resident or whether the next request will be a cold start."
+            )
         elif _match_loaded(model, loaded_map) is not None:
             state = STATE_LOADED
+            loaded_state = True
             hint = ""
         else:
             state = STATE_INSTALLED
+            loaded_state = False
             hint = (
                 "Installed but not currently loaded — the next request "
                 "pays a cold start."
@@ -283,7 +302,7 @@ def get_model_health(*, include_context_sizes: bool = True) -> dict:
             "role": role,
             "model": model,
             "state": state,
-            "loaded": state == STATE_LOADED,
+            "loaded": loaded_state,
             "profile_context_size": profile.context_size,
             "runtime_context_size": runtime_ctx,
             "resource_class": profile.resource_class,

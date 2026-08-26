@@ -42,6 +42,8 @@ def case():
 
 
 class _StubProvider:
+    name = "mock"
+
     def __init__(self, content="", error=None):
         self.content = content
         self.error = error
@@ -161,7 +163,9 @@ class TestRunning:
         result = me.run_case(case, "qwen2.5-coder:7b")
         assert result["success"] is True
         assert result["model"] == "qwen2.5-coder:7b"
-        assert result["context_size"] > 0
+        # A mock provider has no runtime residency/context surface. Nova
+        # must not record the profile recommendation as if it were observed.
+        assert result["context_size"] is None
         assert result["elapsed_ms"] >= 0
         assert result["error"] == ""
 

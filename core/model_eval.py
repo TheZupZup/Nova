@@ -8,10 +8,12 @@ the operator's machine.
 
 What one evaluation records
 ---------------------------
-For every (case, model) pair: the model name, the context size Nova
-assumed for it, elapsed wall-clock time, whether it succeeded, which of
-the case's **requested constraints** it followed, the raw output, and —
-later, when a human looks at it — an optional 1-5 rating and note.
+For every (case, model) pair: the model name, the context size the local
+runtime actually reports for that loaded evaluation model when available,
+elapsed wall-clock time, whether it succeeded, which of the case's
+**requested constraints** it followed, the exact prompt snapshot that
+produced the answer, the raw output, and — later, when a human looks at
+it — an optional 1-5 rating and note.
 
 Hard boundaries
 ---------------
@@ -397,6 +399,8 @@ CREATE TABLE IF NOT EXISTS model_eval_results (
     run_id             INTEGER NOT NULL,
     case_id            TEXT    NOT NULL,
     case_title         TEXT    NOT NULL DEFAULT '',
+    prompt_snapshot    TEXT    NOT NULL DEFAULT '',
+    case_source        TEXT    NOT NULL DEFAULT '',
     model              TEXT    NOT NULL,
     context_size       INTEGER,
     elapsed_ms         INTEGER NOT NULL DEFAULT 0,
@@ -420,11 +424,39 @@ _RESULTS_RUN_INDEX_SQL = (
 )
 
 
+def _ensure_result_snapshot_columns(conn: sqlite3.Connection) -> None:
+    """Upgrade pre-snapshot evaluation tables in place, idempotently.
+
+    This branch has not shipped yet, but Nova's migration contract is
+    deliberately restart-only: an operator may have created evaluation
+    rows while testing an earlier revision of the branch. SQLite's
+    additive ``ALTER TABLE ... ADD COLUMN`` keeps those databases usable.
+    Legacy rows receive empty snapshots and are deliberately refused by
+    the dataset exporter rather than reconstructing a possibly changed
+    prompt later.
+    """
+    columns = {
+        str(row[1])
+        for row in conn.execute("PRAGMA table_info(model_eval_results)").fetchall()
+    }
+    if "prompt_snapshot" not in columns:
+        conn.execute(
+            "ALTER TABLE model_eval_results ADD COLUMN "
+            "prompt_snapshot TEXT NOT NULL DEFAULT ''"
+        )
+    if "case_source" not in columns:
+        conn.execute(
+            "ALTER TABLE model_eval_results ADD COLUMN "
+            "case_source TEXT NOT NULL DEFAULT ''"
+        )
+
+
 def migrate(db_path: str) -> None:
-    """Create the evaluation tables. Idempotent; safe on every start."""
+    """Create/upgrade the evaluation tables. Idempotent on every start."""
     with sqlite3.connect(db_path) as conn:
         conn.execute(_RUNS_SQL)
         conn.execute(_RESULTS_SQL)
+        _ensure_result_snapshot_columns(conn)
         conn.execute(_RESULTS_RUN_INDEX_SQL)
 
 
@@ -463,6 +495,8 @@ def _result_to_dict(row: dict) -> dict:
         "run_id": int(row["run_id"]),
         "case_id": row["case_id"],
         "case_title": row["case_title"],
+        "prompt_snapshot": row.get("prompt_snapshot") or "",
+        "case_source": row.get("case_source") or "",
         "model": row["model"],
         "context_size": row["context_size"],
         "elapsed_ms": int(row["elapsed_ms"]),
@@ -575,35 +609,72 @@ def evaluate_output(case: EvalCase, output: str) -> dict:
     }
 
 
+def _runtime_context_size(model: str, provider: object) -> Optional[int]:
+    """Context size the active runtime reports for this loaded model.
+
+    Today only Ollama exposes that fact through its read-only ``/api/ps``
+    surface. Providers without a loaded-model view return ``None`` rather
+    than borrowing a profile recommendation and presenting it as an
+    observed benchmark parameter.
+    """
+    if getattr(provider, "name", "") != "ollama":
+        return None
+    try:
+        from core.ollama_client import list_running_models
+
+        rows = list_running_models()
+    except Exception as exc:
+        logger.debug("eval: runtime context unavailable (%s)", type(exc).__name__)
+        return None
+
+    exact: Optional[dict] = None
+    tolerant: Optional[dict] = None
+    for row in rows:
+        name = row.get("name")
+        if not isinstance(name, str):
+            continue
+        if name == model:
+            exact = row
+            break
+        if name.startswith(model + ":") or model.startswith(name + ":"):
+            tolerant = row
+    row = exact or tolerant or {}
+    value = row.get("context_size")
+    return value if isinstance(value, int) and value > 0 else None
+
+
 def run_case(case: EvalCase, model: str) -> dict:
     """Generate one answer for ``case`` with ``model`` and score it.
 
     Returns a plain dict (not persisted here). A backend failure — an
     unreachable daemon, a model that is not installed, a crashed runner —
     is recorded as a failed result with a short reason, never raised and
-    never a download.
+    never a download. ``context_size`` is an observed runtime value when
+    the provider can report it; otherwise it is ``None`` rather than a
+    guessed/profile value.
     """
-    from core import model_profiles
     from core.model_providers import (
         ModelProviderError,
         ModelRequest,
         get_provider,
     )
 
-    profile = model_profiles.profile_for(model, case.role)
     messages = [
         {"role": "system", "content": EVAL_SYSTEM_PROMPT},
         {"role": "user", "content": case.prompt},
     ]
 
+    provider = get_provider()
     started = time.monotonic()
     output = ""
     error = ""
+    context_size: Optional[int] = None
     try:
-        response = get_provider().generate(
+        response = provider.generate(
             ModelRequest(model=model, messages=messages)
         )
         output = (response.content or "")[:MAX_OUTPUT_CHARS]
+        context_size = _runtime_context_size(model, provider)
     except ModelProviderError as exc:
         kind = getattr(exc, "kind", "") or "backend_error"
         error = f"{kind}: {str(exc)[:200]}"
@@ -615,8 +686,10 @@ def run_case(case: EvalCase, model: str) -> dict:
     return {
         "case_id": case.id,
         "case_title": case.title,
+        "prompt_snapshot": case.prompt,
+        "case_source": case.source,
         "model": model,
-        "context_size": profile.context_size,
+        "context_size": context_size,
         "elapsed_ms": elapsed_ms,
         "success": bool(not error and output.strip() and scored["all_passed"]),
         "constraints": scored["constraints"],
@@ -743,12 +816,13 @@ def _execute_run(
                 with sqlite3.connect(db_path) as conn:
                     conn.execute(
                         "INSERT INTO model_eval_results "
-                        "(run_id, case_id, case_title, model, context_size, "
-                        "elapsed_ms, success, constraints_passed, "
-                        "constraints_total, constraints_json, output, error, "
-                        "created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        "(run_id, case_id, case_title, prompt_snapshot, case_source, "
+                        "model, context_size, elapsed_ms, success, constraints_passed, "
+                        "constraints_total, constraints_json, output, error, created_at) "
+                        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                         (
                             run_id, result["case_id"], result["case_title"],
+                            result["prompt_snapshot"], result["case_source"],
                             result["model"], result["context_size"],
                             result["elapsed_ms"], 1 if result["success"] else 0,
                             result["constraints_passed"],
