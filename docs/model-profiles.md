@@ -101,9 +101,12 @@ partial write. Nova never creates or modifies this file.
 - `GET /admin/models/health` reports Nova's recommended context size
   alongside the one the runtime actually reports — see
   [model-health.md](model-health.md).
-- The evaluation harness records the context size assumed for each model
-  so a comparison between two models is honest about what each was given
-  — see [model-evaluation.md](model-evaluation.md).
+- The evaluation harness records the context size the runtime **actually
+  reported** for each model, or `null` when it could not say — never the
+  recommendation below. A comparison between two models is honest about
+  what each was given precisely because it does not fill that gap in
+  with a profile value — see
+  [model-evaluation.md](model-evaluation.md).
 
 ## <a id="nova-coder"></a>How a future `nova-coder` plugs in
 

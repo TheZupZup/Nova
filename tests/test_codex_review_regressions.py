@@ -1627,3 +1627,178 @@ class TestClosingFenceMustMatchOpenerLength:
 
     def test_the_ordinary_three_backtick_block_is_unaffected(self):
         assert self._check("```python\nx = 1\n```") is True
+
+
+# ── Round 12 ────────────────────────────────────────────────────────
+
+
+class TestRepoRootIsOpenedFromTheAllowedRoot:
+    """P2: opening the repo by absolute path resolves every ancestor.
+
+    The descriptor walk started *at* the repository, so ``O_NOFOLLOW``
+    covered only ``repo_root``'s own final component — the kernel still
+    resolved everything above it. Replacing an ancestor with a symlink
+    to an outside tree holding the same suffix redirected the whole
+    walk, and each component below the swap then verified perfectly
+    against the wrong directory.
+
+    The walk now starts at the allowed workspace root. That is the
+    operator's declared trust boundary, so it is the one path taken on
+    faith; everything under it is proved.
+    """
+
+    @pytest.fixture
+    def nested(self, tmp_path, monkeypatch):
+        root = tmp_path / "ws"
+        nest = root / "nest"
+        checkout = nest / "proj"
+        checkout.mkdir(parents=True)
+        subprocess.run(["git", "init", "-q"], cwd=checkout, check=True)
+        subprocess.run(
+            ["git", "config", "user.email", "t@example.com"],
+            cwd=checkout, check=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "T"], cwd=checkout, check=True
+        )
+        (checkout / "app.py").write_text("real = 1\n", encoding="utf-8")
+        subprocess.run(["git", "add", "-A"], cwd=checkout, check=True)
+        subprocess.run(
+            ["git", "commit", "-q", "-m", "i"], cwd=checkout, check=True
+        )
+        monkeypatch.setenv(dw.ENV_ROOTS, str(root))
+        return root, nest, checkout, tmp_path
+
+    def test_an_ancestor_swap_cannot_redirect_the_read(
+        self, nested, monkeypatch
+    ):
+        root, nest, checkout, tmp_path = nested
+
+        # An outside tree with the *same* suffix, so every component
+        # below the swap still resolves and still looks right.
+        outside = tmp_path / "evil"
+        (outside / "proj").mkdir(parents=True)
+        (outside / "proj" / "app.py").write_text(
+            "OUT_OF_ROOT_SECRET = 1\n", encoding="utf-8"
+        )
+
+        try:
+            os.symlink(outside, tmp_path / "_probe")
+        except (OSError, NotImplementedError):  # pragma: no cover
+            pytest.skip("symlinks unavailable")
+
+        real_validate = dw.validate_proposed_path
+
+        def _swap_ancestor(repo_root, raw):
+            rel = real_validate(repo_root, raw)
+            if not os.path.islink(str(nest)):
+                shutil.rmtree(str(nest))
+                os.symlink(str(outside), str(nest))
+            return rel
+
+        monkeypatch.setattr(dw, "validate_proposed_path", _swap_ancestor)
+
+        with pytest.raises(dw.RepoReadError):
+            dw.read_text_snippet(str(checkout), "app.py")
+
+    def test_an_ordinary_nested_repo_still_reads(self, nested):
+        _, _, checkout, _ = nested
+        snippet = dw.read_text_snippet(str(checkout), "app.py")
+        assert "real = 1" in snippet.text
+
+    def test_a_repo_that_is_itself_the_allowed_root_still_reads(
+        self, tmp_path, monkeypatch
+    ):
+        """``inner`` is empty in that case — the walk must not break."""
+        checkout = tmp_path / "solo"
+        checkout.mkdir()
+        subprocess.run(["git", "init", "-q"], cwd=checkout, check=True)
+        (checkout / "app.py").write_text("solo = 1\n", encoding="utf-8")
+        monkeypatch.setenv(dw.ENV_ROOTS, str(checkout))
+        snippet = dw.read_text_snippet(str(checkout), "app.py")
+        assert "solo = 1" in snippet.text
+
+
+class TestCharacterBoundsMustBeSatisfiable:
+    """P2: the empty-value bug again, in numeric form.
+
+    ``min_chars: -1`` holds for every response and ``max_chars: -1`` for
+    none, so the case records something that says nothing about the
+    model — and still reaches an operator as a result to approve. Round
+    10 rejected empty *string* values and left the numeric kinds alone,
+    which is the same class of gap one type over.
+    """
+
+    @pytest.mark.parametrize("kind", ["min_chars", "max_chars"])
+    @pytest.mark.parametrize("value", ["-1", "0", "-500"])
+    def test_unsatisfiable_bounds_are_refused(self, kind, value):
+        with pytest.raises(me.EvalError):
+            me._coerce_constraint({"kind": kind, "value": value})
+
+    @pytest.mark.parametrize("kind,value", [
+        ("min_chars", "120"), ("max_chars", "3000"), ("min_chars", "1"),
+    ])
+    def test_ordinary_bounds_still_load(self, kind, value):
+        assert me._coerce_constraint({"kind": kind, "value": value}).value == value
+
+    def test_a_case_with_a_negative_bound_does_not_load(
+        self, tmp_path, monkeypatch
+    ):
+        (tmp_path / "c.json").write_text(
+            json.dumps({
+                "id": "negative-bound",
+                "prompt": "p",
+                "constraints": [{"kind": "min_chars", "value": -1}],
+            }),
+            encoding="utf-8",
+        )
+        monkeypatch.setenv(me.ENV_CASES_DIR, str(tmp_path))
+        cases, problems = me.load_cases()
+        assert "negative-bound" not in {c.id for c in cases}
+        assert any("positive character count" in p for p in problems)
+
+    def test_the_shipped_cases_still_load(self):
+        cases, problems = me.load_cases()
+        assert len(cases) == 3
+        assert not problems
+
+
+class TestEveryDocAgreesAboutTheEvaluationContext:
+    """P2: documentation drift, for the third time in this PR.
+
+    Round 6 pinned the claim — but only in ``model-evaluation.md``, so
+    the *companion* page kept asserting the old behaviour and the guard
+    said nothing. Scoping a guard to the one file that happened to be
+    wrong is the same instance-not-class mistake as the code findings.
+    This checks every page that discusses it.
+    """
+
+    #: Wording that asserts the harness records a value it was *given*
+    #: rather than one it *observed*.
+    STALE = (
+        "context size assumed",
+        "the context size nova assumed",
+        "records the context size assumed",
+    )
+
+    @pytest.fixture
+    def docs(self):
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parent.parent / "docs"
+        return {
+            path.name: path.read_text(encoding="utf-8").lower()
+            for path in sorted(root.glob("*.md"))
+        }
+
+    def test_no_page_claims_an_assumed_context_is_recorded(self, docs):
+        offenders = [
+            name for name, text in docs.items()
+            if any(phrase in text for phrase in self.STALE)
+        ]
+        assert not offenders, f"stale context claim in: {offenders}"
+
+    def test_the_pages_that_discuss_it_say_observed_or_unknown(self, docs):
+        for name in ("model-evaluation.md", "model-profiles.md"):
+            text = docs[name]
+            assert "actually" in text or "observed" in text, name

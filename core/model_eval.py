@@ -573,9 +573,21 @@ def _coerce_constraint(raw: object) -> Constraint:
             )
     if kind in (CONSTRAINT_MAX_CHARS, CONSTRAINT_MIN_CHARS):
         try:
-            int(value)
+            bound = int(value)
         except (TypeError, ValueError):
             raise EvalError(f"constraint '{kind}' needs an integer value") from None
+        # The same failure as an empty string value, in numeric form: a
+        # length no response can violate is not a lenient constraint but
+        # a broken one. ``min_chars: 0`` and any negative minimum hold
+        # for every output; ``max_chars: 0`` and any negative maximum
+        # hold for none, so the case can never pass whatever the model
+        # writes. Either way the recorded result says nothing about the
+        # model, which is what makes it dangerous rather than merely
+        # untidy — it still reaches an operator as something to approve.
+        if bound < 1:
+            raise EvalError(
+                f"constraint '{kind}' needs a positive character count"
+            )
     description = raw.get("description", "")
     if not isinstance(description, str):
         description = ""

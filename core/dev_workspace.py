@@ -600,8 +600,21 @@ class FileSnippet:
         }
 
 
-def _open_file_within(repo_root: Path, rel: str) -> tuple[int, os.stat_result]:
-    """Open ``rel`` under ``repo_root`` so no symlink can redirect the read.
+def _containing_root(path: Path, roots: Sequence[Path]) -> Optional[Path]:
+    """The allowed root ``path`` sits in, or ``None``."""
+    for root in roots:
+        try:
+            if path == root or path.is_relative_to(root):
+                return root
+        except ValueError:
+            continue
+    return None
+
+
+def _open_file_within(
+    anchor: Path, components: Sequence[str]
+) -> tuple[int, os.stat_result]:
+    """Open ``components`` under ``anchor`` so no symlink can redirect the read.
 
     ``validate_proposed_path`` proves containment against the filesystem
     as it looked *at that moment*, using ``resolve()``. That is a
@@ -614,11 +627,22 @@ def _open_file_within(repo_root: Path, rel: str) -> tuple[int, os.stat_result]:
 
     So the path is walked one component at a time:
 
-      * the validated repository root is opened once, as a directory;
-      * each parent component is opened **relative to the descriptor of
-        the parent before it**, with ``O_DIRECTORY | O_NOFOLLOW``;
+      * the **allowed workspace root** is opened once, as a directory;
+      * every component below it — the ones leading down to the
+        repository as well as the ones inside it — is opened **relative
+        to the descriptor of the component before it**, with
+        ``O_DIRECTORY | O_NOFOLLOW``;
       * the leaf is opened relative to the final parent's descriptor with
         ``O_NOFOLLOW`` and validated with ``fstat``.
+
+    The walk starts at the allowed root rather than at the repository,
+    because opening the repository by its absolute path would have the
+    kernel resolve every ancestor above it — and an ancestor is as
+    swappable as anything else. Anchoring at the operator-configured
+    root is where this stops: that directory is the trust boundary the
+    operator declared in ``NOVA_DEV_WORKSPACE_ROOTS``, so it is the one
+    path this code is entitled to take on faith. Everything beneath it
+    is proved rather than assumed.
 
     A descriptor names the directory it was opened on, not the name it
     was reached by, so replacing a component *after* its descriptor
@@ -641,7 +665,7 @@ def _open_file_within(repo_root: Path, rel: str) -> tuple[int, os.stat_result]:
             "safe file reads are not supported on this platform"
         )
 
-    parts = [part for part in rel.split("/") if part and part != "."]
+    parts = [part for part in components if part and part != "."]
     if not parts:
         raise RepoReadError("file not found in the linked repository")
 
@@ -649,7 +673,7 @@ def _open_file_within(repo_root: Path, rel: str) -> tuple[int, os.stat_result]:
     dir_flags = open_flags | os.O_DIRECTORY
 
     try:
-        root_fd = os.open(repo_root, dir_flags)
+        root_fd = os.open(anchor, dir_flags)
     except OSError:
         raise RepoReadError("linked repository could not be opened") from None
 
@@ -734,7 +758,18 @@ def read_text_snippet(
     except PatchProposalError as exc:
         raise RepoReadError(str(exc)) from None
 
-    fd, opened = _open_file_within(repo_root, rel)
+    active_roots = tuple(roots) if roots is not None else configured_roots()
+    anchor = _containing_root(repo_root, active_roots)
+    if anchor is None:  # pragma: no cover - validate_repo_path proved this
+        raise RepoReadError("repository path is outside the allowed roots")
+    try:
+        inner = repo_root.relative_to(anchor).as_posix()
+    except ValueError:  # pragma: no cover - defensive
+        raise RepoReadError("repository path could not be resolved") from None
+
+    fd, opened = _open_file_within(
+        anchor, inner.split("/") + rel.split("/")
+    )
     try:
         handle = os.fdopen(fd, "rb")
     except OSError:
