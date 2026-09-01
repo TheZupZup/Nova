@@ -135,14 +135,39 @@ A pattern is refused when it contains:
 - a back-reference — `(.*)\1`;
 - two variable-length repetitions in a row that can compete for the same
   characters — `.*.*`, `\w+\w*`, `a?a?`;
+- more than two variable-length repetitions competing for the same
+  characters anywhere in a sequence — `.*a.*b.*`, or `^a+aa+aa+a…$`,
+  where each `a+` is separated by a literal the repetitions on both
+  sides also match, so the boundary between them slides freely and they
+  compete despite not being neighbours;
 - more than eight variable-length repetitions in total.
 
-Two things are deliberately **not** refused. Disjoint neighbours:
+Three things are deliberately **not** refused. Disjoint neighbours:
 `\s+\w+` cannot backtrack, because no character belongs to both
-classes, and it is the most common shape in a real constraint. And fixed
-repeats: `a{3}` cannot give ground, so it adds no ambiguity. Ordinary
-patterns — `def\s+\w+`, `\d+\.\d+`, `foo|bar`, `.*error.*`,
+classes, and it is the most common shape in a real constraint.
+Separators the repetitions cannot match: `\d+\.\d+` is two independent
+repetitions, because `.` is not a digit. And fixed repeats: `a{3}` cannot
+give ground, so it adds no ambiguity. Ordinary patterns —
+`def\s+\w+`, `\d+\.\d+`, `foo|bar`, `.*error.*`,
 `^\s*def\s+\w+\s*\(` — are unaffected.
+
+### What the screen does *not* promise
+
+It bounds the exponent, not the wall clock. Two competing repetitions
+are permitted because patterns like `.*error.*` are ordinary and
+useful — but two competing repetitions are still quadratic, and against
+a maximum-length 40,000-character response that is measurable:
+`.*error.*` takes about **5.7 seconds** and `\w+@\w+\.\w+` about
+**3.8 seconds** on non-matching input of that size.
+
+That is slow, not unbounded — it terminates, and it is the price of
+accepting patterns operators genuinely write. What the screen removes is
+the class that does *not* terminate. A hard wall-clock bound is not
+available in-process: `re.search` is one C call holding the GIL, so no
+watchdog thread runs and `signal.setitimer` works only on the main
+thread. Enforcing one would mean matching behind a process boundary,
+which this module deliberately does not have — see the note on spawning
+in its docstring.
 
 A refused pattern is reported when the case file loads, naming the
 reason. Building a `Constraint` directly is screened too, and fails

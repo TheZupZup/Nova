@@ -1548,3 +1548,82 @@ class TestDatasetExportIsPrivateOnDisk:
         (tmp_path / "taken.jsonl").write_text("x", encoding="utf-8")
         with pytest.raises(cd.DatasetExportError):
             cd.export_jsonl([1], "taken.jsonl")
+
+
+# ── Round 11 ────────────────────────────────────────────────────────
+#
+# Both are round 10's fixes not going far enough — the fifth and sixth
+# time in this PR. The screen compared only *adjacent* repetitions, and
+# the fence check ignored fence *length*.
+
+
+class TestCompetingRepeatsSurviveSeparators:
+    r"""P1: repetitions do not have to be neighbours to compete.
+
+    In ``^a+aa+aa+a…b$`` every ``a+`` is separated by a literal ``a`` —
+    but that literal is matched by the repetitions on either side, so the
+    boundary between them slides freely and all eight still compete.
+    Comparing adjacent pairs only, the separator reset the comparison
+    every time and the pattern was accepted. Measured at 1.77s against
+    50 characters, against responses allowed up to 40,000.
+    """
+
+    SEPARATED = "^" + "a+a" * 8 + "b$"
+
+    def test_repeats_separated_by_a_matching_literal_are_refused(self):
+        assert me.unsafe_regex_reason(self.SEPARATED) is not None
+
+    def test_it_fails_closed_instantly(self):
+        constraint = me.Constraint(
+            kind=me.CONSTRAINT_MUST_MATCH, value=self.SEPARATED
+        )
+        started = time.monotonic()
+        passed, detail = constraint.check("a" * 50)
+        assert passed is False
+        assert "refused" in detail
+        assert time.monotonic() - started < 1.0
+
+    def test_a_separator_the_repeats_cannot_match_breaks_the_chain(self):
+        r"""``\d+\.\d+`` is two independent repeats — ``.`` is no digit."""
+        assert me.unsafe_regex_reason(r"\d+\.\d+") is None
+        assert me.unsafe_regex_reason(r"\w+@\w+\.\w+") is None
+
+    def test_three_competing_repeats_are_refused(self):
+        """Each competitor adds an exponent; three is 40000**3."""
+        assert me.unsafe_regex_reason(r".*a.*b.*") is not None
+
+    def test_two_competing_repeats_are_still_allowed(self):
+        """``.*error.*`` is an ordinary constraint, and is two."""
+        assert me.unsafe_regex_reason(r".*error.*") is None
+
+    def test_anchors_neither_join_nor_separate_competitors(self):
+        r"""``^`` and ``\b`` consume nothing, so they change no chain."""
+        assert me.unsafe_regex_reason(r"^\s*class\s+\w+") is None
+        assert me.unsafe_regex_reason(r"\bTODO\b") is None
+
+
+class TestClosingFenceMustMatchOpenerLength:
+    """P2: a ``` line does not close a ```` block.
+
+    Markdown requires a closing fence to be at least as long as the one
+    it opens, so inside a four-backtick block a three-backtick line is
+    *content*. Ignoring length let a truncated four-backtick answer score
+    as a complete block.
+    """
+
+    def _check(self, text):
+        return me.Constraint(
+            kind=me.CONSTRAINT_MUST_INCLUDE_CODE_BLOCK
+        ).check(text)[0]
+
+    def test_a_short_marker_does_not_close_a_long_opener(self):
+        assert self._check("````python\nx = 1\n```") is False
+
+    def test_a_matching_long_closer_does(self):
+        assert self._check("````python\nx = 1\n````") is True
+
+    def test_a_longer_closer_is_accepted(self):
+        assert self._check("```\nx = 1\n````") is True
+
+    def test_the_ordinary_three_backtick_block_is_unaffected(self):
+        assert self._check("```python\nx = 1\n```") is True

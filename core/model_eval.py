@@ -183,6 +183,16 @@ MAX_ELASTIC_REPEATS = 8
 #: Retained name for the previous, narrower cap.
 MAX_OPEN_ENDED_REPEATS = MAX_ELASTIC_REPEATS
 
+#: How many variable-length repetitions may compete for the same
+#: characters in one sequence.
+#:
+#: Competing repetitions multiply: *k* of them turns a failing match into
+#: roughly *n*\ :sup:`k` work, so the exponent is what has to be bounded,
+#: not the total. Two is the useful ceiling — ``.*error.*`` is a
+#: perfectly ordinary constraint and is two — while three
+#: (``.*a.*b.*``) is already 40,000³ on a maximum-length response.
+MAX_COMPETING_REPEATS = 2
+
 _REPEAT_OPS = frozenset({"MAX_REPEAT", "MIN_REPEAT", "POSSESSIVE_REPEAT"})
 _GROUP_OPS = frozenset({"SUBPATTERN", "ATOMIC_GROUP"})
 _ASSERT_OPS = frozenset({"ASSERT", "ASSERT_NOT"})
@@ -336,6 +346,19 @@ def _elastic_body(name: str, av: object):
 
 
 def _screen_sequence(nodes, state: dict) -> Optional[str]:
+    # Repetitions do not have to be neighbours to compete. In
+    # ``^a+aa+aa+a...b$`` every ``a+`` is separated by a literal ``a`` —
+    # but that literal is matched by the repetitions on both sides, so
+    # the boundary between them slides freely and each ``a+`` still
+    # competes with all the others. Comparing only adjacent pairs missed
+    # that: the literal reset the comparison every time.
+    #
+    # So a repetition stays "in play" while the elements after it can
+    # match the same characters its body can, and is cut off by the
+    # first element that cannot. ``\d+\.\d+`` is two independent
+    # repetitions because ``.`` is not a digit; ``a+aa+`` is one
+    # competing group because ``a`` is.
+    competing: list = []
     previous_body = None
     for op, av in nodes:
         name = _op_name(op)
@@ -360,6 +383,29 @@ def _screen_sequence(nodes, state: dict) -> Optional[str]:
                 # ``.*.*``, ``\w+\w*``, ``a?a?``: every split of the same
                 # span is a distinct attempt, for no expressive gain.
                 return "two variable-length repetitions competing for the same text"
+            rivals = sum(
+                1 for earlier in competing
+                if _bodies_can_overlap(earlier, body)
+            )
+            if rivals + 1 > MAX_COMPETING_REPEATS:
+                return "too many variable-length repetitions competing for the same text"
+            competing.append(body)
+        elif name == "AT":
+            # Zero-width anchors consume nothing, so they neither
+            # separate competitors nor join them.
+            pass
+        else:
+            element = [(op, av)]
+            if _char_test((op, av)) is None:
+                # Something this screen cannot reason about character by
+                # character. Stop tracking rather than guess at how it
+                # interacts with what came before.
+                competing = []
+            else:
+                competing = [
+                    earlier for earlier in competing
+                    if _bodies_can_overlap(earlier, element)
+                ]
 
         for sub in _sub_sequences(name, av):
             reason = _screen_sequence(sub, state)
@@ -405,20 +451,23 @@ def _fenced_code_block_present(text: str) -> bool:
 
     So the two roles are distinguished the way the format does. An
     opening fence may carry an info string naming the language; a
-    closing fence may not, so a line that is nothing but backticks is
-    the only thing that can close a block.
+    closing fence may not, and it must be at least as long as the fence
+    it closes. A ```` ``` ```` line inside a ```` ```` ```` block is
+    therefore content, not a terminator.
     """
-    opened = False
+    opener = 0
     for line in text.splitlines():
         stripped = line.strip()
         if not stripped.startswith("```"):
             continue
-        if not opened:
-            opened = True
+        run = len(stripped) - len(stripped.lstrip("`"))
+        if not opener:
+            opener = run
             continue
-        # Only a bare run of backticks closes; anything carrying an info
-        # string is another opener.
-        if set(stripped) == {"`"}:
+        # A closing fence carries no info string and is at least as long
+        # as the fence it closes — so a ``` line does not close a ````
+        # block, it is content inside it.
+        if run >= opener and set(stripped) == {"`"}:
             return True
     return False
 
