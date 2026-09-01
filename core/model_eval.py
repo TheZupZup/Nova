@@ -46,6 +46,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import re
 import sqlite3
@@ -711,6 +712,23 @@ def _coerce_constraint(raw: object) -> Constraint:
     if isinstance(value, bool):
         value = ""
     elif isinstance(value, (int, float)):
+        # JSON numbers reach here as ``int``/``float``. Two ways this
+        # went wrong: ``int()`` silently truncated ``1.9`` to ``1``, so a
+        # case quietly measured something other than what it said; and
+        # Python's JSON decoder accepts ``NaN``/``Infinity``, on which
+        # ``int()`` raises before any ``EvalError`` handling. That second
+        # one escaped ``load_cases`` entirely, so a single malformed file
+        # took down every *other* case with it and turned the admin
+        # listing into a 500.
+        if isinstance(value, float):
+            if not math.isfinite(value):
+                raise EvalError(
+                    f"constraint '{kind}' needs a finite number"
+                )
+            if value != int(value):
+                raise EvalError(
+                    f"constraint '{kind}' needs a whole number"
+                )
         value = str(int(value))
     elif not isinstance(value, str):
         value = ""

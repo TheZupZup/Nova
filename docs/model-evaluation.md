@@ -183,14 +183,25 @@ patterns — `def\s+\w+`, `\d+\.\d+`, `foo|bar`, `.*error.*`,
 
 ### What the screen does *not* promise
 
-It bounds the exponent, not the wall clock. Two competing repetitions
+It bounds the exponent, not the wall clock — and that limit is not
+cosmetic. A multi-second match holds the GIL, so nothing else in the
+process runs during it: not other evaluations, not the web app. Two competing repetitions
 are permitted because patterns like `.*error.*` are ordinary and
 useful — but two competing repetitions are still quadratic, and against
 a maximum-length 40,000-character response that is measurable:
 `.*error.*` takes about **5.7 seconds** and `\w+@\w+\.\w+` about
 **3.8 seconds** on non-matching input of that size.
 
-That is slow, not unbounded — it terminates, and it is the price of
+No structural screen can fix that, which is worth being precise about
+rather than treating as a gap to be closed by a stricter rule:
+`\w+@\w+\.\w+` has **no** competing repetitions — `@` is not a word
+character, so the chain breaks — and it is still quadratic, because
+`re.search` retries from every start position. The cost is inherent to
+scanning, not to any shape the screen could refuse. Tightening the
+screen until these were rejected would throw out ordinary constraints
+and still not bound the clock.
+
+So this is slow, not unbounded — it terminates, and it is the price of
 accepting patterns operators genuinely write. What the screen removes is
 the class that does *not* terminate. A hard wall-clock bound is not
 available in-process: `re.search` is one C call holding the GIL, so no

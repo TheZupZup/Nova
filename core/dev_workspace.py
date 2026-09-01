@@ -83,6 +83,7 @@ import os
 import shutil
 import stat
 import subprocess
+import threading
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -126,6 +127,22 @@ _MAX_RAW_PATH_CHARS = 4096
 MAX_TRACKED_FILES = 200_000
 _MAX_TRACKED_FILES = MAX_TRACKED_FILES  # legacy internal alias
 _MAX_SNIPPET_BYTES = 262_144  # bytes read from disk for one snippet
+
+#: Bytes of git stdout buffered before the command is cut off.
+#:
+#: The downstream caps (``MAX_TRACKED_FILES``, ``_MAX_STATUS_LINES`` …)
+#: only ever trimmed a list that had *already* been read into memory in
+#: full, so a repository with a pathological index could allocate far
+#: past the advertised limit on every grounded Code-mode turn. 16 MiB
+#: comfortably holds a 200,000-entry ``ls-files`` listing (the Linux
+#: kernel's is roughly 3 MiB) while putting a real ceiling on the
+#: pathological case.
+_MAX_GIT_STDOUT_BYTES = 16 * 1024 * 1024
+
+#: git writes little to stderr for these read-only commands, and no
+#: caller consumes it; this exists only so a chatty failure cannot
+#: allocate without bound either.
+_MAX_GIT_STDERR_BYTES = 64 * 1024
 
 #: The safe-open primitives the snippet reader requires. Without all
 #: three there is no way to walk a path without the kernel resolving
@@ -539,32 +556,91 @@ def _run_git(
         # snapshot rather than a wrong one.
         return -1, "", ""
     try:
-        result = subprocess.run(
-            argv,
-            cwd=cwd,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=timeout,
-            check=False,
-            shell=False,
-            env=_git_env(),
-        )
-    except subprocess.TimeoutExpired:
-        logger.debug("dev-workspace git %s timed out", key)
-        return -1, "", ""
-    except (OSError, ValueError) as exc:
-        logger.debug("dev-workspace git %s failed to spawn: %s", key, exc)
-        return -1, "", ""
+        return _capture_git(argv, cwd=cwd, key=key, timeout=timeout)
     finally:
         if anchor_fd is not None:
             try:
                 os.close(anchor_fd)
             except OSError:  # pragma: no cover - defensive
                 pass
-    stdout = (result.stdout or b"").decode("utf-8", errors="replace")
-    stderr = (result.stderr or b"").decode("utf-8", errors="replace")
-    return result.returncode, stdout, stderr
+
+
+def _capture_git(
+    argv: Sequence[str],
+    *,
+    cwd: str,
+    key: tuple,
+    timeout: float,
+) -> tuple[int, str, str]:
+    """Run ``argv`` and read at most :data:`_MAX_GIT_STDOUT_BYTES` of output.
+
+    ``subprocess.run`` reads a pipe to EOF, so the caps applied to the
+    parsed result never bounded what was allocated to produce it. Here
+    the read itself is bounded: one ``read`` of the cap plus a byte,
+    after which the process is killed and the rest of its output is
+    never buffered.
+
+    The timeout is kept by a watchdog that kills the child, which closes
+    the pipe and releases the read — a plain bounded ``read`` would
+    otherwise block indefinitely on a child that produces nothing.
+    """
+    try:
+        proc = subprocess.Popen(  # noqa: S603 - fixed argv, shell=False
+            list(argv),
+            cwd=cwd,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            shell=False,
+            env=_git_env(),
+        )
+    except (OSError, ValueError) as exc:
+        logger.debug("dev-workspace git %s failed to spawn: %s", key, exc)
+        return -1, "", ""
+
+    timed_out = threading.Event()
+
+    def _cut_off() -> None:
+        timed_out.set()
+        try:
+            proc.kill()
+        except OSError:  # pragma: no cover - already gone
+            pass
+
+    watchdog = threading.Timer(timeout, _cut_off)
+    watchdog.start()
+    try:
+        raw = proc.stdout.read(_MAX_GIT_STDOUT_BYTES + 1) or b""
+        if len(raw) > _MAX_GIT_STDOUT_BYTES:
+            logger.debug("dev-workspace git %s output capped", key)
+            raw = raw[:_MAX_GIT_STDOUT_BYTES]
+            try:
+                proc.kill()
+            except OSError:  # pragma: no cover - already gone
+                pass
+        err = proc.stderr.read(_MAX_GIT_STDERR_BYTES) or b""
+        rc = proc.wait()
+    except OSError as exc:  # pragma: no cover - defensive
+        logger.debug("dev-workspace git %s read failed: %s", key, exc)
+        try:
+            proc.kill()
+        except OSError:
+            pass
+        return -1, "", ""
+    finally:
+        watchdog.cancel()
+        for stream in (proc.stdout, proc.stderr):
+            try:
+                stream.close()
+            except OSError:  # pragma: no cover - defensive
+                pass
+
+    if timed_out.is_set():
+        logger.debug("dev-workspace git %s timed out", key)
+        return -1, "", ""
+    return rc, raw.decode("utf-8", errors="replace"), err.decode(
+        "utf-8", errors="replace"
+    )
 
 
 def _truncate(line: str) -> str:

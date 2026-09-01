@@ -6,7 +6,9 @@ stable reproducer independent of the broader model-platform suite.
 
 from __future__ import annotations
 
+import io
 import json
+import threading
 import subprocess
 import os
 import pathlib
@@ -2086,3 +2088,181 @@ class TestFenceRulesFollowTheFormat:
     ])
     def test_the_earlier_rounds_stay_fixed(self, text, expected):
         assert self._check(text) is expected
+
+
+# ── Round 15 ────────────────────────────────────────────────────────
+
+
+class TestGitOutputIsBoundedBeforeBuffering:
+    """P2: the caps trimmed a list that was already fully in memory.
+
+    ``subprocess.run`` reads a pipe to EOF, so ``MAX_TRACKED_FILES``
+    bounded the *parsed* result and nothing else. A repository with a
+    pathological index could allocate far past the advertised limit on
+    every grounded Code-mode turn.
+    """
+
+    def test_the_read_itself_is_bounded(self, tmp_path, monkeypatch):
+        """The *read* must carry the bound, not a trim afterwards.
+
+        Checking only that the returned string is short passes even when
+        the whole pipe was drained into memory first and then sliced —
+        which is precisely the bug. So the stream refuses an unbounded
+        read outright.
+        """
+        requested: list = []
+        killed = {"n": 0}
+
+        class _RefusesUnboundedRead:
+            def __init__(self):
+                self._body = b"x" * (dw._MAX_GIT_STDOUT_BYTES + 4096)
+
+            def read(self, size=-1):
+                requested.append(size)
+                if size is None or size < 0:
+                    raise AssertionError(
+                        "git stdout was read without a byte bound"
+                    )
+                return self._body[:size]
+
+            def close(self):
+                pass
+
+        class _Proc:
+            def __init__(self):
+                self.stdout = _RefusesUnboundedRead()
+                self.stderr = io.BytesIO(b"")
+
+            def wait(self):
+                return 0
+
+            def kill(self):
+                killed["n"] += 1
+
+        monkeypatch.setattr(dw.subprocess, "Popen", lambda *a, **k: _Proc())
+        rc, out, _ = dw._capture_git(
+            ["git", "ls-files"], cwd=str(tmp_path), key=("ls-files",),
+            timeout=5.0,
+        )
+        assert rc == 0
+        assert requested and requested[0] == dw._MAX_GIT_STDOUT_BYTES + 1
+        assert len(out) <= dw._MAX_GIT_STDOUT_BYTES
+        assert killed["n"] >= 1, "the producer must be stopped, not drained"
+
+    def test_ordinary_output_is_returned_intact(self, tmp_path, monkeypatch):
+        class _Proc:
+            def __init__(self):
+                self.stdout = io.BytesIO(b"a.py\nb.py\n")
+                self.stderr = io.BytesIO(b"")
+
+            def wait(self):
+                return 0
+
+            def kill(self):
+                pass
+
+        monkeypatch.setattr(dw.subprocess, "Popen", lambda *a, **k: _Proc())
+        rc, out, _ = dw._capture_git(
+            ["git", "ls-files"], cwd=str(tmp_path), key=("ls-files",),
+            timeout=5.0,
+        )
+        assert rc == 0
+        assert out == "a.py\nb.py\n"
+
+    def test_a_real_repository_still_lists_its_files(
+        self, tmp_path, monkeypatch
+    ):
+        """End to end, through the real subprocess path."""
+        root = tmp_path / "ws"
+        checkout = root / "proj"
+        checkout.mkdir(parents=True)
+        subprocess.run(["git", "init", "-q"], cwd=checkout, check=True)
+        (checkout / "a.py").write_text("x = 1\n", encoding="utf-8")
+        subprocess.run(["git", "add", "-A"], cwd=checkout, check=True)
+        monkeypatch.setenv(dw.ENV_ROOTS, str(root))
+        assert "a.py" in dw.git_tracked_files(str(checkout))
+
+    def test_a_hanging_command_is_still_cut_off(self, tmp_path, monkeypatch):
+        """The bounded read must not lose the timeout it replaced."""
+        class _Stuck:
+            def __init__(self):
+                self._killed = threading.Event()
+                self.stdout = self
+                self.stderr = io.BytesIO(b"")
+
+            def read(self, _n=-1):
+                # Blocks like a real pipe until the watchdog kills us.
+                self._killed.wait(5)
+                return b""
+
+            def close(self):
+                pass
+
+            def wait(self):
+                return 0
+
+            def kill(self):
+                self._killed.set()
+
+        monkeypatch.setattr(dw.subprocess, "Popen", lambda *a, **k: _Stuck())
+        started = time.monotonic()
+        rc, out, _ = dw._capture_git(
+            ["git", "log"], cwd=str(tmp_path), key=("log",), timeout=0.3
+        )
+        assert rc == -1
+        assert out == ""
+        assert time.monotonic() - started < 4
+
+
+class TestNumericConstraintValuesAreValidated:
+    """P2: one malformed case file took down every other case.
+
+    ``int()`` silently truncated ``1.9`` to ``1``, so a case measured
+    something other than what it said. Worse, Python's JSON decoder
+    accepts ``NaN``/``Infinity``, on which ``int()`` raises *before* any
+    ``EvalError`` handling — so a single bad file escaped ``load_cases``
+    and turned the admin listing into a 500 for the whole feature.
+    """
+
+    @pytest.mark.parametrize("value", [1.9, 0.5, 2999.5])
+    def test_fractional_bounds_are_refused_not_truncated(self, value):
+        with pytest.raises(me.EvalError):
+            me._coerce_constraint({"kind": "max_chars", "value": value})
+
+    @pytest.mark.parametrize("value", [float("nan"), float("inf"),
+                                       float("-inf")])
+    def test_non_finite_bounds_are_refused(self, value):
+        with pytest.raises(me.EvalError):
+            me._coerce_constraint({"kind": "min_chars", "value": value})
+
+    @pytest.mark.parametrize("value", [3000, 3000.0, 1])
+    def test_whole_numbers_still_load(self, value):
+        assert me._coerce_constraint(
+            {"kind": "max_chars", "value": value}
+        ).value == str(int(value))
+
+    def test_one_bad_file_does_not_take_down_the_others(
+        self, tmp_path, monkeypatch
+    ):
+        """The blast radius is the finding, not the truncation."""
+        (tmp_path / "bad.json").write_text(
+            '{"id": "nan-case", "prompt": "p", '
+            '"constraints": [{"kind": "max_chars", "value": NaN}]}',
+            encoding="utf-8",
+        )
+        (tmp_path / "good.json").write_text(
+            json.dumps({
+                "id": "healthy-case",
+                "prompt": "p",
+                "constraints": [{"kind": "max_chars", "value": 3000}],
+            }),
+            encoding="utf-8",
+        )
+        monkeypatch.setenv(me.ENV_CASES_DIR, str(tmp_path))
+
+        cases, problems = me.load_cases()  # must not raise
+        ids = {c.id for c in cases}
+        assert "healthy-case" in ids
+        assert "nan-case" not in ids
+        assert len(cases) >= 3, "the shipped cases must survive too"
+        assert any("finite" in p for p in problems)
