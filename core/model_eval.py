@@ -561,34 +561,72 @@ def unsafe_regex_reason(pattern: str) -> Optional[str]:
         return "could not be checked"
 
 
+#: Characters that can open a fence. A block opened with one cannot be
+#: closed by the other.
+_FENCE_CHARS = ("`", "~")
+
+#: Four spaces makes an *indented code block*, whose contents are
+#: literal — backticks inside one are text, not a fence.
+_MAX_FENCE_INDENT = 3
+
+
+def _fence_line(line: str) -> Optional[tuple[str, int, str]]:
+    """``(char, run_length, info_string)`` if this line is a fence, else ``None``.
+
+    Follows the actual fence rules rather than looking for backticks:
+    at most three spaces of indent, a run of at least three of the same
+    character, and — for backtick fences — no backtick in the info
+    string. A tab-indented line is an indented code block, so it is not
+    a fence either.
+    """
+    stripped = line.lstrip(" ")
+    if len(line) - len(stripped) > _MAX_FENCE_INDENT:
+        return None
+    if not stripped:
+        return None
+    char = stripped[0]
+    if char not in _FENCE_CHARS:
+        return None
+    run = len(stripped) - len(stripped.lstrip(char))
+    if run < 3:
+        return None
+    info = stripped[run:].strip()
+    if char == "`" and "`" in info:
+        return None
+    return char, run, info
+
+
 def _fenced_code_block_present(text: str) -> bool:
     """Is there a *complete* fenced block, rather than a stray marker?
 
-    A single ``` is what a truncated or malformed answer looks like, so
-    accepting it scored those as having produced code. Counting markers
-    instead was no better: two *opening* fences (```` ```python ````
-    then ```` ```javascript ````) close nothing, and that is what a
-    model that keeps restarting its answer emits.
+    Four attempts went into this, each fixing the example in front of it
+    rather than reading what the format specifies, so it now follows the
+    rules directly. A block needs an opening fence and a later closing
+    one that
 
-    So the two roles are distinguished the way the format does. An
-    opening fence may carry an info string naming the language; a
-    closing fence may not, and it must be at least as long as the fence
-    it closes. A ```` ``` ```` line inside a ```` ```` ```` block is
-    therefore content, not a terminator.
+      * uses the **same character** — ``~~~`` does not close ```` ``` ````;
+      * is **at least as long** — ``` does not close ````;
+      * carries **no info string** — a second ```` ```python ```` opens,
+        it does not close;
+      * is indented **at most three spaces** — at four the construct is
+        an indented code block whose literal contents merely contain
+        backticks.
+
+    Tilde fences count: the constraint is documented as "a fenced code
+    block" without naming a delimiter, so a valid ``~~~`` answer scoring
+    as a failure would skew a comparison against the model.
     """
-    opener = 0
+    opener: Optional[tuple[str, int]] = None
     for line in text.splitlines():
-        stripped = line.strip()
-        if not stripped.startswith("```"):
+        fence = _fence_line(line)
+        if fence is None:
             continue
-        run = len(stripped) - len(stripped.lstrip("`"))
-        if not opener:
-            opener = run
+        char, run, info = fence
+        if opener is None:
+            opener = (char, run)
             continue
-        # A closing fence carries no info string and is at least as long
-        # as the fence it closes — so a ``` line does not close a ````
-        # block, it is content inside it.
-        if run >= opener and set(stripped) == {"`"}:
+        open_char, open_run = opener
+        if char == open_char and run >= open_run and not info:
             return True
     return False
 

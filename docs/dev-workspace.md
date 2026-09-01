@@ -210,6 +210,20 @@ These are enforced in `core/dev_workspace.py` and covered by
    caller's line and character caps with `truncated: true` set. It opens
    the file for reading and does nothing else.
 
+   **The git reads are anchored the same way.** Hardening file
+   *contents* while leaving the metadata beside them redirectable would
+   protect half the surface: a repository swapped after validation would
+   still supply the branch name and commit subjects that go into the
+   Code-mode prompt. Each git invocation therefore runs with its working
+   directory set to a descriptor obtained by the same no-follow walk
+   (via `/proc/self/fd`, since `subprocess` cannot take a descriptor
+   directly). Where a host cannot do that at all — no `/proc`, no
+   `O_NOFOLLOW`/`dir_fd` — the read falls back to the validated path,
+   which is what it always did. But when the host *can* anchor and the
+   walk **fails**, the read is refused rather than retried by path:
+   the walk fails exactly when something has been swapped, so falling
+   back at that moment would hand over the redirect it just caught.
+
    **The open cannot be redirected by a symlink swap.** Path validation
    proves containment against the filesystem as it looked at that
    instant, using `resolve()` — and that answer expires the moment it

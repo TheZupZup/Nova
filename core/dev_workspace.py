@@ -413,6 +413,99 @@ def _git_env() -> dict[str, str]:
     return env
 
 
+#: Linux exposes an open descriptor as a path under ``/proc/self/fd``.
+#: Handing that to a subprocess as its ``cwd`` makes the kernel enter
+#: the exact directory the descriptor names, whatever has since happened
+#: to the path it was reached by. ``subprocess`` offers no way to pass a
+#: descriptor directly, so this is the mechanism.
+_PROC_SELF_FD = "/proc/self/fd"
+
+
+def _open_dir_within(anchor: Path, components: Sequence[str]) -> int:
+    """A descriptor for the directory ``components`` names under ``anchor``.
+
+    The same no-follow walk :func:`_open_file_within` uses, ending on a
+    directory. The caller owns the descriptor.
+    """
+    if not _SAFE_OPEN_SUPPORTED:  # pragma: no cover - POSIX in practice
+        raise RepoReadError("safe directory reads are not supported here")
+    dir_flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_DIRECTORY
+    try:
+        fd = os.open(anchor, dir_flags)
+    except OSError:
+        raise RepoReadError("linked repository could not be opened") from None
+    for name in [part for part in components if part and part != "."]:
+        try:
+            nxt = os.open(name, dir_flags, dir_fd=fd)
+        except OSError:
+            os.close(fd)
+            raise RepoReadError(
+                "directory not found in the linked repository"
+            ) from None
+        os.close(fd)
+        fd = nxt
+    return fd
+
+
+def _anchored_git_cwd(repo_path: str) -> tuple[Optional[str], Optional[int]]:
+    """A working directory for git that a rename cannot redirect.
+
+    ``validate_repo_path`` proves the repository sits inside an allowed
+    root, and then every git call re-resolves that path from scratch.
+    In between, the repository — or any ancestor of it — can be replaced
+    with a symlink to a different checkout, and git will read that one
+    instead. Its branch name and commit subjects go straight into the
+    Code-mode prompt, so this is the same escape the snippet reader
+    closes, one read path over: hardening file *contents* while leaving
+    the metadata beside them redirectable protects half the surface.
+
+    The repository is therefore opened with the same no-follow walk from
+    the allowed root, and git is pointed at that descriptor.
+
+    Three outcomes, and the distinction between the last two is the
+    whole point:
+
+    ``(cwd, fd)``
+        Anchored. The caller closes ``fd``.
+    ``(repo_path, None)``
+        This host cannot anchor at all — no ``O_NOFOLLOW``/``dir_fd``
+        support, no ``/proc``, or no configured root (reachable only
+        through a test ``roots`` override). Falls back to the path,
+        which is what every git read did before, so nothing is weakened;
+        the guarantee simply is not added.
+    ``(None, None)``
+        The host *can* anchor and the walk **failed** — a component that
+        should be a directory is a symlink, say. That is the attack
+        this function exists for, so it must not degrade into the
+        path-based read that would follow the link. The caller refuses.
+
+    Collapsing the last two into one fallback is the obvious mistake
+    here and it is self-defeating: the walk fails precisely when someone
+    has swapped something, so falling back to the path at that moment
+    hands them the redirect the walk just refused.
+    """
+    if not _SAFE_OPEN_SUPPORTED or not os.path.isdir(_PROC_SELF_FD):
+        return repo_path, None
+    try:
+        resolved = Path(repo_path)
+        root = _containing_root(resolved, configured_roots())
+    except (OSError, ValueError) as exc:  # pragma: no cover - defensive
+        logger.debug("dev-workspace: git cwd not anchored (%s)", exc)
+        return repo_path, None
+    if root is None:
+        logger.debug(
+            "dev-workspace: git cwd not anchored (no configured root)"
+        )
+        return repo_path, None
+    try:
+        inner = resolved.relative_to(root).as_posix()
+        fd = _open_dir_within(root, inner.split("/"))
+    except (RepoReadError, OSError, ValueError) as exc:
+        logger.debug("dev-workspace: refusing git read (%s)", exc)
+        return None, None
+    return f"{_PROC_SELF_FD}/{fd}", fd
+
+
 def _run_git(
     argv_tail: Sequence[str],
     *,
@@ -426,7 +519,10 @@ def _run_git(
     can never originate from user input — callers pass literals). The
     function otherwise never raises: a missing binary or a timeout maps
     to ``(-1, "", "")`` so callers branch on the rc. ``shell=False`` is
-    mandatory, stdin is closed, the repo path is only ever the *cwd*.
+    mandatory, stdin is closed, the repo is only ever the *cwd* — and
+    that cwd is a descriptor-backed path where the platform allows, so a
+    rename cannot point git at a different checkout (see
+    :func:`_anchored_git_cwd`).
     """
     key = tuple(argv_tail)
     if key not in _ALLOWED_GIT_ARGV:
@@ -436,10 +532,16 @@ def _run_git(
     if binary is None:
         return -1, "", ""
     argv = [binary, *key]
+    cwd, anchor_fd = _anchored_git_cwd(repo_path)
+    if cwd is None:
+        # The repository could not be opened safely. Callers already
+        # treat ``-1`` as "could not read", which degrades to an empty
+        # snapshot rather than a wrong one.
+        return -1, "", ""
     try:
         result = subprocess.run(
             argv,
-            cwd=repo_path,
+            cwd=cwd,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -454,6 +556,12 @@ def _run_git(
     except (OSError, ValueError) as exc:
         logger.debug("dev-workspace git %s failed to spawn: %s", key, exc)
         return -1, "", ""
+    finally:
+        if anchor_fd is not None:
+            try:
+                os.close(anchor_fd)
+            except OSError:  # pragma: no cover - defensive
+                pass
     stdout = (result.stdout or b"").decode("utf-8", errors="replace")
     stderr = (result.stderr or b"").decode("utf-8", errors="replace")
     return result.returncode, stdout, stderr

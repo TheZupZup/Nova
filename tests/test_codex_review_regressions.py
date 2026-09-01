@@ -1948,3 +1948,141 @@ class TestAFailedExportLeavesNoFile:
         monkeypatch.setattr(cd, "export_dir", lambda: tmp_path)
         info = cd.export_jsonl([1], "fine.jsonl")
         assert pathlib.Path(info["path"]).exists()
+
+
+# ── Round 14 ────────────────────────────────────────────────────────
+
+
+class TestGitMetadataIsAnchoredToo:
+    """P2: hardening file contents while leaving the metadata redirectable.
+
+    The descriptor walk protected snippets, but every git read still
+    resolved its ``cwd`` from the path. Replacing the repository — or an
+    ancestor — with a symlink to a different checkout put that
+    repository's branch name and commit subjects into the Code-mode
+    prompt, which is the same escape one read path over.
+    """
+
+    @pytest.fixture
+    def repos(self, tmp_path, monkeypatch):
+        def _make(path, subject):
+            path.mkdir(parents=True)
+            subprocess.run(["git", "init", "-q"], cwd=path, check=True)
+            subprocess.run(
+                ["git", "config", "user.email", "t@example.com"],
+                cwd=path, check=True,
+            )
+            subprocess.run(
+                ["git", "config", "user.name", "T"], cwd=path, check=True
+            )
+            (path / "app.py").write_text("x = 1\n", encoding="utf-8")
+            subprocess.run(["git", "add", "-A"], cwd=path, check=True)
+            subprocess.run(
+                ["git", "commit", "-q", "-m", subject], cwd=path, check=True
+            )
+
+        root = tmp_path / "ws"
+        checkout = root / "proj"
+        _make(checkout, "INSIDE the workspace")
+
+        outside = tmp_path / "evil" / "proj"
+        _make(outside, "OUT_OF_ROOT_SECRET subject")
+
+        monkeypatch.setenv(dw.ENV_ROOTS, str(root))
+        return root, checkout, outside
+
+    def test_commit_subjects_come_from_the_validated_repository(self, repos):
+        _, checkout, _ = repos
+        commits = dw.git_log_oneline(str(checkout))
+        assert any("INSIDE the workspace" in line for line in commits)
+
+    def test_a_swapped_repository_cannot_supply_the_metadata(self, repos):
+        """The descriptor names the checkout, not the path it was reached by."""
+        _, checkout, outside = repos
+        # Move the real checkout aside rather than deleting it, so the
+        # only thing that changed is which repository the *path* names.
+        moved = checkout.parent / "proj_moved"
+        os.rename(str(checkout), str(moved))
+        os.symlink(str(outside), str(checkout))
+
+        rc, out, _ = dw._run_git(
+            ["log", "--oneline", "-n", "20"], repo_path=str(checkout)
+        )
+        # Refused outright rather than quietly reading the other repo.
+        assert rc == -1
+        assert "OUT_OF_ROOT_SECRET" not in out
+
+        # And the whole snapshot degrades calmly instead of carrying it.
+        status = dw.read_status(str(checkout))
+        assert not any(
+            "OUT_OF_ROOT_SECRET" in line for line in status.recent_commits
+        )
+
+    def test_the_anchor_is_a_descriptor_backed_path(self, repos):
+        _, checkout, _ = repos
+        cwd, fd = dw._anchored_git_cwd(str(checkout))
+        try:
+            if fd is None:  # pragma: no cover - platform without /proc
+                pytest.skip("descriptor-backed cwd unavailable")
+            assert cwd.startswith(dw._PROC_SELF_FD)
+        finally:
+            if fd is not None:
+                os.close(fd)
+
+    def test_an_unanchorable_repo_still_reads(self, tmp_path, monkeypatch):
+        """No configured root: fall back to the path, never crash."""
+        checkout = tmp_path / "loose"
+        checkout.mkdir()
+        subprocess.run(["git", "init", "-q"], cwd=checkout, check=True)
+        monkeypatch.delenv(dw.ENV_ROOTS, raising=False)
+        cwd, fd = dw._anchored_git_cwd(str(checkout))
+        assert fd is None
+        assert cwd == str(checkout)
+
+
+class TestFenceRulesFollowTheFormat:
+    """P2: two more findings on the same check, so it now follows the spec.
+
+    Four earlier attempts each fixed the failing example — ``` anywhere,
+    then two markers, then a bare closer, then a long-enough closer.
+    Reading the actual fence rules would have got all of it the first
+    time.
+    """
+
+    def _check(self, text):
+        return me.Constraint(
+            kind=me.CONSTRAINT_MUST_INCLUDE_CODE_BLOCK
+        ).check(text)[0]
+
+    def test_a_four_space_indented_fence_is_literal_content(self):
+        """At four spaces it is an indented code block, backticks and all."""
+        assert self._check("    ```python\n    x = 1\n    ```") is False
+
+    def test_a_tab_indented_fence_is_literal_too(self):
+        assert self._check("\t```python\n\tx = 1\n\t```") is False
+
+    def test_three_spaces_is_still_a_fence(self):
+        assert self._check("   ```py\nx = 1\n   ```") is True
+
+    def test_tilde_fences_are_recognised(self):
+        """The constraint is documented without naming a delimiter."""
+        assert self._check("~~~python\nx = 1\n~~~") is True
+
+    def test_delimiters_cannot_be_mixed(self):
+        assert self._check("```python\nx = 1\n~~~") is False
+
+    def test_backtick_info_strings_cannot_contain_a_backtick(self):
+        assert self._check("``` a`b\nx = 1") is False
+
+    @pytest.mark.parametrize("text,expected", [
+        ("```python\nx = 1\n```", True),
+        ("````python\nx = 1\n````", True),
+        ("````python\nx = 1\n```", False),
+        ("```\nx = 1\n````", True),
+        ("```python\nx = 1\n```javascript\ny = 2", False),
+        ("```python\nx = 1", False),
+        ("```", False),
+        ("Just prose about a timeout.", False),
+    ])
+    def test_the_earlier_rounds_stay_fixed(self, text, expected):
+        assert self._check(text) is expected

@@ -94,7 +94,7 @@ shipped ones with the same `id`.
 | `must_contain` | The value appears (case-insensitive). |
 | `must_not_contain` | The value does not appear. |
 | `must_match` | The value, as a regex, matches. Patterns are screened for catastrophic backtracking first (see below). |
-| `must_include_code_block` | The output has a **complete** fenced block. An opening fence may carry a language; a closing fence may not, so two openers (```` ```python ```` then ```` ```javascript ````) do not count, and neither does a lone ```. |
+| `must_include_code_block` | The output has a **complete** fenced block, per the Markdown fence rules — see below. |
 | `must_mention_file` | The named path is referenced. |
 | `max_chars` / `min_chars` | The output is within the bound. |
 
@@ -108,6 +108,24 @@ example. Such a case is refused at load time, naming the constraint.
 
 A case passes only when **every** constraint passes and the backend
 returned usable output.
+
+#### What counts as a fenced code block
+
+The rules the format actually specifies, rather than "contains
+backticks". A block needs an opening fence and a later closing one that
+
+- uses the **same character** — `~~~` does not close ```` ``` ````;
+- is **at least as long** — ``` does not close ````;
+- carries **no info string** — a second ```` ```python ```` opens
+  another block, it does not close the first;
+- is indented **at most three spaces** — at four the whole construct is
+  an *indented* code block whose literal contents merely happen to
+  contain backticks, and a tab counts as four.
+
+Tilde fences (`~~~`) count. The constraint is named for a fenced code
+block without restricting the delimiter, so scoring a valid `~~~` answer
+as a failure would skew the comparison against the model rather than
+measure it.
 
 #### Why `must_match` patterns are screened
 
