@@ -73,6 +73,15 @@ CONSTRAINT_MUST_MENTION_FILE = "must_mention_file"
 CONSTRAINT_MAX_CHARS = "max_chars"
 CONSTRAINT_MIN_CHARS = "min_chars"
 
+#: Kinds whose ``value`` carries the actual assertion. For these an
+#: empty value is a malformed case, never a permissive one.
+VALUE_BEARING_KINDS: frozenset = frozenset({
+    CONSTRAINT_MUST_CONTAIN,
+    CONSTRAINT_MUST_NOT_CONTAIN,
+    CONSTRAINT_MUST_MATCH,
+    CONSTRAINT_MUST_MENTION_FILE,
+})
+
 CONSTRAINT_KINDS: tuple[str, ...] = (
     CONSTRAINT_MUST_CONTAIN,
     CONSTRAINT_MUST_NOT_CONTAIN,
@@ -156,11 +165,23 @@ except ImportError:  # pragma: no cover - older interpreters
     except ImportError:  # pragma: no cover - no parser at all
         _re_parser = None  # type: ignore[assignment]
 
-#: Open-ended repetitions (``*``, ``+``, ``{n,}``) allowed in one
-#: pattern. Each one the engine can retry independently adds a degree to
-#: the worst-case cost; a handful is far more than a real constraint
-#: needs and well short of anything that stalls.
-MAX_OPEN_ENDED_REPEATS = 6
+#: Variable-length repetitions allowed in one pattern.
+#:
+#: "Variable-length" is the operative property, not "open-ended". A
+#: bounded repeat is just as ambiguous when its length can vary: each
+#: ``a?`` in ``^a?a?a?...a{30}$`` is an independent match-or-skip
+#: decision, so thirty of them is 2**30 assignments for the engine to
+#: work through before it can report failure. Counting only ``*``/``+``
+#: missed that shape entirely.
+#:
+#: Every such repetition the engine can retry independently multiplies
+#: the work, so the count is what has to be bounded. A real constraint
+#: uses a handful — ``^\s*def\s+\w+\s*\(`` is four — and anything
+#: that stalls needs far more.
+MAX_ELASTIC_REPEATS = 8
+
+#: Retained name for the previous, narrower cap.
+MAX_OPEN_ENDED_REPEATS = MAX_ELASTIC_REPEATS
 
 _REPEAT_OPS = frozenset({"MAX_REPEAT", "MIN_REPEAT", "POSSESSIVE_REPEAT"})
 _GROUP_OPS = frozenset({"SUBPATTERN", "ATOMIC_GROUP"})
@@ -187,10 +208,20 @@ def _sub_sequences(name: str, av: object) -> list:
     return []
 
 
-def _is_open_ended(av: object) -> bool:
-    """Does this repeat have no upper bound (``*``, ``+``, ``{n,}``)?"""
-    high = av[1]
-    return high is None or high == getattr(_re_parser, "MAXREPEAT", None)
+def _is_elastic(av: object) -> bool:
+    """Can this repeat consume a *variable* number of repetitions?
+
+    ``a{3}`` is fixed and cannot be backtracked into; ``a?``, ``a*``,
+    ``a+`` and ``a{2,5}`` can each give ground, and it is that give
+    which the engine has to search.
+    """
+    low, high = av[0], av[1]
+    if high is None or high == getattr(_re_parser, "MAXREPEAT", None):
+        return True
+    try:
+        return int(low) != int(high)
+    except (TypeError, ValueError):  # pragma: no cover - defensive
+        return True
 
 
 #: Characters the overlap test probes. Disjointness over ASCII is what
@@ -290,16 +321,16 @@ def _ambiguity_in(nodes) -> Optional[str]:
     return None
 
 
-def _open_ended_body(name: str, av: object):
-    """The repeated body if this node is an open-ended repeat, else ``None``."""
+def _elastic_body(name: str, av: object):
+    """The repeated body if this node is a variable-length repeat, else ``None``."""
     if name in _REPEAT_OPS:
-        return list(av[2]) if _is_open_ended(av) else None
+        return list(av[2]) if _is_elastic(av) else None
     if name in _GROUP_OPS:
         for body in _sub_sequences(name, av):
             items = list(body)
             if len(items) == 1:
                 inner_name = _op_name(items[0][0])
-                if inner_name in _REPEAT_OPS and _is_open_ended(items[0][1]):
+                if inner_name in _REPEAT_OPS and _is_elastic(items[0][1]):
                     return list(items[0][1][2])
     return None
 
@@ -318,17 +349,17 @@ def _screen_sequence(nodes, state: dict) -> Optional[str]:
             if reason:
                 return reason
 
-        body = _open_ended_body(name, av)
+        body = _elastic_body(name, av)
         if body is not None:
-            state["open_ended"] += 1
-            if state["open_ended"] > MAX_OPEN_ENDED_REPEATS:
-                return "too many open-ended repetitions"
+            state["elastic"] += 1
+            if state["elastic"] > MAX_ELASTIC_REPEATS:
+                return "too many variable-length repetitions"
             if previous_body is not None and _bodies_can_overlap(
                 previous_body, body
             ):
-                # ``.*.*`` and friends: every split of the same span is a
-                # distinct attempt, for no expressive gain.
-                return "two open-ended repetitions competing for the same text"
+                # ``.*.*``, ``\w+\w*``, ``a?a?``: every split of the same
+                # span is a distinct attempt, for no expressive gain.
+                return "two variable-length repetitions competing for the same text"
 
         for sub in _sub_sequences(name, av):
             reason = _screen_sequence(sub, state)
@@ -356,7 +387,7 @@ def unsafe_regex_reason(pattern: str) -> Optional[str]:
     except Exception:  # pragma: no cover - defensive
         return "could not be checked"
     try:
-        return _screen_sequence(parsed, {"open_ended": 0})
+        return _screen_sequence(parsed, {"elastic": 0})
     except RecursionError:
         return "pattern is nested too deeply"
     except Exception:  # pragma: no cover - defensive
@@ -367,16 +398,28 @@ def _fenced_code_block_present(text: str) -> bool:
     """Is there a *complete* fenced block, rather than a stray marker?
 
     A single ``` is what a truncated or malformed answer looks like, so
-    accepting it scored those as having produced code. A block needs an
-    opening fence — optionally carrying a language — and a later closing
-    one.
+    accepting it scored those as having produced code. Counting markers
+    instead was no better: two *opening* fences (```` ```python ````
+    then ```` ```javascript ````) close nothing, and that is what a
+    model that keeps restarting its answer emits.
+
+    So the two roles are distinguished the way the format does. An
+    opening fence may carry an info string naming the language; a
+    closing fence may not, so a line that is nothing but backticks is
+    the only thing that can close a block.
     """
-    fences = 0
+    opened = False
     for line in text.splitlines():
-        if line.strip().startswith("```"):
-            fences += 1
-            if fences >= 2:
-                return True
+        stripped = line.strip()
+        if not stripped.startswith("```"):
+            continue
+        if not opened:
+            opened = True
+            continue
+        # Only a bare run of backticks closes; anything carrying an info
+        # string is another opener.
+        if set(stripped) == {"`"}:
+            return True
     return False
 
 
@@ -465,6 +508,14 @@ def _coerce_constraint(raw: object) -> Constraint:
         value = ""
     if len(value) > MAX_CONSTRAINT_VALUE_LEN:
         raise EvalError("constraint value is too long")
+    if kind in VALUE_BEARING_KINDS and not value.strip():
+        # An empty value is not a lax constraint, it is a broken one:
+        # ``"" in text`` is true of every response and ``re.search("")``
+        # matches at position zero, so the case reports ``all_passed``
+        # no matter what the model said. That silently corrupts model
+        # comparisons and can promote a worthless answer into an
+        # approved training example.
+        raise EvalError(f"constraint '{kind}' needs a non-empty value")
     if kind == CONSTRAINT_MUST_MATCH:
         refusal = unsafe_regex_reason(value)
         if refusal is not None:
@@ -1369,7 +1420,8 @@ __all__ = [
     "STATUS_QUEUED", "STATUS_RUNNING", "STATUS_DONE", "STATUS_ERROR",
     "STATUS_INTERRUPTED", "recover_interrupted_runs",
     "EvalError", "TooManyRunsInProgress", "Constraint", "EvalCase",
-    "unsafe_regex_reason", "MAX_OPEN_ENDED_REPEATS",
+    "unsafe_regex_reason", "MAX_ELASTIC_REPEATS", "MAX_OPEN_ENDED_REPEATS",
+    "VALUE_BEARING_KINDS",
     "parse_case", "load_cases", "get_case",
     "builtin_cases_dir", "operator_cases_dir",
     "migrate", "list_runs", "get_run", "list_results", "get_result",

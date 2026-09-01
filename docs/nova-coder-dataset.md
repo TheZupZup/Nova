@@ -104,6 +104,16 @@ and an existing file is never overwritten. Nothing is uploaded,
 registered, or pushed anywhere — the operator ends up with one file on
 their own disk and decides what happens next.
 
+**The file is created mode `0600`** — owner-readable only, set at
+creation rather than by a later `chmod`, which would leave a window in
+which the file already exists and is still world-readable. Relying on
+the operator's umask would produce `0644` on a normal system, handing
+every local account on a shared host the prompts and completions that
+were approved. The credential scan does not make that acceptable: it
+looks for secret-shaped strings, while the export exists precisely to
+carry proprietary task and code content. This matches how the rest of
+Nova writes sensitive exports.
+
 ## What is deliberately *not* here
 
 - **No training.** No trainer, no LoRA config, no GPU code, no

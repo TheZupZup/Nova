@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import subprocess
 import os
+import pathlib
 import shutil
 import sqlite3
 import time
@@ -1348,3 +1349,202 @@ class TestOllamaMetadataStaysWithOllama:
         for role in health["roles"]:
             assert role["runtime_context_size"] is None
             assert role["context_capacity"] is None
+
+
+# ── Round 10 ────────────────────────────────────────────────────────
+#
+# Three of these are round 9's own fixes not going far enough, which is
+# the same shape as rounds 3, 7 and 8: the screen bounded the wrong
+# property, the fence counter counted markers instead of roles.
+
+
+class TestBoundedRepeatsAreScreenedToo:
+    r"""P1: the screen counted ``*``/``+`` and let ``a?`` through.
+
+    "Open-ended" was the wrong property to bound. A *bounded* repeat is
+    just as ambiguous when its length can vary: every ``a?`` is an
+    independent match-or-skip decision, so ``^a?a?…a{30}$`` is 2**30
+    assignments to work through before failure can be reported — inside
+    the 500-character value cap, and just as unkillable as ``(a+)+$``.
+    """
+
+    #: 92 characters, well under ``MAX_CONSTRAINT_VALUE_LEN``.
+    BOMB = "^" + "a?" * 30 + "a" * 30 + "$"
+
+    def test_the_bounded_bomb_is_refused(self):
+        assert me.unsafe_regex_reason(self.BOMB) is not None
+
+    def test_it_fails_closed_instantly_rather_than_running(self):
+        constraint = me.Constraint(
+            kind=me.CONSTRAINT_MUST_MATCH, value=self.BOMB
+        )
+        started = time.monotonic()
+        passed, detail = constraint.check("a" * 30 + "!")
+        assert passed is False
+        assert "refused" in detail
+        # Unscreened, this input does not finish at all.
+        assert time.monotonic() - started < 1.0
+
+    def test_a_long_chain_of_optionals_is_refused(self):
+        """Even when neighbours are disjoint, the chain is the problem."""
+        assert me.unsafe_regex_reason("^" + "a?b?" * 20 + "c$") is not None
+
+    def test_a_fixed_repeat_is_not_elastic(self):
+        """``a{3}`` cannot give ground, so it is not ambiguous."""
+        assert me.unsafe_regex_reason(r"^a{3}b{4}c{5}$") is None
+
+    @pytest.mark.parametrize("pattern", (
+        r"def\s+fetch_status",
+        r"^\s*class\s+\w+",
+        r"^\s*def\s+\w+\s*\(",
+        r"\w+@\w+\.\w+",
+        r"\d+\.\d+",
+        r"a{2,5}",
+    ))
+    def test_real_constraints_are_unaffected(self, pattern):
+        assert me.unsafe_regex_reason(pattern) is None
+
+    def test_the_shipped_cases_still_load(self):
+        cases, problems = me.load_cases()
+        assert {c.id for c in cases} >= {"bugfix-http-timeout"}
+        assert not problems
+
+
+class TestAClosingFenceCannotCarryALanguage:
+    """P2: counting markers passed two *opening* fences.
+
+    ```` ```python ```` followed by ```` ```javascript ```` closes
+    nothing — it is what a model that keeps restarting its answer emits.
+    Markdown says an opening fence may carry an info string and a
+    closing one may not, so the two roles are distinguishable.
+    """
+
+    def _check(self, text):
+        return me.Constraint(
+            kind=me.CONSTRAINT_MUST_INCLUDE_CODE_BLOCK
+        ).check(text)[0]
+
+    def test_two_opening_fences_do_not_count_as_a_block(self):
+        assert self._check("```python\nx = 1\n```javascript\ny = 2") is False
+
+    def test_a_real_block_still_passes(self):
+        assert self._check("```python\nx = 1\n```") is True
+
+    def test_a_bare_opening_fence_and_a_bare_close_pass(self):
+        assert self._check("```\nx = 1\n```") is True
+
+    def test_a_second_block_after_a_closed_one_still_passes(self):
+        assert self._check(
+            "```python\na\n```\nprose\n```js\nb\n```"
+        ) is True
+
+    def test_a_lone_opener_is_still_refused(self):
+        assert self._check("```python\nx = 1") is False
+
+
+class TestEmptyConstraintValuesAreRejected:
+    """P2: an empty value is a broken constraint, not a lax one.
+
+    ``"" in text`` holds for every response and ``re.search("")`` matches
+    at position zero, so a case missing a ``value`` reported
+    ``all_passed`` regardless of what the model said — corrupting model
+    comparisons, and able to promote a worthless answer into an approved
+    training example.
+    """
+
+    @pytest.mark.parametrize("kind", sorted(me.VALUE_BEARING_KINDS))
+    def test_a_missing_value_is_refused(self, kind):
+        with pytest.raises(me.EvalError):
+            me._coerce_constraint({"kind": kind})
+
+    @pytest.mark.parametrize("kind", sorted(me.VALUE_BEARING_KINDS))
+    def test_a_whitespace_only_value_is_refused(self, kind):
+        with pytest.raises(me.EvalError):
+            me._coerce_constraint({"kind": kind, "value": "   "})
+
+    def test_a_valueless_kind_is_still_allowed(self):
+        """``must_include_code_block`` carries its assertion in the kind."""
+        constraint = me._coerce_constraint(
+            {"kind": me.CONSTRAINT_MUST_INCLUDE_CODE_BLOCK}
+        )
+        assert constraint.value == ""
+
+    def test_a_case_with_an_empty_value_does_not_load(
+        self, tmp_path, monkeypatch
+    ):
+        (tmp_path / "c.json").write_text(
+            json.dumps({
+                "id": "vacuous",
+                "prompt": "p",
+                "constraints": [{"kind": "must_contain", "value": ""}],
+            }),
+            encoding="utf-8",
+        )
+        monkeypatch.setenv(me.ENV_CASES_DIR, str(tmp_path))
+        cases, problems = me.load_cases()
+        assert "vacuous" not in {c.id for c in cases}
+        assert any("non-empty" in p for p in problems)
+
+
+class TestDatasetExportIsPrivateOnDisk:
+    """P2: the export was created 0644 under the usual 022 umask.
+
+    Every local account on a shared host could then read the prompts and
+    completions an operator approved. The credential scan does not make
+    that safe — it looks for secret-shaped strings, while the export
+    exists to carry proprietary task and code content.
+    """
+
+    @pytest.fixture
+    def one_example(self, monkeypatch):
+        """Stand in for the DB read; this test is about the file, not SQL."""
+        example = cd.DatasetExample(
+            prompt="explain the timeout",
+            completion="Use a timeout= argument.",
+            metadata={"model": "m", "case_id": "c", "result_id": "1"},
+        )
+        monkeypatch.setattr(
+            cd, "build_examples", lambda ids, db_path=None: [example]
+        )
+        return example
+
+    def test_the_file_is_created_readable_only_by_its_owner(
+        self, tmp_path, monkeypatch, one_example
+    ):
+        monkeypatch.setattr(cd, "export_dir", lambda: tmp_path)
+        info = cd.export_jsonl([1], "out.jsonl")
+        mode = os.stat(info["path"]).st_mode & 0o777
+        assert mode == 0o600, f"expected 0600, got {mode:o}"
+
+    def test_the_mode_does_not_depend_on_the_operator_umask(
+        self, tmp_path, monkeypatch, one_example
+    ):
+        """A chmod after the fact would leave the file briefly world-readable."""
+        monkeypatch.setattr(cd, "export_dir", lambda: tmp_path)
+        previous = os.umask(0o000)
+        try:
+            info = cd.export_jsonl([1], "permissive.jsonl")
+        finally:
+            os.umask(previous)
+        assert os.stat(info["path"]).st_mode & 0o777 == 0o600
+
+    def test_the_content_is_still_written(
+        self, tmp_path, monkeypatch, one_example
+    ):
+        monkeypatch.setattr(cd, "export_dir", lambda: tmp_path)
+        info = cd.export_jsonl([1], "content.jsonl")
+        lines = pathlib.Path(info["path"]).read_text(
+            encoding="utf-8"
+        ).splitlines()
+        assert len(lines) == 1
+        assert json.loads(lines[0])["messages"][0]["content"] == (
+            "explain the timeout"
+        )
+
+    def test_an_existing_name_is_still_refused(
+        self, tmp_path, monkeypatch, one_example
+    ):
+        monkeypatch.setattr(cd, "export_dir", lambda: tmp_path)
+        (tmp_path / "taken.jsonl").write_text("x", encoding="utf-8")
+        with pytest.raises(cd.DatasetExportError):
+            cd.export_jsonl([1], "taken.jsonl")

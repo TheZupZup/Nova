@@ -94,9 +94,17 @@ shipped ones with the same `id`.
 | `must_contain` | The value appears (case-insensitive). |
 | `must_not_contain` | The value does not appear. |
 | `must_match` | The value, as a regex, matches. Patterns are screened for catastrophic backtracking first (see below). |
-| `must_include_code_block` | The output has a **complete** fenced block — an opening fence, optionally with a language, and a closing one. A lone ``` does not count. |
+| `must_include_code_block` | The output has a **complete** fenced block. An opening fence may carry a language; a closing fence may not, so two openers (```` ```python ```` then ```` ```javascript ````) do not count, and neither does a lone ```. |
 | `must_mention_file` | The named path is referenced. |
 | `max_chars` / `min_chars` | The output is within the bound. |
+
+`must_contain`, `must_not_contain`, `must_match` and `must_mention_file`
+**require a non-empty value**. An omitted one is a malformed case, not a
+permissive one: `"" in text` holds for every response and `re.search("")`
+matches at position zero, so the case would report `all_passed`
+regardless of what the model said — quietly corrupting model comparisons
+and able to promote a worthless answer into an approved training
+example. Such a case is refused at load time, naming the constraint.
 
 A case passes only when **every** constraint passes and the backend
 returned usable output.
@@ -110,23 +118,31 @@ against input that *almost* matches — 41 characters is already enough to
 outlast a 12-second timeout — and an evaluation worker that entered one
 would be gone for the life of the process.
 
-That blowup needs **ambiguity**: a repetition whose body can consume the
-same text in more than one way, so a failure forces the engine to retry
-every division of it. Because that is a structural property, it is
-decided before the pattern is ever run. A pattern is refused when it
-contains:
+That blowup needs **ambiguity**: a repetition whose length can vary, so
+a failure forces the engine to retry every assignment. Because that is a
+structural property, it is decided before the pattern is ever run.
+
+The property that matters is **variable length**, not "open-ended". A
+bounded repeat is just as ambiguous when it can give ground: every `a?`
+in `^a?a?a?…a{30}$` is an independent match-or-skip decision, so thirty
+of them is 2³⁰ assignments to work through before failure can be
+reported — and that fits comfortably inside the 500-character value cap.
+
+A pattern is refused when it contains:
 
 - a repetition inside another repetition — `(a+)+`, `(a*)*`;
 - alternation or a look-around inside a repetition — `(a|aa)+`;
 - a back-reference — `(.*)\1`;
-- two open-ended repetitions in a row that can compete for the same
-  characters — `.*.*`, `\w+\w*`;
-- more than six open-ended repetitions in total.
+- two variable-length repetitions in a row that can compete for the same
+  characters — `.*.*`, `\w+\w*`, `a?a?`;
+- more than eight variable-length repetitions in total.
 
-Disjoint neighbours are **not** refused: `\s+\w+` cannot backtrack,
-because no character belongs to both classes, and that is the most
-common shape in a real constraint. Ordinary patterns — `def\s+\w+`,
-`\d+\.\d+`, `foo|bar`, `.*error.*` — are unaffected.
+Two things are deliberately **not** refused. Disjoint neighbours:
+`\s+\w+` cannot backtrack, because no character belongs to both
+classes, and it is the most common shape in a real constraint. And fixed
+repeats: `a{3}` cannot give ground, so it adds no ambiguity. Ordinary
+patterns — `def\s+\w+`, `\d+\.\d+`, `foo|bar`, `.*error.*`,
+`^\s*def\s+\w+\s*\(` — are unaffected.
 
 A refused pattern is reported when the case file loads, naming the
 reason. Building a `Constraint` directly is screened too, and fails

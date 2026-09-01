@@ -52,6 +52,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -300,9 +301,25 @@ def export_jsonl(
         for example in examples
     )
     try:
-        # ``x`` so a concurrent writer cannot be clobbered.
-        with open(target, "x", encoding="utf-8") as handle:
+        # ``O_EXCL`` so a concurrent writer cannot be clobbered, and mode
+        # ``0600`` at *creation* rather than a chmod afterwards — a chmod
+        # leaves a window in which the file is already on disk and still
+        # world-readable. The default 0644 an ``open()`` would produce
+        # under the usual 022 umask hands every local account on a shared
+        # host the prompts and completions an operator approved. The
+        # credential scan does not make that safe: it looks for
+        # secret-shaped strings, while the export's whole purpose is to
+        # carry proprietary task and code content. Matches how the rest
+        # of Nova writes sensitive exports (``core/data_export.py``).
+        fd = os.open(
+            target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600
+        )
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
             handle.write(body)
+    except FileExistsError:
+        raise DatasetExportError(
+            "A file with that name already exists; choose another name."
+        ) from None
     except OSError:
         raise DatasetExportError("The dataset file could not be written.") from None
 
