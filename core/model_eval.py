@@ -52,6 +52,7 @@ import sqlite3
 import threading
 import time
 from dataclasses import dataclass, field
+from functools import lru_cache
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, Optional, Sequence
@@ -125,6 +126,260 @@ class EvalError(ValueError):
     """A case, run request, or rating was rejected. Message is safe to show."""
 
 
+# ── Regex safety ────────────────────────────────────────────────────
+#
+# ``must_match`` is the only constraint that runs a regex, and Python's
+# ``re`` backtracks. On a pattern like ``(a+)+$`` an input that *almost*
+# matches takes exponential time, and there is no timeout to interrupt
+# it: ``re.search`` is a single C call holding the GIL, so a worker that
+# enters one cannot be cancelled, joined, or signalled. The evaluation
+# thread is simply gone for the life of the process.
+#
+# The blowup needs **ambiguity** — a repetition whose body can consume
+# the same text in more than one way, so a failure forces the engine to
+# retry every division of it. That is a structural property of the
+# pattern, so it can be decided before the pattern is ever run, using
+# the same parser ``re`` itself uses. Patterns are screened at case-parse
+# time (a clear :class:`EvalError`) and again in
+# :meth:`Constraint.check`, which fails closed instead of raising.
+#
+# The screen is deliberately conservative: it refuses constructs it
+# cannot prove safe rather than trying to decide each one exactly. These
+# patterns are written by the operator, in a local case file, so the cost
+# of a refusal is an error message at load time.
+
+try:  # CPython >= 3.11
+    from re import _parser as _re_parser
+except ImportError:  # pragma: no cover - older interpreters
+    try:
+        import sre_parse as _re_parser  # type: ignore[no-redef]
+    except ImportError:  # pragma: no cover - no parser at all
+        _re_parser = None  # type: ignore[assignment]
+
+#: Open-ended repetitions (``*``, ``+``, ``{n,}``) allowed in one
+#: pattern. Each one the engine can retry independently adds a degree to
+#: the worst-case cost; a handful is far more than a real constraint
+#: needs and well short of anything that stalls.
+MAX_OPEN_ENDED_REPEATS = 6
+
+_REPEAT_OPS = frozenset({"MAX_REPEAT", "MIN_REPEAT", "POSSESSIVE_REPEAT"})
+_GROUP_OPS = frozenset({"SUBPATTERN", "ATOMIC_GROUP"})
+_ASSERT_OPS = frozenset({"ASSERT", "ASSERT_NOT"})
+_BACKREF_OPS = frozenset({"GROUPREF", "GROUPREF_IGNORE", "GROUPREF_EXISTS"})
+
+
+def _op_name(op: object) -> str:
+    return str(getattr(op, "name", None) or op)
+
+
+def _sub_sequences(name: str, av: object) -> list:
+    """The sub-patterns a node contains, whatever its own shape."""
+    if name in _REPEAT_OPS:
+        return [av[2]]
+    if name == "SUBPATTERN":
+        return [av[3]]
+    if name == "ATOMIC_GROUP":
+        return [av]
+    if name in _ASSERT_OPS:
+        return [av[1]]
+    if name == "BRANCH":
+        return list(av[1])
+    return []
+
+
+def _is_open_ended(av: object) -> bool:
+    """Does this repeat have no upper bound (``*``, ``+``, ``{n,}``)?"""
+    high = av[1]
+    return high is None or high == getattr(_re_parser, "MAXREPEAT", None)
+
+
+#: Characters the overlap test probes. Disjointness over ASCII is what
+#: separates ``\s+\w+`` (two repetitions that can never compete for the
+#: same character) from ``\w+\w*`` (two that always do).
+_PROBE_CHARS = tuple(chr(code) for code in range(128))
+
+_CATEGORY_TESTS = {
+    "CATEGORY_DIGIT": lambda c: c.isdigit(),
+    "CATEGORY_NOT_DIGIT": lambda c: not c.isdigit(),
+    "CATEGORY_SPACE": lambda c: c.isspace(),
+    "CATEGORY_NOT_SPACE": lambda c: not c.isspace(),
+    "CATEGORY_WORD": lambda c: c.isalnum() or c == "_",
+    "CATEGORY_NOT_WORD": lambda c: not (c.isalnum() or c == "_"),
+}
+
+
+def _char_test(node):
+    """A predicate for a body that matches exactly one character, or ``None``.
+
+    ``None`` means "not a simple single-character body" — the caller
+    treats that as *not* provably overlapping, because the shapes that
+    actually explode (a repetition inside a repetition, alternation
+    under one) are refused by :func:`_ambiguity_in` before this runs.
+    """
+    op, av = node
+    name = _op_name(op)
+    if name == "ANY":
+        return lambda c: True
+    if name == "LITERAL":
+        return lambda c: ord(c) == av
+    if name == "NOT_LITERAL":
+        return lambda c: ord(c) != av
+    if name == "CATEGORY":
+        return _CATEGORY_TESTS.get(_op_name(av))
+    if name == "IN":
+        items = list(av)
+        negated = bool(items) and _op_name(items[0][0]) == "NEGATE"
+        if negated:
+            items = items[1:]
+        tests = []
+        for item in items:
+            if _op_name(item[0]) == "RANGE":
+                low, high = item[1]
+                tests.append(lambda c, low=low, high=high: low <= ord(c) <= high)
+            else:
+                inner = _char_test(item)
+                if inner is None:
+                    return None
+                tests.append(inner)
+        if negated:
+            return lambda c: not any(test(c) for test in tests)
+        return lambda c: any(test(c) for test in tests)
+    return None
+
+
+def _bodies_can_overlap(first, second) -> bool:
+    r"""Can these two repetition bodies compete for the same character?
+
+    Two open-ended repetitions in a row only multiply work when they can
+    both consume the same text, so the engine has to try every division
+    of it — ``.*.*`` or ``\w+\w*``. When their bodies are disjoint,
+    ``\s+\w+`` for instance, each character belongs to exactly one of
+    them and there is nothing to redistribute.
+    """
+    left, right = list(first), list(second)
+    if left == right:
+        return True
+    if len(left) != 1 or len(right) != 1:
+        return False
+    left_test = _char_test(left[0])
+    right_test = _char_test(right[0])
+    if left_test is None or right_test is None:
+        return False
+    try:
+        return any(
+            left_test(char) and right_test(char) for char in _PROBE_CHARS
+        )
+    except Exception:  # pragma: no cover - defensive
+        return True
+
+
+def _ambiguity_in(nodes) -> Optional[str]:
+    """Why the body of a repetition could match one span two ways."""
+    for op, av in nodes:
+        name = _op_name(op)
+        if name in _REPEAT_OPS:
+            return "a repetition nested inside another repetition"
+        if name == "BRANCH":
+            return "alternation inside a repetition"
+        if name in _ASSERT_OPS:
+            return "a look-around inside a repetition"
+        for body in _sub_sequences(name, av):
+            reason = _ambiguity_in(body)
+            if reason:
+                return reason
+    return None
+
+
+def _open_ended_body(name: str, av: object):
+    """The repeated body if this node is an open-ended repeat, else ``None``."""
+    if name in _REPEAT_OPS:
+        return list(av[2]) if _is_open_ended(av) else None
+    if name in _GROUP_OPS:
+        for body in _sub_sequences(name, av):
+            items = list(body)
+            if len(items) == 1:
+                inner_name = _op_name(items[0][0])
+                if inner_name in _REPEAT_OPS and _is_open_ended(items[0][1]):
+                    return list(items[0][1][2])
+    return None
+
+
+def _screen_sequence(nodes, state: dict) -> Optional[str]:
+    previous_body = None
+    for op, av in nodes:
+        name = _op_name(op)
+        if name in _BACKREF_OPS:
+            # A back-reference makes matching NP-hard in general; there
+            # is no cheap structural bound to apply to one.
+            return "back-references are not supported"
+
+        if name in _REPEAT_OPS:
+            reason = _ambiguity_in(av[2])
+            if reason:
+                return reason
+
+        body = _open_ended_body(name, av)
+        if body is not None:
+            state["open_ended"] += 1
+            if state["open_ended"] > MAX_OPEN_ENDED_REPEATS:
+                return "too many open-ended repetitions"
+            if previous_body is not None and _bodies_can_overlap(
+                previous_body, body
+            ):
+                # ``.*.*`` and friends: every split of the same span is a
+                # distinct attempt, for no expressive gain.
+                return "two open-ended repetitions competing for the same text"
+
+        for sub in _sub_sequences(name, av):
+            reason = _screen_sequence(sub, state)
+            if reason:
+                return reason
+
+        previous_body = body
+    return None
+
+
+@lru_cache(maxsize=256)
+def unsafe_regex_reason(pattern: str) -> Optional[str]:
+    """Why ``pattern`` is refused for ``must_match``; ``None`` if it is safe.
+
+    Fails closed: an invalid pattern, an interpreter without the parser,
+    or any surprise during the walk is a refusal, never an exception and
+    never a pass.
+    """
+    if _re_parser is None:  # pragma: no cover - no stdlib parser
+        return "regex constraints are unavailable on this interpreter"
+    try:
+        parsed = _re_parser.parse(pattern)
+    except re.error:
+        return "not a valid regex"
+    except Exception:  # pragma: no cover - defensive
+        return "could not be checked"
+    try:
+        return _screen_sequence(parsed, {"open_ended": 0})
+    except RecursionError:
+        return "pattern is nested too deeply"
+    except Exception:  # pragma: no cover - defensive
+        return "could not be checked"
+
+
+def _fenced_code_block_present(text: str) -> bool:
+    """Is there a *complete* fenced block, rather than a stray marker?
+
+    A single ``` is what a truncated or malformed answer looks like, so
+    accepting it scored those as having produced code. A block needs an
+    opening fence — optionally carrying a language — and a later closing
+    one.
+    """
+    fences = 0
+    for line in text.splitlines():
+        if line.strip().startswith("```"):
+            fences += 1
+            if fences >= 2:
+                return True
+    return False
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -159,11 +414,19 @@ class Constraint:
                 ok = self.value.lower() not in lowered
                 return ok, "" if ok else "forbidden text present"
             if self.kind == CONSTRAINT_MUST_MATCH:
+                # ``_coerce_constraint`` screens patterns when a case is
+                # loaded, but a ``Constraint`` can also be built
+                # directly. Re-check here so the dangerous path is the
+                # one that is closed, not merely the documented one —
+                # and refuse without raising, per this method's contract.
+                refusal = unsafe_regex_reason(self.value)
+                if refusal is not None:
+                    return False, f"pattern refused ({refusal})"
                 ok = re.search(self.value, text, re.I | re.M) is not None
                 return ok, "" if ok else "pattern did not match"
             if self.kind == CONSTRAINT_MUST_INCLUDE_CODE_BLOCK:
-                ok = "```" in text
-                return ok, "" if ok else "no fenced code block"
+                ok = _fenced_code_block_present(text)
+                return ok, "" if ok else "no complete fenced code block"
             if self.kind == CONSTRAINT_MUST_MENTION_FILE:
                 ok = self.value.lower() in lowered
                 return ok, "" if ok else "file was not referenced"
@@ -203,10 +466,11 @@ def _coerce_constraint(raw: object) -> Constraint:
     if len(value) > MAX_CONSTRAINT_VALUE_LEN:
         raise EvalError("constraint value is too long")
     if kind == CONSTRAINT_MUST_MATCH:
-        try:
-            re.compile(value)
-        except re.error:
-            raise EvalError("constraint 'must_match' is not a valid regex") from None
+        refusal = unsafe_regex_reason(value)
+        if refusal is not None:
+            raise EvalError(
+                f"constraint 'must_match' was refused as an unsafe regex: {refusal}"
+            )
     if kind in (CONSTRAINT_MAX_CHARS, CONSTRAINT_MIN_CHARS):
         try:
             int(value)
@@ -1105,6 +1369,7 @@ __all__ = [
     "STATUS_QUEUED", "STATUS_RUNNING", "STATUS_DONE", "STATUS_ERROR",
     "STATUS_INTERRUPTED", "recover_interrupted_runs",
     "EvalError", "TooManyRunsInProgress", "Constraint", "EvalCase",
+    "unsafe_regex_reason", "MAX_OPEN_ENDED_REPEATS",
     "parse_case", "load_cases", "get_case",
     "builtin_cases_dir", "operator_cases_dir",
     "migrate", "list_runs", "get_run", "list_results", "get_result",

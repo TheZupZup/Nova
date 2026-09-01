@@ -119,3 +119,13 @@ The three calls behind this surface are `/api/tags` (installed),
 than fetching it — so a status question can never become a multi-gigabyte
 download. Providers other than Ollama still report installed models via
 their own `health()` probe and degrade gracefully on the rest.
+
+`/api/ps` and `/api/show` are asked **only when Ollama is the provider
+actually serving requests**, identified positively by name. A reachable
+daemon is not evidence that it is the one answering: if Nova is
+configured for another backend while an Ollama daemon happens to be up
+on the same host, that daemon's numbers describe *its* copy of a model,
+not the one in use. Attributing them to the configured backend would
+publish a confident, wrong context size. Every non-Ollama provider
+therefore reports `runtime_details_unsupported` and leaves the runtime
+fields `null`.

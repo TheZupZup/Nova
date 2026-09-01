@@ -9,8 +9,9 @@ from __future__ import annotations
 import json
 import subprocess
 import os
-import pathlib
+import shutil
 import sqlite3
+import time
 
 import pytest
 
@@ -884,11 +885,14 @@ class TestEvaluationDocsMatchTheCode:
 
 
 class TestSnippetOpenIsRaceSafe:
-    """P2: lstat() and open() are two syscalls; the gap is exploitable.
+    """P2: path validation expires the instant it returns.
 
-    A process that swaps the file for a symlink between the two would
-    otherwise have the open follow it, defeating both the symlink
-    rejection and the containment check that ran on the path.
+    ``validate_proposed_path`` proves containment against the filesystem
+    as it looked at that moment. Anything that happens between then and
+    the open is unobserved, and *every* component of the path is
+    swappable in that window — not just the final one. A no-follow open
+    of the leaf alone still lets a swapped parent directory redirect the
+    read outside the repository.
     """
 
     @pytest.fixture
@@ -929,41 +933,96 @@ class TestSnippetOpenIsRaceSafe:
     def test_symlink_swapped_inside_the_race_window_is_refused(
         self, repo, monkeypatch
     ):
-        """The actual TOCTOU: the swap happens *after* validation+lstat.
+        """The actual TOCTOU: the swap happens *after* validation.
 
-        Validation and ``lstat`` both saw a regular file; the file is
-        replaced by a symlink before ``open``. Only no-follow semantics
-        on the open itself can stop this, so this is what a plain
-        ``open()`` would fail.
+        ``validate_proposed_path`` proves containment with ``resolve()``,
+        which is a statement about the filesystem at that instant. Here
+        the file is replaced by a symlink to an out-of-root secret the
+        moment validation returns — before a single byte is opened. Only
+        no-follow semantics on the open itself can stop this.
         """
         checkout, tmp_path = repo
         secret = tmp_path / "outside_secret.txt"
         secret.write_text("OUT_OF_ROOT_SECRET\n", encoding="utf-8")
         target = checkout / "app.py"
-        genuine = target.lstat()
 
         try:
             os.symlink(secret, tmp_path / "_probe")
         except (OSError, NotImplementedError):  # pragma: no cover
             pytest.skip("symlinks unavailable")
 
-        # ``Path.lstat()`` is the last observation the reader makes
-        # before opening, so patching it is exactly the race window.
-        real_lstat = pathlib.Path.lstat
+        # Validation returning is exactly the start of the race window:
+        # everything it checked is now a statement about the past.
+        real_validate = dw.validate_proposed_path
 
-        def _racing_lstat(self):
-            # os-level calls only: pathlib helpers would re-enter here.
-            if str(self) == str(target) and not os.path.islink(str(target)):
-                # Validation has passed and the caller is about to open.
-                # Swap the file for a symlink and hand back the stat of
-                # the regular file it used to be.
+        def _swap_after_validation(repo_root, raw):
+            rel = real_validate(repo_root, raw)
+            if not os.path.islink(str(target)):
                 os.unlink(str(target))
                 os.symlink(str(secret), str(target))
-                return genuine
-            return real_lstat(self)
+            return rel
 
-        monkeypatch.setattr(pathlib.Path, "lstat", _racing_lstat)
+        monkeypatch.setattr(dw, "validate_proposed_path", _swap_after_validation)
 
+        # The refusal is the whole point: no ``FileSnippet`` is returned,
+        # so the out-of-root secret never becomes prompt content.
+        with pytest.raises(dw.RepoReadError):
+            dw.read_text_snippet(str(checkout), "app.py")
+
+    def test_parent_directory_swapped_in_the_window_cannot_escape(
+        self, repo, monkeypatch
+    ):
+        """A no-follow leaf is not enough — the *parent* is swappable too.
+
+        ``src/app.py`` validates cleanly and its final component stays an
+        ordinary file the whole time. The attack replaces ``src`` with a
+        symlink to a directory outside the repository, so the same
+        relative path now names a different file. Checking only the leaf
+        misses this entirely: the open succeeds and returns the outside
+        secret.
+        """
+        checkout, tmp_path = repo
+        outside = tmp_path / "elsewhere"
+        outside.mkdir()
+        (outside / "app.py").write_text(
+            "OUT_OF_ROOT_SECRET = 1\n", encoding="utf-8"
+        )
+
+        src = checkout / "src"
+        src.mkdir()
+        (src / "app.py").write_text("real = 2\n", encoding="utf-8")
+        subprocess.run(["git", "add", "-A"], cwd=checkout, check=True)
+        subprocess.run(
+            ["git", "commit", "-q", "-m", "src"], cwd=checkout, check=True
+        )
+
+        try:
+            os.symlink(outside, tmp_path / "_probe_dir")
+        except (OSError, NotImplementedError):  # pragma: no cover
+            pytest.skip("symlinks unavailable")
+
+        real_validate = dw.validate_proposed_path
+
+        def _swap_parent_after_validation(repo_root, raw):
+            rel = real_validate(repo_root, raw)
+            if not os.path.islink(str(src)):
+                shutil.rmtree(str(src))
+                os.symlink(str(outside), str(src))
+            return rel
+
+        monkeypatch.setattr(
+            dw, "validate_proposed_path", _swap_parent_after_validation
+        )
+
+        with pytest.raises(dw.RepoReadError):
+            dw.read_text_snippet(str(checkout), "src/app.py")
+
+    def test_reads_refuse_to_run_without_safe_open_primitives(
+        self, repo, monkeypatch
+    ):
+        """No safe primitive means no read — never a path-based fallback."""
+        checkout, _ = repo
+        monkeypatch.setattr(dw, "_SAFE_OPEN_SUPPORTED", False)
         with pytest.raises(dw.RepoReadError):
             dw.read_text_snippet(str(checkout), "app.py")
 
@@ -1075,3 +1134,217 @@ class TestOverridesMergeBeforeTheCap:
         cases, problems = me.load_cases()
         assert len(cases) == me.MAX_CASES
         assert any("only the first" in p for p in problems)
+
+
+# ── Round 9 ─────────────────────────────────────────────────────────
+#
+# Four findings the owner asked to be closed as *classes* rather than as
+# the literal examples that exposed them.
+
+
+class TestMustMatchCannotStallTheWorker:
+    """P1: ``re.search`` on an operator pattern had no bound of any kind.
+
+    Python's engine backtracks and cannot be interrupted — the match is
+    one C call holding the GIL, so a runaway cannot be joined, cancelled
+    or signalled. ``(a+)+$`` against input that almost matches takes
+    exponential time, and an evaluation worker that entered one was gone
+    for the life of the process.
+    """
+
+    CATASTROPHIC = (
+        r"(a+)+$",
+        r"(a*)*b",
+        r"(a|aa)+$",
+        r"(x+x+)+y",
+        r"([a-zA-Z]+)*$",
+        r"(\w+\s?)*$",
+    )
+
+    #: Ordinary constraint patterns, including every shape the shipped
+    #: cases use. A screen that refused these would be useless.
+    SAFE = (
+        r"def\s+fetch_status",
+        r"^\s*class\s+\w+",
+        r"\d+\.\d+",
+        r"[a-z]+_[a-z]+",
+        r"foo|bar",
+        r".*error.*",
+        r"\bTODO\b",
+        r"a{2,5}",
+        r"\w+@\w+\.\w+",
+    )
+
+    @pytest.mark.parametrize("pattern", CATASTROPHIC)
+    def test_catastrophic_patterns_are_refused_at_case_load(
+        self, pattern, tmp_path, monkeypatch
+    ):
+        (tmp_path / "c.json").write_text(
+            json.dumps({
+                "id": "regex-bomb",
+                "prompt": "p",
+                "constraints": [{"kind": "must_match", "value": pattern}],
+            }),
+            encoding="utf-8",
+        )
+        monkeypatch.setenv(me.ENV_CASES_DIR, str(tmp_path))
+        cases, problems = me.load_cases()
+        # The shipped cases still load; the bomb does not.
+        assert "regex-bomb" not in {c.id for c in cases}
+        assert any("unsafe regex" in p for p in problems)
+
+    @pytest.mark.parametrize("pattern", SAFE)
+    def test_ordinary_patterns_still_load_and_run(self, pattern):
+        assert me.unsafe_regex_reason(pattern) is None
+        constraint = me.Constraint(kind=me.CONSTRAINT_MUST_MATCH, value=pattern)
+        passed, detail = constraint.check("nothing here")
+        assert "refused" not in detail
+
+    @pytest.mark.parametrize("pattern", CATASTROPHIC)
+    def test_a_direct_constraint_fails_closed_without_raising(self, pattern):
+        """The dangerous path is closed, not merely the documented one.
+
+        ``Constraint`` can be built without going through case loading,
+        and ``check`` promises never to raise — so it re-screens and
+        refuses rather than trusting that a caller validated first.
+        """
+        constraint = me.Constraint(kind=me.CONSTRAINT_MUST_MATCH, value=pattern)
+        started = time.monotonic()
+        passed, detail = constraint.check("a" * 64 + "!")
+        assert passed is False
+        assert "refused" in detail
+        # The refusal is structural, so it is instant. The unguarded
+        # search on this input does not finish at all.
+        assert time.monotonic() - started < 1.0
+
+    def test_backreferences_are_refused(self):
+        assert me.unsafe_regex_reason(r"(.*)\1") is not None
+
+    def test_an_invalid_regex_is_still_refused_as_a_regex(self, tmp_path,
+                                                          monkeypatch):
+        (tmp_path / "c.json").write_text(
+            json.dumps({
+                "id": "bad-regex",
+                "prompt": "p",
+                "constraints": [{"kind": "must_match", "value": "("}],
+            }),
+            encoding="utf-8",
+        )
+        monkeypatch.setenv(me.ENV_CASES_DIR, str(tmp_path))
+        cases, problems = me.load_cases()
+        assert "bad-regex" not in {c.id for c in cases}
+        assert any("regex" in p for p in problems)
+
+    def test_disjoint_adjacent_repeats_are_not_confused_for_overlap(self):
+        """``\\s+\\w+`` cannot backtrack — the classes share no character.
+
+        A blunt "two repetitions in a row" rule rejected this, which is
+        the single most common shape in a real constraint.
+        """
+        assert me.unsafe_regex_reason(r"\s+\w+") is None
+        assert me.unsafe_regex_reason(r"\d+[a-z]+") is None
+        # ...but overlapping ones still are.
+        assert me.unsafe_regex_reason(r"\w+\w*") is not None
+        assert me.unsafe_regex_reason(r".*.*x") is not None
+
+
+class TestFencedCodeBlockNeedsBothFences:
+    """P2: a lone ``` scored as "the model produced code".
+
+    That is what a truncated or malformed answer looks like, so the
+    constraint was passing exactly the outputs it existed to catch.
+    """
+
+    def _check(self, text):
+        return me.Constraint(
+            kind=me.CONSTRAINT_MUST_INCLUDE_CODE_BLOCK
+        ).check(text)[0]
+
+    def test_a_complete_block_passes(self):
+        assert self._check("here:\n```\nx = 1\n```\ndone") is True
+
+    def test_a_language_tag_is_allowed(self):
+        assert self._check("```python\nx = 1\n```") is True
+
+    def test_a_lone_opening_fence_is_refused(self):
+        assert self._check("here is the fix:\n```python\nx = 1") is False
+
+    def test_a_single_stray_marker_is_refused(self):
+        assert self._check("```") is False
+
+    def test_ordinary_prose_is_refused(self):
+        assert self._check("Just change the timeout to 30 seconds.") is False
+
+
+class TestOllamaMetadataStaysWithOllama:
+    """P2: ``/api/show`` was gated on "not a single-model backend".
+
+    That is a different question from "is Ollama serving this". A mock,
+    a remote OpenAI-compatible server, or any future name-routing
+    provider all select by name, so the old gate let them inherit the
+    numbers of whatever an unrelated Ollama daemon happened to hold
+    under the same label.
+    """
+
+    @pytest.fixture
+    def health_with_provider(self, monkeypatch):
+        from core import ollama_client
+
+        def _apply(provider_name):
+            calls = []
+
+            class _Probe:
+                def __call__(self, name=None):
+                    return {
+                        "ok": True,
+                        "provider": provider_name,
+                        "models": ["gemma3:1b"],
+                        "detail": "",
+                    }
+
+            class _P:
+                name = provider_name
+
+            def _show(name, host=None):
+                calls.append(name)
+                return {"model_info": {"llama.context_length": 131072},
+                        "parameters": "num_ctx 8192"}
+
+            monkeypatch.setattr(
+                "core.provider_status.probe_provider_health", _Probe()
+            )
+            monkeypatch.setattr(
+                "core.model_providers.get_provider", lambda: _P()
+            )
+            monkeypatch.setattr(ollama_client, "show_model", _show)
+            monkeypatch.setattr(
+                ollama_client, "list_running_models", lambda: []
+            )
+            monkeypatch.setattr(
+                "core.model_profiles.configured_role_models",
+                lambda: {"router": "gemma3:1b", "chat": "gemma3:1b",
+                         "code": "gemma3:1b", "advanced": "gemma3:1b"},
+            )
+            return calls
+        return _apply
+
+    def test_ollama_metadata_is_read_when_ollama_is_the_provider(
+        self, health_with_provider
+    ):
+        calls = health_with_provider("ollama")
+        health = mh.get_model_health()
+        assert calls, "/api/show should be consulted for an Ollama backend"
+        router = next(r for r in health["roles"] if r["role"] == "router")
+        assert router["runtime_context_size"] == 8192
+        assert router["context_capacity"] == 131072
+
+    def test_a_non_ollama_provider_never_inherits_ollama_metadata(
+        self, health_with_provider
+    ):
+        """A reachable daemon is not evidence that it is the one answering."""
+        calls = health_with_provider("mock")
+        health = mh.get_model_health()
+        assert calls == [], "/api/show must not be asked about another backend"
+        for role in health["roles"]:
+            assert role["runtime_context_size"] is None
+            assert role["context_capacity"] is None

@@ -204,12 +204,30 @@ These are enforced in `core/dev_workspace.py` and covered by
    `read_text_snippet` is the only file-content read in the Dev
    Workspace. It re-validates the repo, puts the requested path through
    the same repo-relative / traversal-free / non-secret / contained
-   rules a patch proposal uses, then reads **only a regular file**
-   (`lstat`, so a symlink is rejected as a symlink rather than
-   followed), at most 256 KiB from disk, decoded as UTF-8, refused if
+   rules a patch proposal uses, then reads **only a regular file**,
+   at most 256 KiB from disk, decoded as UTF-8, refused if
    it carries NUL or other unsafe control bytes, and truncated to the
    caller's line and character caps with `truncated: true` set. It opens
    the file for reading and does nothing else.
+
+   **The open cannot be redirected by a symlink swap.** Path validation
+   proves containment against the filesystem as it looked at that
+   instant, using `resolve()` — and that answer expires the moment it
+   returns. In the window before the open, any component of the path can
+   be replaced with a symlink pointing outside the repository, and
+   guarding only the final component does not help: swapping a parent
+   such as `src` for a link to `/etc` redirects the read while the leaf
+   name stays an ordinary file.
+
+   So the path is walked one component at a time on **directory
+   descriptors**. The validated repo root is opened once; each parent is
+   opened relative to the descriptor of the parent before it, with
+   `O_DIRECTORY | O_NOFOLLOW`; the leaf is opened relative to the final
+   parent with `O_NOFOLLOW` and validated with `fstat`. A descriptor
+   names the directory it was opened on, not the name it was reached by,
+   so a swap is either caught by `O_NOFOLLOW` on the way down or arrives
+   too late to matter. On a platform lacking those primitives the read
+   is **refused** — there is no path-based fallback.
 8. **Patch proposals are a pure, review-only transform (Phase 2).**
    `build_patch_proposal` re-validates the linked repo with the same
    hard rules as Phase 1, then for every proposed change:

@@ -93,13 +93,45 @@ shipped ones with the same `id`.
 | --- | --- |
 | `must_contain` | The value appears (case-insensitive). |
 | `must_not_contain` | The value does not appear. |
-| `must_match` | The value, as a regex, matches. |
-| `must_include_code_block` | The output has a fenced code block. |
+| `must_match` | The value, as a regex, matches. Patterns are screened for catastrophic backtracking first (see below). |
+| `must_include_code_block` | The output has a **complete** fenced block — an opening fence, optionally with a language, and a closing one. A lone ``` does not count. |
 | `must_mention_file` | The named path is referenced. |
 | `max_chars` / `min_chars` | The output is within the bound. |
 
 A case passes only when **every** constraint passes and the backend
 returned usable output.
+
+#### Why `must_match` patterns are screened
+
+Python's regex engine backtracks, and a match cannot be interrupted: it
+is a single C call holding the GIL, so a runaway one cannot be joined,
+cancelled, or signalled. A pattern like `(a+)+$` takes exponential time
+against input that *almost* matches — 41 characters is already enough to
+outlast a 12-second timeout — and an evaluation worker that entered one
+would be gone for the life of the process.
+
+That blowup needs **ambiguity**: a repetition whose body can consume the
+same text in more than one way, so a failure forces the engine to retry
+every division of it. Because that is a structural property, it is
+decided before the pattern is ever run. A pattern is refused when it
+contains:
+
+- a repetition inside another repetition — `(a+)+`, `(a*)*`;
+- alternation or a look-around inside a repetition — `(a|aa)+`;
+- a back-reference — `(.*)\1`;
+- two open-ended repetitions in a row that can compete for the same
+  characters — `.*.*`, `\w+\w*`;
+- more than six open-ended repetitions in total.
+
+Disjoint neighbours are **not** refused: `\s+\w+` cannot backtrack,
+because no character belongs to both classes, and that is the most
+common shape in a real constraint. Ordinary patterns — `def\s+\w+`,
+`\d+\.\d+`, `foo|bar`, `.*error.*` — are unaffected.
+
+A refused pattern is reported when the case file loads, naming the
+reason. Building a `Constraint` directly is screened too, and fails
+closed with `passed: false` rather than raising — `check()` never
+raises, by contract.
 
 ### Turning a real issue into a case
 

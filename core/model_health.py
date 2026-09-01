@@ -28,7 +28,11 @@ nothing about placement, Nova says nothing about placement.
 
 Providers other than Ollama degrade gracefully: the installed list still
 comes from the provider's own ``health()`` probe, and the loaded/context
-details are reported as unsupported rather than guessed.
+details are reported as unsupported rather than guessed. Those two
+endpoints are asked **only when Ollama is the provider actually serving
+requests** — a reachable daemon is not evidence that it is the one
+answering, so its metadata is never attributed to another backend's
+model that happens to share a name.
 """
 
 from __future__ import annotations
@@ -249,6 +253,7 @@ def get_model_health(*, include_context_sizes: bool = True) -> dict:
     # the per-role branch below can describe that honestly instead of
     # tag-matching names the backend never looks at.
     single_model_backend = False
+    provider_is_ollama = False
     backend_model = ""
     backend_resident: Optional[bool] = None
     try:
@@ -256,6 +261,15 @@ def get_model_health(*, include_context_sizes: bool = True) -> dict:
 
         active = get_provider()
         single_model_backend = not getattr(active, "selects_model_by_name", True)
+        # Ollama's HTTP metadata endpoints may only be consulted when
+        # Ollama is the backend actually serving the request. "Not a
+        # single-model backend" is not the same question: a mock, a
+        # remote OpenAI-compatible server, or a future name-routing
+        # provider all select by name, and asking a stray Ollama daemon
+        # about a name *they* route would publish an unrelated model's
+        # numbers as though they described the live one. Identify the
+        # provider positively instead.
+        provider_is_ollama = getattr(active, "name", "") == "ollama"
         if single_model_backend:
             backend_model = active.backend_model_id() or ""
             # Reachable != resident. A single-model backend's health
@@ -391,12 +405,15 @@ def get_model_health(*, include_context_sizes: bool = True) -> dict:
             # residency stayed unknown (correctly) but two unrelated
             # facts went missing with it.
             #
-            # It must still not run for a single-model backend: those
-            # ignore the role's model *name*, so asking Ollama about that
-            # name would publish an unrelated model's numbers for a
-            # llama.cpp role whenever an Ollama daemon happens to be
-            # reachable on the same host.
-            if (runtime_ctx is None or context_capacity is None) and not single_model_backend:
+            # It must still not run unless Ollama is the *active*
+            # provider. ``/api/show`` describes whatever that daemon
+            # holds under the name, which says nothing about a model
+            # some other backend is serving under the same label — and a
+            # single-model backend does not look at the name at all.
+            # Gating on "is the provider Ollama" covers both, where
+            # gating on "is it single-model" left every other
+            # name-routing provider inheriting Ollama's metadata.
+            if (runtime_ctx is None or context_capacity is None) and provider_is_ollama:
                 if model not in context_cache:
                     context_cache[model] = _runtime_context_size(model)
                 configured, capacity = context_cache[model]

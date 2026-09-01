@@ -126,6 +126,16 @@ _MAX_RAW_PATH_CHARS = 4096
 MAX_TRACKED_FILES = 200_000
 _MAX_TRACKED_FILES = MAX_TRACKED_FILES  # legacy internal alias
 _MAX_SNIPPET_BYTES = 262_144  # bytes read from disk for one snippet
+
+#: The safe-open primitives the snippet reader requires. Without all
+#: three there is no way to walk a path without the kernel resolving
+#: symlinks for us, so the reader refuses to run rather than falling
+#: back to a path-based open that a swap could redirect.
+_SAFE_OPEN_SUPPORTED = (
+    hasattr(os, "O_NOFOLLOW")
+    and hasattr(os, "O_DIRECTORY")
+    and os.open in getattr(os, "supports_dir_fd", set())
+)
 _MAX_SNIPPET_LINES = 400      # lines returned for one snippet
 _MAX_SNIPPET_CHARS = 20_000   # characters returned for one snippet
 
@@ -590,6 +600,93 @@ class FileSnippet:
         }
 
 
+def _open_file_within(repo_root: Path, rel: str) -> tuple[int, os.stat_result]:
+    """Open ``rel`` under ``repo_root`` so no symlink can redirect the read.
+
+    ``validate_proposed_path`` proves containment against the filesystem
+    as it looked *at that moment*, using ``resolve()``. That is a
+    path-based answer, and a path-based answer expires: between the check
+    and the open, any component of the path can be replaced with a
+    symlink pointing outside the repository. Checking only the final
+    component (``O_NOFOLLOW`` on the leaf) does not close this — swapping
+    a parent such as ``src`` for a symlink to ``/etc`` redirects the walk
+    while the leaf name stays an ordinary file.
+
+    So the path is walked one component at a time:
+
+      * the validated repository root is opened once, as a directory;
+      * each parent component is opened **relative to the descriptor of
+        the parent before it**, with ``O_DIRECTORY | O_NOFOLLOW``;
+      * the leaf is opened relative to the final parent's descriptor with
+        ``O_NOFOLLOW`` and validated with ``fstat``.
+
+    A descriptor names the directory it was opened on, not the name it
+    was reached by, so replacing a component *after* its descriptor
+    exists cannot redirect anything: the swap is either caught by
+    ``O_NOFOLLOW`` on the way down or arrives too late to matter. The
+    walk never re-enters the path namespace, so there is no window left
+    for it to race against.
+
+    Symlinks are refused rather than resolved — including one that points
+    to a perfectly legitimate file inside the repo — because the reader's
+    contract is "regular files in the index", and a link is not one.
+
+    The caller owns the returned descriptor. Raises
+    :class:`RepoReadError` with a short, safe reason on any failure;
+    on a platform missing the primitives it fails closed rather than
+    falling back.
+    """
+    if not _SAFE_OPEN_SUPPORTED:  # pragma: no cover - POSIX in practice
+        raise RepoReadError(
+            "safe file reads are not supported on this platform"
+        )
+
+    parts = [part for part in rel.split("/") if part and part != "."]
+    if not parts:
+        raise RepoReadError("file not found in the linked repository")
+
+    open_flags = os.O_RDONLY | os.O_NOFOLLOW
+    dir_flags = open_flags | os.O_DIRECTORY
+
+    try:
+        root_fd = os.open(repo_root, dir_flags)
+    except OSError:
+        raise RepoReadError("linked repository could not be opened") from None
+
+    open_dirs = [root_fd]
+    try:
+        for name in parts[:-1]:
+            try:
+                open_dirs.append(os.open(name, dir_flags, dir_fd=open_dirs[-1]))
+            except OSError:
+                raise RepoReadError(
+                    "file not found in the linked repository"
+                ) from None
+
+        try:
+            fd = os.open(parts[-1], open_flags, dir_fd=open_dirs[-1])
+        except OSError:
+            raise RepoReadError(
+                "file not found in the linked repository"
+            ) from None
+
+        try:
+            info = os.fstat(fd)
+        except OSError:
+            os.close(fd)
+            raise RepoReadError("file could not be read") from None
+        if not stat.S_ISREG(info.st_mode):
+            os.close(fd)
+            raise RepoReadError("only regular files can be read")
+        return fd, info
+    finally:
+        for opened_dir in open_dirs:
+            try:
+                os.close(opened_dir)
+            except OSError:
+                pass
+
+
 def read_text_snippet(
     repo_path: str | os.PathLike[str],
     rel_path: object,
@@ -609,7 +706,13 @@ def read_text_snippet(
         must be repo-relative, traversal-free, non-secret
         (``.env``, keys, tokens, databases, ``.git`` internals …) and
         resolve *inside* the repo — symlinks included;
-      * only regular files are read (a symlink, directory, FIFO, or
+      * the file is opened by walking the validated repo root one
+        component at a time on directory descriptors, every component
+        with ``O_NOFOLLOW``, so a symlink swapped in **anywhere** on the
+        path — a parent directory, not just the final name — fails the
+        open rather than redirecting it (see :func:`_open_file_within`);
+      * only regular files are read, checked with ``fstat`` on the
+        descriptor actually opened (a symlink, directory, FIFO, or
         device is refused);
       * at most :data:`_MAX_SNIPPET_BYTES` are read from disk and the
         result is capped by ``max_lines`` / ``max_chars``;
@@ -631,44 +734,20 @@ def read_text_snippet(
     except PatchProposalError as exc:
         raise RepoReadError(str(exc)) from None
 
-    target = repo_root / rel
+    fd, opened = _open_file_within(repo_root, rel)
     try:
-        # ``lstat`` (not ``stat``) so a symlink is rejected as a symlink
-        # rather than followed to whatever it points at.
-        info = target.lstat()
+        handle = os.fdopen(fd, "rb")
     except OSError:
-        raise RepoReadError("file not found in the linked repository") from None
-    if not stat.S_ISREG(info.st_mode):
-        raise RepoReadError("only regular files can be read")
-
-    # Open without following symlinks, then re-check the *descriptor*.
-    # The ``lstat`` above and this open are two separate syscalls: a
-    # process that replaces the file with a symlink in between would
-    # otherwise have the open follow it, defeating both the symlink
-    # rejection and the containment check that ran on the path. O_NOFOLLOW
-    # makes that race fail closed, and fstat validates what was actually
-    # opened rather than what the path pointed at a moment ago.
-    try:
-        fd = os.open(target, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
-    except OSError:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
         raise RepoReadError("file could not be read") from None
-    try:
-        opened = os.fstat(fd)
-        if not stat.S_ISREG(opened.st_mode):
-            raise RepoReadError("only regular files can be read")
-        if (opened.st_dev, opened.st_ino) != (info.st_dev, info.st_ino):
-            raise RepoReadError("file changed while it was being read")
-        with os.fdopen(fd, "rb") as handle:
-            fd = -1  # ownership transferred to the file object
+    with handle:
+        try:
             raw = handle.read(_MAX_SNIPPET_BYTES)
-    except OSError:
-        raise RepoReadError("file could not be read") from None
-    finally:
-        if fd >= 0:
-            try:
-                os.close(fd)
-            except OSError:
-                pass
+        except OSError:
+            raise RepoReadError("file could not be read") from None
 
     try:
         text = raw.decode("utf-8")
@@ -677,7 +756,7 @@ def read_text_snippet(
     if _looks_binary(text):
         raise RepoReadError("file does not look like text")
 
-    file_truncated = info.st_size > len(raw)
+    file_truncated = opened.st_size > len(raw)
     lines = text.splitlines()
     total_lines = len(lines)
     line_cap = max(1, min(int(max_lines or 1), _MAX_SNIPPET_LINES))
