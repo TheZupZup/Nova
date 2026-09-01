@@ -104,6 +104,12 @@ and an existing file is never overwritten. Nothing is uploaded,
 registered, or pushed anywhere — the operator ends up with one file on
 their own disk and decides what happens next.
 
+If writing fails part way — a full filesystem is the usual cause — the
+partial file is removed rather than left behind. A truncated JSONL is
+worse than no file: it sits where a finished export belongs and can be
+mistaken for one, and while it exists the name is taken, so every retry
+fails as "already exists".
+
 **The file is created mode `0600`** — owner-readable only, set at
 creation rather than by a later `chmod`, which would leave a window in
 which the file already exists and is still world-readable. Relying on

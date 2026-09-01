@@ -118,8 +118,9 @@ against input that *almost* matches — 41 characters is already enough to
 outlast a 12-second timeout — and an evaluation worker that entered one
 would be gone for the life of the process.
 
-That blowup needs **ambiguity**: a repetition whose length can vary, so
-a failure forces the engine to retry every assignment. Because that is a
+That blowup needs **ambiguity**: somewhere the match boundary can land
+in more than one place, so a failure forces the engine to go back and
+try the others. Because that is a
 structural property, it is decided before the pattern is ever run.
 
 The property that matters is **variable length**, not "open-ended". A
@@ -127,6 +128,12 @@ bounded repeat is just as ambiguous when it can give ground: every `a?`
 in `^a?a?a?…a{30}$` is an independent match-or-skip decision, so thirty
 of them is 2³⁰ assignments to work through before failure can be
 reported — and that fits comfortably inside the 500-character value cap.
+
+Repetition is not the only way to get it. A **branch** whose
+alternatives end in different places is a choice point too:
+`^(?:a|aa)(?:a|aa)…b$` contains no repetition at all, and thirty of
+those branches is 2³⁰ combinations — measured at **18 seconds** against
+45 characters. So the budget below counts choice points of either kind.
 
 A pattern is refused when it contains:
 
@@ -140,16 +147,21 @@ A pattern is refused when it contains:
   where each `a+` is separated by a literal the repetitions on both
   sides also match, so the boundary between them slides freely and they
   compete despite not being neighbours;
-- more than eight variable-length repetitions in total.
+- more than eight ambiguous choices in total, counting both
+  variable-length repetitions and branches whose alternatives can match
+  at the same place and end in different ones — `a|aa`.
 
-Three things are deliberately **not** refused. Disjoint neighbours:
+Four things are deliberately **not** refused. Disjoint neighbours:
 `\s+\w+` cannot backtrack, because no character belongs to both
 classes, and it is the most common shape in a real constraint.
 Separators the repetitions cannot match: `\d+\.\d+` is two independent
-repetitions, because `.` is not a digit. And fixed repeats: `a{3}` cannot
-give ground, so it adds no ambiguity. Ordinary patterns —
-`def\s+\w+`, `\d+\.\d+`, `foo|bar`, `.*error.*`,
-`^\s*def\s+\w+\s*\(` — are unaffected.
+repetitions, because `.` is not a digit. Fixed repeats: `a{3}` cannot
+give ground, so it adds no ambiguity. And unambiguous alternation:
+`foo|bar` and `cat|car` always end in the same place, while
+`(?:GET|POST|DELETE)` has alternatives of different lengths that cannot
+begin at the same character, so at most one can ever match. Ordinary
+patterns — `def\s+\w+`, `\d+\.\d+`, `foo|bar`, `.*error.*`,
+`(?:GET|POST)\s+/\w+`, `^\s*def\s+\w+\s*\(` — are unaffected.
 
 ### What the screen does *not* promise
 

@@ -314,13 +314,28 @@ def export_jsonl(
         fd = os.open(
             target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600
         )
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(body)
     except FileExistsError:
         raise DatasetExportError(
             "A file with that name already exists; choose another name."
         ) from None
     except OSError:
+        raise DatasetExportError("The dataset file could not be written.") from None
+
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(body)
+    except OSError:
+        # A half-written export is worse than none. It is a syntactically
+        # plausible JSONL file sitting where a finished one belongs, so
+        # it can be mistaken for the real thing — and because the name is
+        # now taken, every retry with it fails as "already exists". The
+        # error path has to leave the disk as it found it. (Errors from
+        # the buffered close land here too, which is where a full
+        # filesystem usually surfaces.)
+        try:
+            os.unlink(target)
+        except OSError:  # pragma: no cover - nothing more we can do
+            pass
         raise DatasetExportError("The dataset file could not be written.") from None
 
     models = sorted({e.metadata["model"] for e in examples})

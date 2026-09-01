@@ -180,7 +180,12 @@ except ImportError:  # pragma: no cover - older interpreters
 #: that stalls needs far more.
 MAX_ELASTIC_REPEATS = 8
 
-#: Retained name for the previous, narrower cap.
+#: The budget is really over *choice points*, not repetitions: a branch
+#: whose alternatives end in different places lets the boundary move
+#: exactly as a variable-length repeat does. Both are counted here.
+MAX_AMBIGUOUS_CHOICES = MAX_ELASTIC_REPEATS
+
+#: Retained names for the previous, narrower caps.
 MAX_OPEN_ENDED_REPEATS = MAX_ELASTIC_REPEATS
 
 #: How many variable-length repetitions may compete for the same
@@ -314,6 +319,112 @@ def _bodies_can_overlap(first, second) -> bool:
         return True
 
 
+def _length_range(nodes) -> tuple[int, Optional[int]]:
+    """Characters this sequence can consume, as ``(min, max)``.
+
+    ``max`` is ``None`` when unbounded. Used to tell a branch that can
+    hand different boundaries to whatever follows it from one that
+    always ends in the same place.
+    """
+    low = 0
+    high: Optional[int] = 0
+    for op, av in nodes:
+        name = _op_name(op)
+        if name in ("AT",) or name in _ASSERT_OPS:
+            continue  # zero-width
+        if name in ("LITERAL", "NOT_LITERAL", "ANY", "IN", "CATEGORY"):
+            low += 1
+            if high is not None:
+                high += 1
+            continue
+        if name in _REPEAT_OPS:
+            body_low, body_high = _length_range(av[2])
+            repeat_low = av[0] if isinstance(av[0], int) else 0
+            low += repeat_low * body_low
+            unbounded = (
+                av[1] is None
+                or av[1] == getattr(_re_parser, "MAXREPEAT", None)
+                or body_high is None
+            )
+            if unbounded or high is None:
+                high = None
+            else:
+                high += av[1] * body_high
+            continue
+        if name in _GROUP_OPS:
+            for body in _sub_sequences(name, av):
+                body_low, body_high = _length_range(body)
+                low += body_low
+                high = None if (high is None or body_high is None) else high + body_high
+            continue
+        if name == "BRANCH":
+            ranges = [_length_range(alt) for alt in av[1]]
+            if ranges:
+                low += min(r[0] for r in ranges)
+                if high is None or any(r[1] is None for r in ranges):
+                    high = None
+                else:
+                    high += max(r[1] for r in ranges)
+            continue
+        high = None  # something unmodelled: assume it can consume anything
+    return low, high
+
+
+def _first_char_test(nodes):
+    """Predicate for the first character this sequence consumes, or ``None``."""
+    for op, av in nodes:
+        name = _op_name(op)
+        if name in ("AT",) or name in _ASSERT_OPS:
+            continue
+        if name in _REPEAT_OPS:
+            if not isinstance(av[0], int) or av[0] == 0:
+                # Optional: the first character may come from later on.
+                return None
+            return _first_char_test(av[2])
+        if name in _GROUP_OPS:
+            for body in _sub_sequences(name, av):
+                return _first_char_test(body)
+            return None
+        if name == "BRANCH":
+            return None
+        return _char_test((op, av))
+    return None
+
+
+def _branch_is_ambiguous(alternatives) -> bool:
+    """Can two alternatives match at one place and end in different ones?
+
+    That is what makes a branch a **choice point**: the boundary handed
+    to whatever follows can land in more than one spot, so a later
+    failure sends the engine back to try the other alternative. Thirty
+    of them in a row is 2**30 combinations, with no repetition anywhere
+    in the pattern.
+
+    ``a|aa`` is such a branch. ``foo|bar`` is not — at most one can match
+    at a given position — and neither is ``cat|car``, because both end
+    in the same place whatever happens.
+    """
+    described = []
+    for alternative in alternatives:
+        described.append(
+            (_length_range(alternative), _first_char_test(alternative))
+        )
+    for index, ((low_a, high_a), test_a) in enumerate(described):
+        for (low_b, high_b), test_b in described[index + 1:]:
+            fixed_a = high_a is not None and low_a == high_a
+            fixed_b = high_b is not None and low_b == high_b
+            if fixed_a and fixed_b and low_a == low_b:
+                continue  # same length: the boundary cannot move
+            if test_a is None or test_b is None:
+                return True  # cannot prove they are exclusive
+            try:
+                if any(test_a(c) and test_b(c) for c in _PROBE_CHARS):
+                    return True
+            except Exception:  # pragma: no cover - defensive
+                return True
+    return False
+
+
 def _ambiguity_in(nodes) -> Optional[str]:
     """Why the body of a repetition could match one span two ways."""
     for op, av in nodes:
@@ -372,11 +483,21 @@ def _screen_sequence(nodes, state: dict) -> Optional[str]:
             if reason:
                 return reason
 
+        if name == "BRANCH" and _branch_is_ambiguous(av[1]):
+            # Repetition is not the only source of ambiguity. A branch
+            # whose alternatives end in different places is a choice
+            # point too, and a run of them multiplies exactly the same
+            # way — ``(?:a|aa)`` thirty times over has no repetition in
+            # it at all and still costs 2**30.
+            state["elastic"] += 1
+            if state["elastic"] > MAX_AMBIGUOUS_CHOICES:
+                return "too many ambiguous choices"
+
         body = _elastic_body(name, av)
         if body is not None:
             state["elastic"] += 1
-            if state["elastic"] > MAX_ELASTIC_REPEATS:
-                return "too many variable-length repetitions"
+            if state["elastic"] > MAX_AMBIGUOUS_CHOICES:
+                return "too many ambiguous choices"
             if previous_body is not None and _bodies_can_overlap(
                 previous_body, body
             ):
@@ -1481,7 +1602,8 @@ __all__ = [
     "STATUS_QUEUED", "STATUS_RUNNING", "STATUS_DONE", "STATUS_ERROR",
     "STATUS_INTERRUPTED", "recover_interrupted_runs",
     "EvalError", "TooManyRunsInProgress", "Constraint", "EvalCase",
-    "unsafe_regex_reason", "MAX_ELASTIC_REPEATS", "MAX_OPEN_ENDED_REPEATS",
+    "unsafe_regex_reason", "MAX_AMBIGUOUS_CHOICES",
+    "MAX_ELASTIC_REPEATS", "MAX_OPEN_ENDED_REPEATS",
     "VALUE_BEARING_KINDS",
     "parse_case", "load_cases", "get_case",
     "builtin_cases_dir", "operator_cases_dir",

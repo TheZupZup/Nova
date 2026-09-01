@@ -1802,3 +1802,149 @@ class TestEveryDocAgreesAboutTheEvaluationContext:
         for name in ("model-evaluation.md", "model-profiles.md"):
             text = docs[name]
             assert "actually" in text or "observed" in text, name
+
+
+# ── Round 13 ────────────────────────────────────────────────────────
+
+
+class TestAlternationIsAmbiguityToo:
+    r"""P1: the screen modelled repetition as the only source of ambiguity.
+
+    ``^(?:a|aa)(?:a|aa)…b$`` contains no repetition at all. Each branch
+    can end in two places, so the boundary handed to the next one moves,
+    and thirty of them is 2**30 combinations. Measured at **18 seconds**
+    against 45 characters — against responses allowed up to 40,000.
+
+    The budget is therefore over *choice points*, not repetitions: a
+    variable-length repeat and a branch whose alternatives end in
+    different places are the same thing to the engine.
+    """
+
+    BOMB = "^" + "(?:a|aa)" * 30 + "b$"
+
+    def test_sequential_ambiguous_alternations_are_refused(self):
+        assert me.unsafe_regex_reason(self.BOMB) is not None
+
+    def test_it_fails_closed_instantly(self):
+        constraint = me.Constraint(kind=me.CONSTRAINT_MUST_MATCH, value=self.BOMB)
+        started = time.monotonic()
+        passed, detail = constraint.check("a" * 45)
+        assert passed is False
+        assert "refused" in detail
+        assert time.monotonic() - started < 1.0
+
+    def test_same_length_alternatives_are_not_a_choice_point(self):
+        """``foo|bar`` and ``cat|car`` always end in the same place."""
+        assert me.unsafe_regex_reason(r"foo|bar") is None
+        assert me.unsafe_regex_reason(r"cat|car") is None
+        assert me.unsafe_regex_reason("^" + "(?:foo|bar)" * 30 + "$") is None
+
+    def test_differing_lengths_with_disjoint_starts_are_not_either(self):
+        """Only one of these can match at a given position."""
+        assert me.unsafe_regex_reason(r"(?:GET|POST|DELETE)\s+/\w+") is None
+        assert me.unsafe_regex_reason(r"(?:cat|horse)") is None
+
+    def test_a_prefix_alternative_is_a_choice_point(self):
+        """``a|aa`` can match at one place and end in two."""
+        assert me.unsafe_regex_reason("^" + "(?:a|ab)" * 30 + "z$") is not None
+
+    def test_a_handful_of_ambiguous_branches_is_still_allowed(self):
+        assert me.unsafe_regex_reason(r"(?:a|aa)_(?:b|bb)") is None
+
+    def test_the_shipped_cases_still_load(self):
+        cases, problems = me.load_cases()
+        assert len(cases) == 3
+        assert not problems
+
+
+class TestAFailedExportLeavesNoFile:
+    """P2: a partial write left a plausible-looking JSONL on disk.
+
+    A truncated export is worse than no export: it sits where a finished
+    one belongs and can be mistaken for it, and because the name is
+    taken every retry fails as "already exists".
+    """
+
+    @pytest.fixture
+    def one_example(self, monkeypatch):
+        example = cd.DatasetExample(
+            prompt="p", completion="c",
+            metadata={"model": "m", "case_id": "c", "result_id": "1"},
+        )
+        monkeypatch.setattr(
+            cd, "build_examples", lambda ids, db_path=None: [example]
+        )
+        return example
+
+    def test_a_write_failure_removes_the_partial_file(
+        self, tmp_path, monkeypatch, one_example
+    ):
+        monkeypatch.setattr(cd, "export_dir", lambda: tmp_path)
+
+        real_fdopen = os.fdopen
+
+        class _FailingHandle:
+            def __init__(self, wrapped):
+                self._wrapped = wrapped
+
+            def write(self, _data):
+                raise OSError(28, "No space left on device")
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                self._wrapped.close()
+                return False
+
+        def _fdopen(fd, *args, **kwargs):
+            return _FailingHandle(real_fdopen(fd, *args, **kwargs))
+
+        monkeypatch.setattr(os, "fdopen", _fdopen)
+
+        with pytest.raises(cd.DatasetExportError):
+            cd.export_jsonl([1], "doomed.jsonl")
+        assert not (tmp_path / "doomed.jsonl").exists()
+
+    def test_the_name_is_reusable_after_a_failure(
+        self, tmp_path, monkeypatch, one_example
+    ):
+        """The point of cleaning up: a retry must not hit 'already exists'."""
+        monkeypatch.setattr(cd, "export_dir", lambda: tmp_path)
+        real_fdopen = os.fdopen
+        calls = {"n": 0}
+
+        class _FailingHandle:
+            def __init__(self, wrapped):
+                self._wrapped = wrapped
+
+            def write(self, _data):
+                raise OSError(28, "No space left on device")
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                self._wrapped.close()
+                return False
+
+        def _fdopen(fd, *args, **kwargs):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return _FailingHandle(real_fdopen(fd, *args, **kwargs))
+            return real_fdopen(fd, *args, **kwargs)
+
+        monkeypatch.setattr(os, "fdopen", _fdopen)
+
+        with pytest.raises(cd.DatasetExportError):
+            cd.export_jsonl([1], "retry.jsonl")
+        info = cd.export_jsonl([1], "retry.jsonl")
+        assert pathlib.Path(info["path"]).exists()
+        assert os.stat(info["path"]).st_mode & 0o777 == 0o600
+
+    def test_a_successful_export_is_untouched(
+        self, tmp_path, monkeypatch, one_example
+    ):
+        monkeypatch.setattr(cd, "export_dir", lambda: tmp_path)
+        info = cd.export_jsonl([1], "fine.jsonl")
+        assert pathlib.Path(info["path"]).exists()
