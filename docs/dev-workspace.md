@@ -91,6 +91,56 @@ It is reachable per linked project at either
 or `POST /projects/{id}/patch-proposals/validate` (the spec-suggested
 "validate-only" alias). Both share the same body, scope, and response.
 
+## Code-mode grounding (uses Phase 1, adds no new power)
+
+Reading a repo's state is only useful if it reaches the model. When a
+project has a linked repository **and** you explicitly pick **Code**
+mode, Nova attaches a small read-only briefing to that turn:
+
+- the current branch and clean/dirty state,
+- the changed files (from `git status --porcelain`),
+- recent commits,
+- a compact layout line (top-level directories, tracked-file count), and
+- a handful of **bounded source excerpts** — the files you actually
+  named in your message, then the files you are currently changing.
+
+It is built by `core/code_context.py` on top of the same allowlisted,
+read-only helpers described below, and it is bounded on every axis:
+at most `NOVA_CODE_CONTEXT_FILES` files (default 4, ceiling 8), 200 lines
+per file, and a total `NOVA_CODE_CONTEXT_BUDGET` character budget
+(default 12000, ceiling 40000). A large repository produces the same
+small block a small one does — **there is no repository dump**.
+
+Three properties are worth stating plainly:
+
+1. **Nova chooses the files, deterministically, from your message and
+   git state.** The model cannot request a file, cannot widen the
+   selection, and cannot cause a read on a later turn.
+2. **File discovery reads git's index** (`git ls-files`), not the
+   filesystem — there is no directory walk. **Contents are only ever
+   read from files in that index.** `git status` also reports untracked
+   files, and an untracked file (a scratch note, a local dump, a
+   generated artefact) is exactly what must not reach a prompt, so
+   changed-file candidates are intersected with the tracked set before
+   anything is read — being un-`.gitignore`d is not enough to get a file
+   excerpted. Every excerpt path additionally goes through the same
+   secret-path validation a patch proposal does. `.env`, keys, tokens,
+   databases and `.git` internals can never be excerpted. Symlinks,
+   non-regular files, and non-UTF-8 or control-character content are
+   refused. The index listing is bounded only to keep memory finite on a
+   pathological repository; if that bound is ever hit the briefing says
+   the listing was truncated rather than under-reporting the count, and
+   a path it could not confirm as tracked is excluded (a missed excerpt,
+   never a leak).
+3. **The block is untrusted data.** It is inserted *below* Nova's
+   identity and safety contract and opens with an explicit frame saying
+   so, so a comment inside a source file or a commit message can never
+   act as an instruction.
+
+Turn it off with `NOVA_CODE_CONTEXT_ENABLED=false`; the Dev Workspace
+panel is unaffected. It is inert on any install that has not configured
+`NOVA_DEV_WORKSPACE_ROOTS` and linked a repository.
+
 ## What Phase 1 and Phase 2 deliberately do NOT do
 
 - No applying a patch, no file writes anywhere in the repository.
@@ -101,8 +151,12 @@ or `POST /projects/{id}/patch-proposals/validate` (the spec-suggested
   is a *pure transform* — it spawns no process and touches no git.
 - No `sudo` / `pkexec` / `doas` / `su` / `runuser`.
 - No GitHub / Codeberg API calls.
-- No secrets read, stored, or surfaced; a proposal can never target a
-  secret/private file (see the safety boundaries below).
+- No secrets read, stored, or surfaced; neither a proposal nor a
+  code-mode excerpt can ever target a secret/private file (see the
+  safety boundaries below).
+- No repository dumps into a prompt — code-mode grounding is capped by
+  file count, line count, and a total character budget, and it is never
+  persisted.
 - No autonomous actions of any kind — every read and every proposal is
   triggered by you.
 
@@ -129,9 +183,11 @@ These are enforced in `core/dev_workspace.py` and covered by
    refused, because containment is checked on the *resolved* path.
 3. **Allowlisted git only.** Every subprocess is built from a
    hard-coded argv tuple drawn from a frozen allowlist of the
-   read-only subcommands above. No user / model / chat input is ever
-   concatenated into a command; the validated repo path is used solely
-   as the process working directory, never inside argv.
+   read-only subcommands above, plus `ls-files` for index-only file
+   discovery. No user / model / chat input is ever concatenated into a
+   command; the validated repo path is used solely as the process
+   working directory, never inside argv. A test asserts that no write,
+   network, or history-rewriting subcommand can enter the allowlist.
 4. **`shell=False` everywhere**, stdin closed, per-call timeouts, and
    `GIT_TERMINAL_PROMPT=0` / `GIT_OPTIONAL_LOCKS=0` so a read can
    never prompt, hang, or take a repository lock.
@@ -144,7 +200,49 @@ These are enforced in `core/dev_workspace.py` and covered by
    per-project and per-user exactly like the rest of the project
    surface; a foreign / unknown project id returns `404` (never `403`)
    so existence is not leaked across accounts.
-7. **Patch proposals are a pure, review-only transform (Phase 2).**
+7. **File excerpts are read-only, validated, and capped.**
+   `read_text_snippet` is the only file-content read in the Dev
+   Workspace. It re-validates the repo, puts the requested path through
+   the same repo-relative / traversal-free / non-secret / contained
+   rules a patch proposal uses, then reads **only a regular file**,
+   at most 256 KiB from disk, decoded as UTF-8, refused if
+   it carries NUL or other unsafe control bytes, and truncated to the
+   caller's line and character caps with `truncated: true` set. It opens
+   the file for reading and does nothing else.
+
+   **The git reads are anchored the same way.** Hardening file
+   *contents* while leaving the metadata beside them redirectable would
+   protect half the surface: a repository swapped after validation would
+   still supply the branch name and commit subjects that go into the
+   Code-mode prompt. Each git invocation therefore runs with its working
+   directory set to a descriptor obtained by the same no-follow walk
+   (via `/proc/self/fd`, since `subprocess` cannot take a descriptor
+   directly). Where a host cannot do that at all — no `/proc`, no
+   `O_NOFOLLOW`/`dir_fd` — the read falls back to the validated path,
+   which is what it always did. But when the host *can* anchor and the
+   walk **fails**, the read is refused rather than retried by path:
+   the walk fails exactly when something has been swapped, so falling
+   back at that moment would hand over the redirect it just caught.
+
+   **The open cannot be redirected by a symlink swap.** Path validation
+   proves containment against the filesystem as it looked at that
+   instant, using `resolve()` — and that answer expires the moment it
+   returns. In the window before the open, any component of the path can
+   be replaced with a symlink pointing outside the repository, and
+   guarding only the final component does not help: swapping a parent
+   such as `src` for a link to `/etc` redirects the read while the leaf
+   name stays an ordinary file.
+
+   So the path is walked one component at a time on **directory
+   descriptors**. The validated repo root is opened once; each parent is
+   opened relative to the descriptor of the parent before it, with
+   `O_DIRECTORY | O_NOFOLLOW`; the leaf is opened relative to the final
+   parent with `O_NOFOLLOW` and validated with `fstat`. A descriptor
+   names the directory it was opened on, not the name it was reached by,
+   so a swap is either caught by `O_NOFOLLOW` on the way down or arrives
+   too late to matter. On a platform lacking those primitives the read
+   is **refused** — there is no path-based fallback.
+8. **Patch proposals are a pure, review-only transform (Phase 2).**
    `build_patch_proposal` re-validates the linked repo with the same
    hard rules as Phase 1, then for every proposed change:
    - the path must be **repo-relative** — an absolute path, a `~`, a
@@ -177,14 +275,14 @@ These are enforced in `core/dev_workspace.py` and covered by
      `review_only: true` / `applied: false`, and includes a transient
      random `id` + UTC `created_at` so the UI can pin a preview to a
      specific build (no proposal is persisted in this phase).
-8. **No "Apply" affordance in the UI.** The patch proposal preview
+9. **No "Apply" affordance in the UI.** The patch proposal preview
    surface inside the Dev Workspace panel only renders the result and
    offers **Copy patch** / **Copy test plan** clipboard helpers.
    There is no button, endpoint, or code path in this phase that
    could write the proposed diff to disk.
 
-The linked path **and any patch proposal** are **contextual data
-only** — they confer no write power. They are surfaced to the model
+The linked path, the code-mode briefing, **and any patch proposal**
+are **contextual data only** — they confer no write power. They are surfaced to the model
 the same way other project context is: strictly *below* the identity /
 safety contract in the system prompt, where they cannot override
 safety, identity, auth, or admin rules. A proposal is a suggestion you

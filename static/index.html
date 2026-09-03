@@ -3269,6 +3269,33 @@
                     </div>
 
                     <!--
+                      Model roles & runtime health (admin-only, read-only).
+                      Answers the operator's real questions in one place:
+                      which model fills each routing role, what Nova
+                      assumes about it (its profile), whether the backend
+                      actually has it installed, whether it is loaded
+                      right now, and what context size the runtime
+                      reports. Backed solely by GET /admin/models/health,
+                      which performs read-only probes — it never pulls,
+                      loads, generates, or restarts anything, and it
+                      makes no assumption about any GPU vendor. Hidden
+                      entirely for non-admins (the endpoint is
+                      require_admin and would 403).
+                    -->
+                    <div class="settings-row" id="settings-model-roles-row" style="display:none;">
+                        <div class="settings-row-head">
+                            <div class="settings-row-label">
+                                <span class="settings-row-title" id="settings-model-roles-title">Model roles &amp; health</span>
+                                <span class="settings-row-hint" id="settings-model-roles-hint">Which model fills each role, its profile, and whether it is installed and loaded. Read-only · admin-only.</span>
+                            </div>
+                            <button class="memory-btn" id="settings-model-roles-refresh-btn" onclick="loadModelRolesCard()" style="white-space:nowrap;">Refresh</button>
+                        </div>
+                        <div id="settings-model-roles-summary" style="margin-top:10px;">
+                            <div class="admin-empty">Loading…</div>
+                        </div>
+                    </div>
+
+                    <!--
                       Default model (admin-only). Lists the models the
                       active provider actually reports and lets an admin
                       choose which one Nova uses by default. The chosen
@@ -6590,6 +6617,7 @@
         // is free in the common path.
         if (pane === "models") {
             loadModelsProviderCard().catch(() => {});
+            loadModelRolesCard().catch(() => {});
             loadDefaultModelCard().catch(() => {});
             loadGgufCard().catch(() => {});
         }
@@ -8585,6 +8613,111 @@
                 `<span class="admin-warning-msg">${escapeHtml(w)}</span>` +
                 `</div>`
             );
+        }
+        summary.innerHTML = parts.join("");
+    }
+
+    // ── Settings → Models: model roles & runtime health (admin-only) ──
+    //
+    // One read-only card answering "what fills each role, what does Nova
+    // assume about it, and is it actually installed and loaded?".
+    // Backed solely by GET /admin/models/health: read-only probes only —
+    // never a pull, a load, a generation, or a restart. Admin-gated on
+    // the client (the row is hidden for non-admins) and on the server
+    // (the endpoint is require_admin). An unreachable backend renders as
+    // a calm notice, never an error state, and roles report "unknown"
+    // rather than falsely claiming a model is missing.
+    async function loadModelRolesCard() {
+        const row = document.getElementById("settings-model-roles-row");
+        if (!row) return;
+        const isAdmin = !!(currentUser && currentUser.role === "admin");
+        if (!isAdmin) { row.style.display = "none"; return; }
+        row.style.display = "";
+        const summary = document.getElementById("settings-model-roles-summary");
+        const btn = document.getElementById("settings-model-roles-refresh-btn");
+        if (summary) summary.innerHTML = '<div class="admin-empty">Loading…</div>';
+        if (btn) btn.disabled = true;
+        try {
+            const res = await fetch("/admin/models/health", {
+                headers: { "Authorization": `Bearer ${token}` }
+            });
+            if (res.status === 401) { logout(); return; }
+            if (res.status === 403) { row.style.display = "none"; return; }
+            if (!res.ok) {
+                if (summary) summary.innerHTML = '<div class="admin-empty">Failed to load model health.</div>';
+                return;
+            }
+            renderModelRolesCard(await res.json());
+        } catch (e) {
+            if (summary) summary.innerHTML = '<div class="admin-empty">Failed to load model health.</div>';
+        } finally {
+            if (btn) btn.disabled = false;
+        }
+    }
+
+    // `loaded` is tri-state: true / false / null, where null means the
+    // runtime's loaded-model view could not be read. An installed model
+    // whose residency is unknown must not render as a bare "installed"
+    // (which reads as "not loaded") — the backend went to the trouble of
+    // saying it does not know, so say that.
+    function modelRoleStateTag(state, loaded) {
+        if (state === "loaded") return '<span class="admin-tag installed">loaded</span>';
+        if (state === "installed") {
+            return loaded === null
+                ? '<span class="admin-tag">installed · load state unknown</span>'
+                : '<span class="admin-tag">installed · not loaded</span>';
+        }
+        if (state === "not_installed") return '<span class="admin-tag error">not installed</span>';
+        return '<span class="admin-tag">unknown</span>';
+    }
+
+    function renderModelRolesCard(health) {
+        const summary = document.getElementById("settings-model-roles-summary");
+        if (!summary) return;
+        const roles = Array.isArray(health.roles) ? health.roles : [];
+        const parts = [];
+
+        if (!health.reachable) {
+            parts.push(
+                `<div class="admin-warning warning">` +
+                `<span class="admin-warning-level">notice</span>` +
+                `<span class="admin-warning-msg">The model backend is unreachable, so installed/loaded state cannot be read. Nothing below is a claim that a model is missing.</span>` +
+                `</div>`
+            );
+        }
+
+        for (const role of roles) {
+            const model = role.model
+                ? escapeHtml(role.model) : "(not configured)";
+            const traits = [];
+            if (role.code_specialized) traits.push("code-specialised");
+            if (role.supports_tools) traits.push("tool-capable");
+            if (role.resource_class && role.resource_class !== "unknown") {
+                traits.push(escapeHtml(role.resource_class));
+            }
+            const runtimeCtx = (typeof role.runtime_context_size === "number")
+                ? String(role.runtime_context_size) : "not reported";
+            parts.push(
+                `<div class="admin-model-row">` +
+                `<div class="admin-model-head">` +
+                `<span class="admin-model-display">${escapeHtml(role.role || "")}</span>` +
+                modelRoleStateTag(role.state, role.loaded) +
+                `</div>` +
+                `<div class="admin-model-name">${model}</div>` +
+                `<div class="admin-progress-meta">context — Nova assumes: <code>${escapeHtml(String(role.profile_context_size || "—"))}</code> · runtime reports: <code>${escapeHtml(runtimeCtx)}</code></div>` +
+                (traits.length
+                    ? `<div class="admin-progress-meta">profile: ${escapeHtml(traits.join(" · "))} <code>${escapeHtml(role.profile_source || "")}</code></div>`
+                    : "") +
+                (role.hint
+                    ? `<div class="admin-progress-meta">${escapeHtml(role.hint)}</div>`
+                    : "") +
+                `</div>`
+            );
+        }
+
+        if (!parts.length) {
+            summary.innerHTML = '<div class="admin-empty">No roles configured.</div>';
+            return;
         }
         summary.innerHTML = parts.join("");
     }

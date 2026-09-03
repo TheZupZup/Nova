@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import ast
 import contextlib
+import io
 import os
 import shutil
 import sqlite3
@@ -293,8 +294,13 @@ class TestModuleSafetyContract:
             "revert", "gc", "prune", "fsck", "init", "config",
             "switch", "restore", "worktree", "submodule",
         }
+        # ``ls-files`` prints the index and is as read-only as
+        # ``status``; it is what lets code-mode grounding resolve a
+        # filename without ever scanning the filesystem.
         for argv in dw._ALLOWED_GIT_ARGV:
-            assert argv[0] in {"status", "branch", "log", "diff"}
+            assert argv[0] in {
+                "status", "branch", "log", "diff", "ls-files",
+            }
             assert not (set(argv) & forbidden)
 
     def test_run_git_refuses_non_allowlisted_argv(self, real_repo):
@@ -305,25 +311,44 @@ class TestModuleSafetyContract:
             dw._run_git(["status"], repo_path=str(repo))
 
     def test_repo_path_is_never_in_argv(self, real_repo, monkeypatch):
-        """The repo path is only ever the cwd — never an argv element."""
+        """The repo is only ever the cwd — never an argv element."""
         repo, _ = real_repo
         seen = {}
 
-        class _R:
+        class _Proc:
             returncode = 0
-            stdout = b""
-            stderr = b""
 
-        def fake_run(argv, **kwargs):
+            def __init__(self):
+                self.stdout = io.BytesIO(b"")
+                self.stderr = io.BytesIO(b"")
+
+            def wait(self):
+                return 0
+
+            def kill(self):
+                pass
+
+        def fake_popen(argv, **kwargs):
             seen["argv"] = argv
             seen["cwd"] = kwargs.get("cwd")
             seen["shell"] = kwargs.get("shell")
-            return _R()
+            return _Proc()
 
-        monkeypatch.setattr(dw.subprocess, "run", fake_run)
+        monkeypatch.setattr(dw.subprocess, "Popen", fake_popen)
         dw._run_git(["status", "--short"], repo_path=str(repo))
-        assert seen["cwd"] == str(repo)
+
+        # No element of argv mentions the repository, however the cwd is
+        # expressed — that is the invariant, and it survives the cwd
+        # becoming a descriptor-backed path.
+        assert all(str(repo) not in part for part in seen["argv"])
         assert seen["shell"] is False
+
+        # The cwd is either the repo itself or a descriptor standing in
+        # for it; never anything else.
+        assert (
+            seen["cwd"] == str(repo)
+            or seen["cwd"].startswith(dw._PROC_SELF_FD)
+        )
         assert str(repo) not in seen["argv"][1:]
         assert seen["argv"][1:] == ["status", "--short"]
 

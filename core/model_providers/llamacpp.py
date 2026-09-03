@@ -117,6 +117,12 @@ class LlamaCppProvider(ModelProvider):
 
     name = "llamacpp"
 
+    #: This backend serves exactly one configured ``.gguf``.
+    #: ``generate``/``stream`` never look at ``request.model`` — the file
+    #: on disk decides. Anything that reports "which model produced this"
+    #: must use :meth:`backend_model_id`, not the requested label.
+    selects_model_by_name = False
+
     def __init__(
         self,
         model_path: Optional[str] = None,
@@ -247,6 +253,30 @@ class LlamaCppProvider(ModelProvider):
                 raise ModelProviderError(_STREAM_FAILED_MSG) from exc
 
     # ── health ──────────────────────────────────────────────────────
+
+    def is_model_resident(self) -> Optional[bool]:
+        """True once the ``.gguf`` is actually loaded into memory.
+
+        ``health()`` deliberately never loads the model, so being
+        configured and reachable says nothing about residency: until the
+        first :meth:`generate` / :meth:`stream` the handle is unset and
+        the next request pays a full model load. Reading the handle is
+        cheap and loads nothing.
+        """
+        return self._llama is not None
+
+    def backend_model_id(self) -> str:
+        """Basename of the configured ``.gguf``, or ``""`` if unset.
+
+        The same string :meth:`health` reports, so the health surface and
+        the evaluation harness agree on what this backend actually runs.
+        Never raises and never loads the model.
+        """
+        try:
+            path = self._model_path
+        except Exception:  # pragma: no cover - defensive
+            return ""
+        return os.path.basename(path) if path else ""
 
     def health(self) -> ProviderHealth:
         """Cheap, read-only probe. Never raises; never loads the model.

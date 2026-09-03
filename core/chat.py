@@ -261,6 +261,7 @@ def build_messages(
     natural_memories=None,
     personalization: dict | None = None,
     feedback_preferences: str | None = None,
+    code_context: str | None = None,
 ) -> list[dict]:
     """Construit la liste de messages à envoyer à Ollama.
 
@@ -275,6 +276,14 @@ def build_messages(
     *below* the identity contract and the personalization block so it
     cannot override safety rules, identity rules, or capability bounds —
     feedback shapes style, not power.
+
+    `code_context` is the bounded, read-only repository briefing built by
+    ``core.code_context.build_code_context`` for a Code-mode turn on a
+    project with a linked repo. Like the feedback block it is appended
+    *below* the identity contract, and it carries its own trust frame
+    naming it untrusted reference data — so a comment in a source file
+    or a commit subject can never act as an instruction, and it can
+    never grant Nova a capability it does not otherwise have.
     """
     if context_type == "weather":
         system_prompt = WEATHER_SYSTEM_PROMPT.format(weather_data=extra_context)
@@ -294,6 +303,11 @@ def build_messages(
         # Sits below identity + personalization on purpose: the system
         # prompt is ordered so safety/identity rules always win.
         parts.append(feedback_preferences)
+    if code_context:
+        # Repository facts are *data*, so they sit below identity,
+        # personalization, and preferences — never above the safety
+        # rules that decide what Nova will do with them.
+        parts.append(code_context)
     parts.append(format_time_context())
 
     messages = [{"role": "system", "content": "\n\n".join(parts)}]
@@ -323,6 +337,7 @@ def chat(
     project_id: int | None = None,
     request_id: str | None = None,
     cancel_event: threading.Event | None = None,
+    code_context: str | None = None,
 ) -> tuple[str, str]:  # noqa: E501
     """
     Envoie un message à Nova et retourne sa réponse et le modèle utilisé.
@@ -392,6 +407,7 @@ def chat(
                     history, user_input, memories, weather_data, "weather",
                     personalization=personalization,
                     feedback_preferences=feedback_prefs,
+                    code_context=code_context,
                 )
                 reply = _generate(
                     model,
@@ -416,6 +432,7 @@ def chat(
                 history, user_input, memories, search_results, "search",
                 personalization=personalization,
                 feedback_preferences=feedback_prefs,
+                code_context=code_context,
             )
             reply = _generate(
                 model,
@@ -432,6 +449,7 @@ def chat(
             natural_memories=natural_mems,
             personalization=personalization,
             feedback_preferences=feedback_prefs,
+            code_context=code_context,
         )
         reply = _generate(
             model,
@@ -449,6 +467,7 @@ def chat(
                     history, user_input, memories, search_results, "search",
                     personalization=personalization,
                     feedback_preferences=feedback_prefs,
+                    code_context=code_context,
                 )
                 reply = _generate(
                     model,
@@ -482,6 +501,7 @@ def chat_stream(
     project_id: int | None = None,
     request_id: str | None = None,
     cancel_event: threading.Event | None = None,
+    code_context: str | None = None,
 ) -> Iterator[dict]:
     """Generator twin of :func:`chat` that yields incremental events.
 
@@ -556,6 +576,7 @@ def chat_stream(
                     history, user_input, memories, weather_data,
                     "weather", personalization=personalization,
                     feedback_preferences=feedback_prefs,
+                    code_context=code_context,
                 )
                 reply = yield from _stream_and_accumulate(
                     model, messages, request_id=request_id,
@@ -583,6 +604,7 @@ def chat_stream(
                 history, user_input, memories, search_results,
                 "search", personalization=personalization,
                 feedback_preferences=feedback_prefs,
+                code_context=code_context,
             )
             reply = yield from _stream_and_accumulate(
                 model, messages, request_id=request_id,
@@ -596,6 +618,7 @@ def chat_stream(
             history, user_input, memories,
             natural_memories=natural_mems, personalization=personalization,
             feedback_preferences=feedback_prefs,
+            code_context=code_context,
         )
         reply = yield from _stream_and_accumulate(
             model,
@@ -619,6 +642,7 @@ def chat_stream(
                     history, user_input, memories, search_results,
                     "search", personalization=personalization,
                     feedback_preferences=feedback_prefs,
+                    code_context=code_context,
                 )
                 reply = yield from _stream_and_accumulate(
                     model,

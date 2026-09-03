@@ -1,0 +1,15 @@
+{
+  "id": "explain-regression",
+  "title": "Explain a regression from a diff, without inventing files",
+  "role": "code",
+  "source": "nova/builtin",
+  "prompt": "A test started failing after this change:\n\n```diff\n-def is_clean(status_output):\n-    return status_output.strip() == \"\"\n+def is_clean(status_output):\n+    return not status_output\n```\n\nThe helper is called with the raw stdout of `git status --porcelain`, which ends with a trailing newline when there are changes and is an empty string when the tree is clean. Explain in plain prose why the new version is wrong and what it now reports for a dirty tree. Do not write any code, and do not refer to any file that is not shown above.",
+  "constraints": [
+    {"kind": "must_contain", "value": "newline", "description": "identifies the trailing-newline behaviour"},
+    {"kind": "must_not_contain", "value": "```", "description": "follows the no-code instruction"},
+    {"kind": "max_chars", "value": "1500", "description": "stays concise"},
+    {"kind": "min_chars", "value": "120", "description": "is a real explanation"}
+  ],
+  "tags": ["reasoning", "constraints", "no-code"],
+  "notes": "Tests instruction-following under a negative constraint (no code) plus correct reasoning about whitespace semantics."
+}

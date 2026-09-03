@@ -81,7 +81,9 @@ import difflib
 import logging
 import os
 import shutil
+import stat
 import subprocess
+import threading
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -110,6 +112,53 @@ _MAX_DIFF_LINES = 100
 _MAX_CHANGED_FILES = 200
 _MAX_LINE_CHARS = 300
 _MAX_RAW_PATH_CHARS = 4096
+
+# Caps for the read-only file-snippet reader used to ground Code mode.
+# A snippet is *reference material for the model*, not a file browser:
+# small, bounded, and always a strict subset of what the user already
+# has open in their own editor.
+# ``git ls-files`` rows kept. This set is used for *membership* — "is
+# this path tracked?" — which decides whether a file may be excerpted at
+# all, so truncating it low silently mislabels real tracked files as
+# untracked and drops them from Code mode. The bound exists only to keep
+# memory finite on a pathological repository (the Linux kernel is
+# ~80k files); a caller can detect that it was hit by comparing the
+# returned length against ``MAX_TRACKED_FILES`` and degrade visibly.
+MAX_TRACKED_FILES = 200_000
+_MAX_TRACKED_FILES = MAX_TRACKED_FILES  # legacy internal alias
+_MAX_SNIPPET_BYTES = 262_144  # bytes read from disk for one snippet
+
+#: Bytes of git stdout buffered before the command is cut off.
+#:
+#: The downstream caps (``MAX_TRACKED_FILES``, ``_MAX_STATUS_LINES`` …)
+#: only ever trimmed a list that had *already* been read into memory in
+#: full, so a repository with a pathological index could allocate far
+#: past the advertised limit on every grounded Code-mode turn. 16 MiB
+#: comfortably holds a 200,000-entry ``ls-files`` listing (the Linux
+#: kernel's is roughly 3 MiB) while putting a real ceiling on the
+#: pathological case.
+_MAX_GIT_STDOUT_BYTES = 16 * 1024 * 1024
+
+#: git writes little to stderr for these read-only commands, and no
+#: caller consumes it; this exists only so a chatty failure cannot
+#: allocate without bound either.
+_MAX_GIT_STDERR_BYTES = 64 * 1024
+
+#: The safe-open primitives the snippet reader requires. Without all
+#: three there is no way to walk a path without the kernel resolving
+#: symlinks for us, so the reader refuses to run rather than falling
+#: back to a path-based open that a swap could redirect.
+_SAFE_OPEN_SUPPORTED = (
+    hasattr(os, "O_NOFOLLOW")
+    and hasattr(os, "O_DIRECTORY")
+    and os.open in getattr(os, "supports_dir_fd", set())
+)
+_MAX_SNIPPET_LINES = 400      # lines returned for one snippet
+_MAX_SNIPPET_CHARS = 20_000   # characters returned for one snippet
+
+#: Public alias so sibling modules (``core.code_context``) can size a
+#: request without reaching for a private name.
+MAX_SNIPPET_CHARS = _MAX_SNIPPET_CHARS
 
 # Resolved absolute paths a repo may *never* be, regardless of the
 # configured roots. An operator who points a root at one of these (or
@@ -154,6 +203,11 @@ _ALLOWED_GIT_ARGV: frozenset[tuple[str, ...]] = frozenset(
         ("branch", "--show-current"),
         ("log", "--oneline", "-n", "20"),
         ("diff", "--stat"),
+        # Read-only listing of *tracked* paths (the index), used to
+        # resolve a filename the user mentioned without ever scanning
+        # the filesystem. It writes nothing, touches no lock, and makes
+        # no network call — the same class of read as ``status``.
+        ("ls-files",),
     }
 )
 
@@ -376,6 +430,99 @@ def _git_env() -> dict[str, str]:
     return env
 
 
+#: Linux exposes an open descriptor as a path under ``/proc/self/fd``.
+#: Handing that to a subprocess as its ``cwd`` makes the kernel enter
+#: the exact directory the descriptor names, whatever has since happened
+#: to the path it was reached by. ``subprocess`` offers no way to pass a
+#: descriptor directly, so this is the mechanism.
+_PROC_SELF_FD = "/proc/self/fd"
+
+
+def _open_dir_within(anchor: Path, components: Sequence[str]) -> int:
+    """A descriptor for the directory ``components`` names under ``anchor``.
+
+    The same no-follow walk :func:`_open_file_within` uses, ending on a
+    directory. The caller owns the descriptor.
+    """
+    if not _SAFE_OPEN_SUPPORTED:  # pragma: no cover - POSIX in practice
+        raise RepoReadError("safe directory reads are not supported here")
+    dir_flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_DIRECTORY
+    try:
+        fd = os.open(anchor, dir_flags)
+    except OSError:
+        raise RepoReadError("linked repository could not be opened") from None
+    for name in [part for part in components if part and part != "."]:
+        try:
+            nxt = os.open(name, dir_flags, dir_fd=fd)
+        except OSError:
+            os.close(fd)
+            raise RepoReadError(
+                "directory not found in the linked repository"
+            ) from None
+        os.close(fd)
+        fd = nxt
+    return fd
+
+
+def _anchored_git_cwd(repo_path: str) -> tuple[Optional[str], Optional[int]]:
+    """A working directory for git that a rename cannot redirect.
+
+    ``validate_repo_path`` proves the repository sits inside an allowed
+    root, and then every git call re-resolves that path from scratch.
+    In between, the repository — or any ancestor of it — can be replaced
+    with a symlink to a different checkout, and git will read that one
+    instead. Its branch name and commit subjects go straight into the
+    Code-mode prompt, so this is the same escape the snippet reader
+    closes, one read path over: hardening file *contents* while leaving
+    the metadata beside them redirectable protects half the surface.
+
+    The repository is therefore opened with the same no-follow walk from
+    the allowed root, and git is pointed at that descriptor.
+
+    Three outcomes, and the distinction between the last two is the
+    whole point:
+
+    ``(cwd, fd)``
+        Anchored. The caller closes ``fd``.
+    ``(repo_path, None)``
+        This host cannot anchor at all — no ``O_NOFOLLOW``/``dir_fd``
+        support, no ``/proc``, or no configured root (reachable only
+        through a test ``roots`` override). Falls back to the path,
+        which is what every git read did before, so nothing is weakened;
+        the guarantee simply is not added.
+    ``(None, None)``
+        The host *can* anchor and the walk **failed** — a component that
+        should be a directory is a symlink, say. That is the attack
+        this function exists for, so it must not degrade into the
+        path-based read that would follow the link. The caller refuses.
+
+    Collapsing the last two into one fallback is the obvious mistake
+    here and it is self-defeating: the walk fails precisely when someone
+    has swapped something, so falling back to the path at that moment
+    hands them the redirect the walk just refused.
+    """
+    if not _SAFE_OPEN_SUPPORTED or not os.path.isdir(_PROC_SELF_FD):
+        return repo_path, None
+    try:
+        resolved = Path(repo_path)
+        root = _containing_root(resolved, configured_roots())
+    except (OSError, ValueError) as exc:  # pragma: no cover - defensive
+        logger.debug("dev-workspace: git cwd not anchored (%s)", exc)
+        return repo_path, None
+    if root is None:
+        logger.debug(
+            "dev-workspace: git cwd not anchored (no configured root)"
+        )
+        return repo_path, None
+    try:
+        inner = resolved.relative_to(root).as_posix()
+        fd = _open_dir_within(root, inner.split("/"))
+    except (RepoReadError, OSError, ValueError) as exc:
+        logger.debug("dev-workspace: refusing git read (%s)", exc)
+        return None, None
+    return f"{_PROC_SELF_FD}/{fd}", fd
+
+
 def _run_git(
     argv_tail: Sequence[str],
     *,
@@ -389,7 +536,10 @@ def _run_git(
     can never originate from user input — callers pass literals). The
     function otherwise never raises: a missing binary or a timeout maps
     to ``(-1, "", "")`` so callers branch on the rc. ``shell=False`` is
-    mandatory, stdin is closed, the repo path is only ever the *cwd*.
+    mandatory, stdin is closed, the repo is only ever the *cwd* — and
+    that cwd is a descriptor-backed path where the platform allows, so a
+    rename cannot point git at a different checkout (see
+    :func:`_anchored_git_cwd`).
     """
     key = tuple(argv_tail)
     if key not in _ALLOWED_GIT_ARGV:
@@ -399,27 +549,98 @@ def _run_git(
     if binary is None:
         return -1, "", ""
     argv = [binary, *key]
+    cwd, anchor_fd = _anchored_git_cwd(repo_path)
+    if cwd is None:
+        # The repository could not be opened safely. Callers already
+        # treat ``-1`` as "could not read", which degrades to an empty
+        # snapshot rather than a wrong one.
+        return -1, "", ""
     try:
-        result = subprocess.run(
-            argv,
-            cwd=repo_path,
+        return _capture_git(argv, cwd=cwd, key=key, timeout=timeout)
+    finally:
+        if anchor_fd is not None:
+            try:
+                os.close(anchor_fd)
+            except OSError:  # pragma: no cover - defensive
+                pass
+
+
+def _capture_git(
+    argv: Sequence[str],
+    *,
+    cwd: str,
+    key: tuple,
+    timeout: float,
+) -> tuple[int, str, str]:
+    """Run ``argv`` and read at most :data:`_MAX_GIT_STDOUT_BYTES` of output.
+
+    ``subprocess.run`` reads a pipe to EOF, so the caps applied to the
+    parsed result never bounded what was allocated to produce it. Here
+    the read itself is bounded: one ``read`` of the cap plus a byte,
+    after which the process is killed and the rest of its output is
+    never buffered.
+
+    The timeout is kept by a watchdog that kills the child, which closes
+    the pipe and releases the read — a plain bounded ``read`` would
+    otherwise block indefinitely on a child that produces nothing.
+    """
+    try:
+        proc = subprocess.Popen(  # noqa: S603 - fixed argv, shell=False
+            list(argv),
+            cwd=cwd,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            timeout=timeout,
-            check=False,
             shell=False,
             env=_git_env(),
         )
-    except subprocess.TimeoutExpired:
-        logger.debug("dev-workspace git %s timed out", key)
-        return -1, "", ""
     except (OSError, ValueError) as exc:
         logger.debug("dev-workspace git %s failed to spawn: %s", key, exc)
         return -1, "", ""
-    stdout = (result.stdout or b"").decode("utf-8", errors="replace")
-    stderr = (result.stderr or b"").decode("utf-8", errors="replace")
-    return result.returncode, stdout, stderr
+
+    timed_out = threading.Event()
+
+    def _cut_off() -> None:
+        timed_out.set()
+        try:
+            proc.kill()
+        except OSError:  # pragma: no cover - already gone
+            pass
+
+    watchdog = threading.Timer(timeout, _cut_off)
+    watchdog.start()
+    try:
+        raw = proc.stdout.read(_MAX_GIT_STDOUT_BYTES + 1) or b""
+        if len(raw) > _MAX_GIT_STDOUT_BYTES:
+            logger.debug("dev-workspace git %s output capped", key)
+            raw = raw[:_MAX_GIT_STDOUT_BYTES]
+            try:
+                proc.kill()
+            except OSError:  # pragma: no cover - already gone
+                pass
+        err = proc.stderr.read(_MAX_GIT_STDERR_BYTES) or b""
+        rc = proc.wait()
+    except OSError as exc:  # pragma: no cover - defensive
+        logger.debug("dev-workspace git %s read failed: %s", key, exc)
+        try:
+            proc.kill()
+        except OSError:
+            pass
+        return -1, "", ""
+    finally:
+        watchdog.cancel()
+        for stream in (proc.stdout, proc.stderr):
+            try:
+                stream.close()
+            except OSError:  # pragma: no cover - defensive
+                pass
+
+    if timed_out.is_set():
+        logger.debug("dev-workspace git %s timed out", key)
+        return -1, "", ""
+    return rc, raw.decode("utf-8", errors="replace"), err.decode(
+        "utf-8", errors="replace"
+    )
 
 
 def _truncate(line: str) -> str:
@@ -504,6 +725,277 @@ def git_changed_files(repo_path: str) -> tuple[dict, ...]:
         if len(entries) >= _MAX_CHANGED_FILES:
             break
     return tuple(entries)
+
+
+def git_tracked_files(repo_path: str) -> tuple[str, ...]:
+    """Repo-relative paths of tracked files, capped.
+
+    Reads git's *index* (``git ls-files``) rather than walking the
+    filesystem, so untracked build output, ``node_modules``, and
+    anything ``.gitignore``d is invisible to Nova by construction.
+    Read-only: no lock is taken and nothing is written.
+    """
+    rc, out, _ = _run_git(["ls-files"], repo_path=repo_path)
+    if rc != 0:
+        return ()
+    rows: list[str] = []
+    for line in out.splitlines():
+        path = line.strip()
+        if not path:
+            continue
+        rows.append(path)
+        if len(rows) >= _MAX_TRACKED_FILES:
+            break
+    return tuple(rows)
+
+
+class RepoReadError(ValueError):
+    """A read-only file read was refused.
+
+    Carries a short, frontend-safe reason. Never embeds absolute paths
+    beyond the validated repo, environment values, or stack traces.
+    """
+
+
+@dataclass(frozen=True)
+class FileSnippet:
+    """A bounded, read-only excerpt of one tracked file.
+
+    ``truncated`` is True when the file was longer than the caps allow,
+    so a caller (and the model) is always told it is looking at a
+    fragment rather than the whole file.
+    """
+
+    path: str
+    text: str
+    start_line: int
+    end_line: int
+    total_lines: int
+    truncated: bool
+
+    def as_dict(self) -> dict:
+        return {
+            "path": self.path,
+            "text": self.text,
+            "start_line": self.start_line,
+            "end_line": self.end_line,
+            "total_lines": self.total_lines,
+            "truncated": self.truncated,
+        }
+
+
+def _containing_root(path: Path, roots: Sequence[Path]) -> Optional[Path]:
+    """The allowed root ``path`` sits in, or ``None``."""
+    for root in roots:
+        try:
+            if path == root or path.is_relative_to(root):
+                return root
+        except ValueError:
+            continue
+    return None
+
+
+def _open_file_within(
+    anchor: Path, components: Sequence[str]
+) -> tuple[int, os.stat_result]:
+    """Open ``components`` under ``anchor`` so no symlink can redirect the read.
+
+    ``validate_proposed_path`` proves containment against the filesystem
+    as it looked *at that moment*, using ``resolve()``. That is a
+    path-based answer, and a path-based answer expires: between the check
+    and the open, any component of the path can be replaced with a
+    symlink pointing outside the repository. Checking only the final
+    component (``O_NOFOLLOW`` on the leaf) does not close this — swapping
+    a parent such as ``src`` for a symlink to ``/etc`` redirects the walk
+    while the leaf name stays an ordinary file.
+
+    So the path is walked one component at a time:
+
+      * the **allowed workspace root** is opened once, as a directory;
+      * every component below it — the ones leading down to the
+        repository as well as the ones inside it — is opened **relative
+        to the descriptor of the component before it**, with
+        ``O_DIRECTORY | O_NOFOLLOW``;
+      * the leaf is opened relative to the final parent's descriptor with
+        ``O_NOFOLLOW`` and validated with ``fstat``.
+
+    The walk starts at the allowed root rather than at the repository,
+    because opening the repository by its absolute path would have the
+    kernel resolve every ancestor above it — and an ancestor is as
+    swappable as anything else. Anchoring at the operator-configured
+    root is where this stops: that directory is the trust boundary the
+    operator declared in ``NOVA_DEV_WORKSPACE_ROOTS``, so it is the one
+    path this code is entitled to take on faith. Everything beneath it
+    is proved rather than assumed.
+
+    A descriptor names the directory it was opened on, not the name it
+    was reached by, so replacing a component *after* its descriptor
+    exists cannot redirect anything: the swap is either caught by
+    ``O_NOFOLLOW`` on the way down or arrives too late to matter. The
+    walk never re-enters the path namespace, so there is no window left
+    for it to race against.
+
+    Symlinks are refused rather than resolved — including one that points
+    to a perfectly legitimate file inside the repo — because the reader's
+    contract is "regular files in the index", and a link is not one.
+
+    The caller owns the returned descriptor. Raises
+    :class:`RepoReadError` with a short, safe reason on any failure;
+    on a platform missing the primitives it fails closed rather than
+    falling back.
+    """
+    if not _SAFE_OPEN_SUPPORTED:  # pragma: no cover - POSIX in practice
+        raise RepoReadError(
+            "safe file reads are not supported on this platform"
+        )
+
+    parts = [part for part in components if part and part != "."]
+    if not parts:
+        raise RepoReadError("file not found in the linked repository")
+
+    open_flags = os.O_RDONLY | os.O_NOFOLLOW
+    dir_flags = open_flags | os.O_DIRECTORY
+
+    try:
+        root_fd = os.open(anchor, dir_flags)
+    except OSError:
+        raise RepoReadError("linked repository could not be opened") from None
+
+    open_dirs = [root_fd]
+    try:
+        for name in parts[:-1]:
+            try:
+                open_dirs.append(os.open(name, dir_flags, dir_fd=open_dirs[-1]))
+            except OSError:
+                raise RepoReadError(
+                    "file not found in the linked repository"
+                ) from None
+
+        try:
+            fd = os.open(parts[-1], open_flags, dir_fd=open_dirs[-1])
+        except OSError:
+            raise RepoReadError(
+                "file not found in the linked repository"
+            ) from None
+
+        try:
+            info = os.fstat(fd)
+        except OSError:
+            os.close(fd)
+            raise RepoReadError("file could not be read") from None
+        if not stat.S_ISREG(info.st_mode):
+            os.close(fd)
+            raise RepoReadError("only regular files can be read")
+        return fd, info
+    finally:
+        for opened_dir in open_dirs:
+            try:
+                os.close(opened_dir)
+            except OSError:
+                pass
+
+
+def read_text_snippet(
+    repo_path: str | os.PathLike[str],
+    rel_path: object,
+    *,
+    max_lines: int = 200,
+    max_chars: int = 8_000,
+    roots: Optional[Sequence[Path]] = None,
+) -> FileSnippet:
+    """Read a bounded text excerpt of one file inside a linked repo.
+
+    This is the *only* file-content read in Nova's Dev Workspace, and it
+    is deliberately narrow:
+
+      * the repo path is re-validated through :func:`validate_repo_path`
+        (allowed roots, no traversal, no system directory);
+      * ``rel_path`` goes through :func:`validate_proposed_path`, so it
+        must be repo-relative, traversal-free, non-secret
+        (``.env``, keys, tokens, databases, ``.git`` internals …) and
+        resolve *inside* the repo — symlinks included;
+      * the file is opened by walking the validated repo root one
+        component at a time on directory descriptors, every component
+        with ``O_NOFOLLOW``, so a symlink swapped in **anywhere** on the
+        path — a parent directory, not just the final name — fails the
+        open rather than redirecting it (see :func:`_open_file_within`);
+      * only regular files are read, checked with ``fstat`` on the
+        descriptor actually opened (a symlink, directory, FIFO, or
+        device is refused);
+      * at most :data:`_MAX_SNIPPET_BYTES` are read from disk and the
+        result is capped by ``max_lines`` / ``max_chars``;
+      * binary content is refused outright — the same control-character
+        rule the patch preview uses, so nothing that could rewrite a
+        terminal on paste ever reaches the UI or the model.
+
+    Read-only in the strongest sense: it opens the file for reading and
+    nothing else. Raises :class:`RepoReadError` with a short, safe
+    reason on any failure.
+    """
+    try:
+        repo_root = validate_repo_path(repo_path, roots=roots)
+    except RepoPathError as exc:
+        raise RepoReadError(str(exc)) from None
+
+    try:
+        rel = validate_proposed_path(repo_root, rel_path)
+    except PatchProposalError as exc:
+        raise RepoReadError(str(exc)) from None
+
+    active_roots = tuple(roots) if roots is not None else configured_roots()
+    anchor = _containing_root(repo_root, active_roots)
+    if anchor is None:  # pragma: no cover - validate_repo_path proved this
+        raise RepoReadError("repository path is outside the allowed roots")
+    try:
+        inner = repo_root.relative_to(anchor).as_posix()
+    except ValueError:  # pragma: no cover - defensive
+        raise RepoReadError("repository path could not be resolved") from None
+
+    fd, opened = _open_file_within(
+        anchor, inner.split("/") + rel.split("/")
+    )
+    try:
+        handle = os.fdopen(fd, "rb")
+    except OSError:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        raise RepoReadError("file could not be read") from None
+    with handle:
+        try:
+            raw = handle.read(_MAX_SNIPPET_BYTES)
+        except OSError:
+            raise RepoReadError("file could not be read") from None
+
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        raise RepoReadError("file is not UTF-8 text") from None
+    if _looks_binary(text):
+        raise RepoReadError("file does not look like text")
+
+    file_truncated = opened.st_size > len(raw)
+    lines = text.splitlines()
+    total_lines = len(lines)
+    line_cap = max(1, min(int(max_lines or 1), _MAX_SNIPPET_LINES))
+    char_cap = max(1, min(int(max_chars or 1), _MAX_SNIPPET_CHARS))
+
+    kept = lines[:line_cap]
+    truncated = file_truncated or len(kept) < total_lines
+    body = "\n".join(kept)
+    if len(body) > char_cap:
+        body = body[:char_cap]
+        truncated = True
+        kept = body.splitlines()
+    return FileSnippet(
+        path=rel,
+        text=body,
+        start_line=1,
+        end_line=len(kept),
+        total_lines=total_lines,
+        truncated=truncated,
+    )
 
 
 # ── Snapshot ────────────────────────────────────────────────────────

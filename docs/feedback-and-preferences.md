@@ -31,7 +31,10 @@ override the identity contract or the safety contract.
 ## What it is not
 
 - It is **not** model fine-tuning. No weights are touched, no training
-  job runs.
+  job runs. This stays true alongside the opt-in
+  [`nova-coder` dataset path](nova-coder-dataset.md): that export reads
+  operator-approved *evaluation results* only and cannot reach feedback,
+  conversations, or memory.
 - It is **not** an autonomous self-modification path. Nova cannot
   rewrite its own system prompts, its own configuration, its own code,
   or its own safety boundaries from feedback. The preference block

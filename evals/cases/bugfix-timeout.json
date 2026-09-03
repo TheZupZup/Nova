@@ -1,0 +1,16 @@
+{
+  "id": "bugfix-http-timeout",
+  "title": "Add a timeout to an unbounded HTTP call",
+  "role": "code",
+  "source": "nova/builtin",
+  "prompt": "This Python function can hang forever when the remote host stops responding:\n\n```python\nimport httpx\n\ndef fetch_status(url):\n    response = httpx.get(url)\n    response.raise_for_status()\n    return response.json()\n```\n\nFix it so the call cannot hang indefinitely, and so a connection failure raises a clear, typed error instead of leaking the transport exception. Reply with the corrected function in one code block, then two sentences explaining the change. Do not add any dependency.",
+  "constraints": [
+    {"kind": "must_include_code_block", "description": "answer contains a code block"},
+    {"kind": "must_contain", "value": "timeout", "description": "mentions a timeout"},
+    {"kind": "must_match", "value": "def\\s+fetch_status", "description": "keeps the function name"},
+    {"kind": "must_not_contain", "value": "requests.get", "description": "does not swap the HTTP library"},
+    {"kind": "max_chars", "value": "3000", "description": "stays under 3000 characters"}
+  ],
+  "tags": ["python", "bugfix", "constraints"],
+  "notes": "Tests whether a model can make a small, surgical fix without rewriting the surrounding code or adding a dependency."
+}
